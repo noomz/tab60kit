@@ -1,6 +1,7 @@
 // Runtime checks of the sketch's implemented pure functions against expectations written independently of them.
-// Run: bun probes/policy.test.ts   (bun resolves the extensionless imports the sketch uses)
+// Run: bun test probes/policy.test.ts   (one bun:test case per check)
 import assert from "node:assert/strict";
+import { test } from "bun:test";
 import { bootTarget } from "../core/chip";
 import type { AppChip, IapChip, ImageCheck, PageState } from "../core/chip";
 import { udevRules } from "../core/device";
@@ -31,8 +32,8 @@ const target = { entry } as unknown as FlashableImage;
 const window = { base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 } as unknown as FlashWindow;
 const common = { info: {} as never, window };
 let checks = 0;
-const check = (fn: () => void) => {
-	fn();
+const check = (name: string, fn: () => void) => {
+	test(name, fn);
 	checks++;
 };
 
@@ -66,9 +67,9 @@ const expected: Record<string, string> = {
 for (const [imageName, image] of Object.entries(images)) {
 	for (const [pageName, page] of Object.entries(pages)) {
 		const chip: IapChip = { mode: "iap", ...common, page, image };
-		check(() => assert.equal(decideInIap(chip, target, false), expected[`${imageName}/${pageName}`], `iap ${imageName}/${pageName}`));
+		check(`iap ${imageName}/${pageName}`, () => assert.equal(decideInIap(chip, target, false), expected[`${imageName}/${pageName}`]));
 		// A rewrite the caller asked for and this job has not finished comes first, whatever the board holds (U7).
-		check(() => assert.equal(decideInIap(chip, target, true), "erase-and-write-image", `iap rewrite ${imageName}/${pageName}`));
+		check(`iap rewrite ${imageName}/${pageName}`, () => assert.equal(decideInIap(chip, target, true), "erase-and-write-image"));
 	}
 }
 
@@ -77,31 +78,37 @@ for (const [imageName, image] of Object.entries(images)) {
 	for (const page of Object.values(pages)) {
 		for (const rewrite of [false, true]) {
 			const step = decideInIap({ mode: "iap", ...common, page, image }, target, rewrite);
-			if (step === "write-version-block") check(() => assert.equal(imageName, "target", "version block written over an unproven image"));
+			if (step === "write-version-block") {
+				check(`version block over image ${imageName}`, () => assert.equal(imageName, "target", "version block written over an unproven image"));
+			}
 		}
 	}
 }
 
 // Normal mode: "done" only after this job proved the target in update mode.
 const appChip = (page: PageState): AppChip => ({ mode: "app", ...common, page });
-check(() => assert.equal(decideInApp(appChip(pages.target!), target, false), "enter-iap"));
-check(() => assert.equal(decideInApp(appChip(pages.target!), target, true), "done"));
-check(() => assert.equal(decideInApp(appChip(pages["other-official"]!), target, true), "enter-iap"));
+check("app: target page, not verified by this job", () => assert.equal(decideInApp(appChip(pages.target!), target, false), "enter-iap"));
+check("app: target page, verified by this job", () => assert.equal(decideInApp(appChip(pages.target!), target, true), "done"));
+check("app: another official page, verified", () => assert.equal(decideInApp(appChip(pages["other-official"]!), target, true), "enter-iap"));
 
 // The dangerous boot case is named, not hidden.
-check(() => assert.equal(bootTarget({ mode: "iap", ...common, page: pages.target!, image: images.unrecognized! }), "boots-damaged-image"));
-check(() => assert.equal(bootTarget({ mode: "iap", ...common, page: pages.erased!, image: images.target! }), "stays-in-update-mode"));
+check("boot: target page over an unrecognized image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.target!, image: images.unrecognized! }), "boots-damaged-image"),
+);
+check("boot: erased page over the target image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.erased!, image: images.target! }), "stays-in-update-mode"),
+);
 
 // The window: [0x3000, 0x1FE00), offsets count from 0x3000, and 32-bit wrap cannot sneak in.
-check(() => assert.equal(inWindow(window, 0x200, 34_268), true, "the V1.01.13 image"));
-check(() => assert.equal(inWindow(window, 0, 0x1ce00), true, "the whole window"));
-check(() => assert.equal(inWindow(window, 0, 0x1ce01), false, "one byte into the option-byte page"));
-check(() => assert.equal(inWindow(window, 0xffffd000, 0x3000), false, "an offset that wraps to absolute 0x0"));
-check(() => assert.equal(inWindow(window, -1, 4), false));
-check(() => assert.equal(inWindow(window, 0x200, 0), false, "an empty range"));
+check("window: the V1.01.13 image", () => assert.equal(inWindow(window, 0x200, 34_268), true));
+check("window: the whole window", () => assert.equal(inWindow(window, 0, 0x1ce00), true));
+check("window: one byte into the option-byte page", () => assert.equal(inWindow(window, 0, 0x1ce01), false));
+check("window: an offset that wraps to absolute 0x0", () => assert.equal(inWindow(window, 0xffffd000, 0x3000), false));
+check("window: a negative offset", () => assert.equal(inWindow(window, -1, 4), false));
+check("window: an empty range", () => assert.equal(inWindow(window, 0x200, 0), false));
 
 // The derived udev rule must equal R3's rule byte for byte (docs/webhid.md "Linux udev rule").
-check(() =>
+check("udev rule: R3's rule byte for byte", () =>
 	assert.equal(
 		udevRules(),
 		[
@@ -113,9 +120,11 @@ check(() =>
 
 // G1 today, shipped: nothing unlocked, and each config command says what it lacks.
 const caps = capabilities(SHIPPED);
-check(() => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [false, false, false]));
-check(() => assert.equal(caps.blockedBy.length, 4));
-check(() => assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")));
+check("shipped caps: nothing unlocked", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [false, false, false]));
+check("shipped caps: four config commands blocked", () => assert.equal(caps.blockedBy.length, 4));
+check("shipped caps: each blocked line asks for review and a capture", () =>
+	assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")),
+);
 
 // G1 as maturity. A lab clearance built here by cast, because labClearance refuses every row while all are unreviewed.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
@@ -131,8 +140,8 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 	[lab, "readMode", confirmed, true, "a lab session sends a confirmed row it names"],
 	[lab, "erase", confirmed, false, "a lab session sends nothing it does not name, confirmed or not"],
 ];
-for (const [clearance, name, maturity, want, why] of clearing) check(() => assert.equal(clears(clearance, name, maturity), want, why));
-check(() => assert.throws(() => labClearance(["readMode"], "U1"), /review these rows/, "no lab session before the user's review"));
+for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
+check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode"], "U1"), /review these rows/));
 
 // The registry. No (cmd, sub) pair names two rows; the version-page read covers parts 0..2 and nothing past them.
 const overlaps: string[] = [];
@@ -148,10 +157,14 @@ for (const cmd of new Set(COMMAND_NAMES.map((name) => COMMANDS[name].cmd))) {
 		if (rows.length > 1) overlaps.push(`cmd 0x${cmd.toString(16)} sub 0x${sub.toString(16)}: ${rows.join(" and ")}`);
 	}
 }
-check(() => assert.deepEqual(overlaps, [], "a (cmd, sub) pair names two rows"));
-check(() => assert.deepEqual([0x20, 0x21, 0x22, 0x23].map((sub) => decodeCommand(0x12, sub)), ["readVersionPage", "readVersionPage", "readVersionPage", null]));
-check(() => assert.deepEqual([0, 1, 52, 53].map((sub) => decodeCommand(0x1f, sub)), [null, "write", "write", null]));
-check(() => assert.equal(decodeCommand(0x10, 0x02), null, "PING is left out on purpose"));
+check("registry: no (cmd, sub) pair names two rows", () => assert.deepEqual(overlaps, []));
+check("registry: READ VERSION PAGE decodes parts 0 to 2 only", () =>
+	assert.deepEqual([0x20, 0x21, 0x22, 0x23].map((sub) => decodeCommand(0x12, sub)), ["readVersionPage", "readVersionPage", "readVersionPage", null]),
+);
+check("registry: WRITE decodes lengths 1 to 52 only", () =>
+	assert.deepEqual([0, 1, 52, 53].map((sub) => decodeCommand(0x1f, sub)), [null, "write", "write", null]),
+);
+check("registry: PING is left out on purpose", () => assert.equal(decodeCommand(0x10, 0x02), null));
 
 // The user's ruling: an erase or write row moves above "unreviewed" only with vendor-updater evidence.
 const writeRowProblems = (rows: readonly (readonly [string, CommandSpec])[]) =>
@@ -159,9 +172,13 @@ const writeRowProblems = (rows: readonly (readonly [string, CommandSpec])[]) =>
 		.filter(([, spec]) => (spec.effect === "erase" || spec.effect === "write") && spec.maturity.level !== "unreviewed")
 		.filter(([, spec]) => spec.evidence.source !== "vendor-updater")
 		.map(([name]) => name);
-check(() => assert.deepEqual(writeRowProblems(COMMAND_NAMES.map((name) => [name, COMMANDS[name]] as const)), []));
+check("registry: erase and write rows above unreviewed cite the vendor updater", () =>
+	assert.deepEqual(writeRowProblems(COMMAND_NAMES.map((name) => [name, COMMANDS[name]] as const)), []),
+);
 const badErase: CommandSpec = { ...COMMANDS.erase, evidence: { source: "pok3rtool", at: "cykb.py:182" }, maturity: reviewed };
-check(() => assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"], "the rule catches a reviewed erase backed only by pok3rtool"));
+check("registry: the rule catches a reviewed erase backed only by pok3rtool", () =>
+	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
+);
 
 // The egress audit, on frames built by hand from R1 "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
 const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
@@ -201,7 +218,7 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["WRITE past the window end", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x1ce00 - 10 }), { refused: "outside-window" }],
 	["a 63-byte frame", audited(frame(0x12, 0x02, 0, 0, 63), "readMode"), { refused: "bad-length" }],
 ];
-for (const [why, actual, want] of egress) check(() => assert.deepEqual(actual, want, why));
+for (const [why, actual, want] of egress) check(`egress: ${why}`, () => assert.deepEqual(actual, want));
 
 // The link gate, on timestamps alone: 15 s of answered probes, at most 1 s apart, and no timeout or loss in them.
 const probes = (from: number, to: number, every = 500, skip: (t: number) => boolean = () => false): LinkEvent[] => {
@@ -220,11 +237,13 @@ const gate: readonly [string, ReturnType<typeof judgeLink>["kind"], LinkEvent[],
 	["a loss 20 s ago, then 16 s of probes", "stable", [{ t: -20_000, kind: "lost" }, ...probes(0, 16_000)], 16_000],
 	["a loss 16 s ago, probes only since 10 s ago", "insufficient", [{ t: 0, kind: "lost" }, ...probes(6_000, 16_000)], 16_000],
 ];
-for (const [why, want, events, now] of gate) check(() => assert.equal(judgeLink(events, now, WRITE_LINK_RULE).kind, want, why));
+for (const [why, want, events, now] of gate) check(`link gate: ${why}`, () => assert.equal(judgeLink(events, now, WRITE_LINK_RULE).kind, want));
 
 // The image handle: a handle admit() did not build has no bytes behind it, and asking for them fails loudly.
-check(() => assert.throws(() => imageBytes({ entry } as unknown as FlashableImage), /not built by admit/));
+check("image handle: no bytes behind a handle admit() did not build", () =>
+	assert.throws(() => imageBytes({ entry } as unknown as FlashableImage), /not built by admit/),
+);
 
 console.log(
-	`policy checks: all ${checks} passed (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 1} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 1} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
 );
