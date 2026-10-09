@@ -1,5 +1,3 @@
-// Bundles each page for the browser: its entry module to <outdir>/<entry name>.js beside a copy of its HTML.
-// Run: bun scripts/build.ts [output root]   (default: the repo root, so the page lands in dist/)
 import { copyFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 

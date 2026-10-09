@@ -1,5 +1,5 @@
 // Runtime checks of the sketch's implemented pure functions against expectations written independently of them.
-// Run: bun test probes/policy.test.ts   (one bun:test case per check)
+// Run: bun test probes/policy.test.ts
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { bootTarget } from "../core/chip";

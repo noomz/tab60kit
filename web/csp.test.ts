@@ -9,22 +9,15 @@ const build = Bun.spawnSync([process.execPath, join(import.meta.dir, "../scripts
 if (build.exitCode !== 0) throw new Error(`scripts/build.ts failed:\n${build.stderr}`);
 const dist = join(out, "dist");
 
-interface Script {
-	readonly src: string | null;
-	readonly at: number;
-	text: string;
-}
-
-/** The built page as the browser parses it: CSP meta tags in <head>, scripts, and inline styles or handlers. */
 async function parse(html: string) {
-	let at = 0;
-	const policies: { readonly content: string; readonly at: number }[] = [];
-	const scripts: Script[] = [];
+	let order = 0;
+	const policies: { readonly content: string; readonly order: number }[] = [];
+	const scripts: { readonly src: string | null; readonly order: number; text: string }[] = [];
 	const inline: string[] = [];
 	await new HTMLRewriter()
 		.on("*", {
 			element(element) {
-				at++;
+				order++;
 				if (element.tagName === "style") inline.push("a <style> element");
 				for (const [name] of element.attributes) {
 					if (name === "style" || name.startsWith("on")) inline.push(`<${element.tagName} ${name}>`);
@@ -34,12 +27,12 @@ async function parse(html: string) {
 		.on("head > meta[http-equiv]", {
 			element(element) {
 				if (element.getAttribute("http-equiv")?.toLowerCase() !== "content-security-policy") return;
-				policies.push({ content: element.getAttribute("content") ?? "", at });
+				policies.push({ content: element.getAttribute("content") ?? "", order });
 			},
 		})
 		.on("script", {
 			element(element) {
-				scripts.push({ src: element.getAttribute("src"), at, text: "" });
+				scripts.push({ src: element.getAttribute("src"), order, text: "" });
 			},
 			text(chunk) {
 				scripts[scripts.length - 1]!.text += chunk.text;
@@ -78,7 +71,7 @@ test("every script has a src that the build wrote, no inline body, and comes aft
 		expect(script.src).not.toBeNull();
 		expect(existsSync(join(dist, script.src!))).toBe(true);
 		expect(script.text.trim()).toBe("");
-		expect(script.at).toBeGreaterThan(page.policies[0]!.at);
+		expect(script.order).toBeGreaterThan(page.policies[0]!.order);
 	}
 });
 

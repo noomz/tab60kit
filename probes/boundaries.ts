@@ -17,11 +17,13 @@ function sources(dir: string): string[] {
 
 interface Import {
 	readonly specifier: string;
-	/** The imported file, or null for a subpath of this package that package.json does not export. */
-	readonly target: string | null;
+	readonly target: string;
 }
 
-/** Relative imports, re-exports, and imports of this package by name, resolved to paths under the root. Other packages are skipped. */
+/**
+ * Relative imports and re-exports of one file, and imports of this package's exported entries, resolved to paths
+ * under the root. Other imports are skipped, and tsc already rejects a subpath the package does not export.
+ */
 function importsOf(file: string): Import[] {
 	const text = readFileSync(file, "utf8");
 	const found: Import[] = [];
@@ -31,7 +33,7 @@ function importsOf(file: string): Import[] {
 			found.push({ specifier, target: resolve(dirname(file), specifier.endsWith(".ts") ? specifier : `${specifier}.ts`) });
 		} else if (specifier === pkg.name || specifier.startsWith(`${pkg.name}/`)) {
 			const entry = pkg.exports[`.${specifier.slice(pkg.name.length)}`];
-			found.push({ specifier, target: entry === undefined ? null : resolve(root, entry) });
+			if (entry !== undefined) found.push({ specifier, target: resolve(root, entry) });
 		}
 	}
 	return found;
@@ -62,7 +64,6 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 		if (seen.has(file) || !existsSync(file)) continue;
 		seen.add(file);
 		for (const { target } of importsOf(file)) {
-			if (target === null) continue;
 			const name = at(target);
 			if (name.startsWith("core/")) {
 				if (!allowed.has(name)) problems.push(`${chain} -> ${name}`);
@@ -72,17 +73,16 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 	report("fake-board-independence", problems, "testing/fake-tab60.ts reaches core/ only through port.ts and units.ts");
 }
 
-// The package exports "." (core/index.ts) and "./port" (core/port.ts), and the resolver refuses any other subpath.
-// A relative path reaches any file, so web/ reaches the core only by package name: UI files import @tab60kit/core,
-// the WebHID shell may add @tab60kit/core/port, and relative imports stay inside web/. Nothing in web/ then reaches
-// lab/, testing/, tools/, or a core internal.
+// The package exports "." (core/index.ts) and "./port" (core/port.ts). A relative path reaches any file, so web/
+// names the core only by package: UI files import @tab60kit/core, the WebHID shell may add @tab60kit/core/port, and
+// relative imports stay inside web/. Nothing in web/ then reaches lab/, testing/, tools/, or a core internal.
 {
 	const shell = "web/webhid-port.ts";
 	const problems: string[] = [];
 	for (const file of files.filter((path) => at(path).startsWith("web/"))) {
 		for (const { specifier, target } of importsOf(file)) {
 			const allowed = specifier.startsWith(".")
-				? target !== null && at(target).startsWith("web/")
+				? at(target).startsWith("web/")
 				: specifier === "@tab60kit/core" || (specifier === "@tab60kit/core/port" && at(file) === shell);
 			if (!allowed) problems.push(`${at(file)} imports ${specifier}`);
 		}
