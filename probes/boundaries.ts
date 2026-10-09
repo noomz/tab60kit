@@ -1,10 +1,11 @@
 // Import and egress rules the compiler cannot see. Each rule prints PASS or FAIL; the exit code counts failures.
-// Run: bun probes/boundaries.ts [sketch root]   (probes/run.sh runs it on this tree and on mutated copies)
+// Run: bun probes/boundaries.ts [repo root]   (probes/run.sh runs it on this tree and on mutated copies)
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 const root = resolve(process.argv[2] ?? join(import.meta.dir, ".."));
 const SKIP = new Set(["node_modules", "probes"]);
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { name: string; exports: Record<string, string> };
 
 function sources(dir: string): string[] {
 	return readdirSync(dir).flatMap((name) => {
@@ -15,17 +16,23 @@ function sources(dir: string): string[] {
 }
 
 interface Import {
-	readonly clause: string;
-	readonly target: string;
+	readonly specifier: string;
+	/** The imported file, or null for a subpath of this package that package.json does not export. */
+	readonly target: string | null;
 }
 
-/** Relative imports and re-exports of one file, resolved to paths under the root. Package imports are skipped. */
+/** Relative imports, re-exports, and imports of this package by name, resolved to paths under the root. Other packages are skipped. */
 function importsOf(file: string): Import[] {
 	const text = readFileSync(file, "utf8");
 	const found: Import[] = [];
-	for (const match of text.matchAll(/(?:^|\n)\s*(?:import|export)\s+([^'";]*?)\s*from\s*["']([^"']+)["']/g)) {
-		const [, clause = "", spec = ""] = match;
-		if (spec.startsWith(".")) found.push({ clause, target: resolve(dirname(file), spec.endsWith(".ts") ? spec : `${spec}.ts`) });
+	for (const match of text.matchAll(/(?:^|\n)\s*(?:import|export)\s+[^'";]*?\s*from\s*["']([^"']+)["']/g)) {
+		const [, specifier = ""] = match;
+		if (specifier.startsWith(".")) {
+			found.push({ specifier, target: resolve(dirname(file), specifier.endsWith(".ts") ? specifier : `${specifier}.ts`) });
+		} else if (specifier === pkg.name || specifier.startsWith(`${pkg.name}/`)) {
+			const entry = pkg.exports[`.${specifier.slice(pkg.name.length)}`];
+			found.push({ specifier, target: entry === undefined ? null : resolve(root, entry) });
+		}
 	}
 	return found;
 }
@@ -55,6 +62,7 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 		if (seen.has(file) || !existsSync(file)) continue;
 		seen.add(file);
 		for (const { target } of importsOf(file)) {
+			if (target === null) continue;
 			const name = at(target);
 			if (name.startsWith("core/")) {
 				if (!allowed.has(name)) problems.push(`${chain} -> ${name}`);
@@ -64,23 +72,22 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 	report("fake-board-independence", problems, "testing/fake-tab60.ts reaches core/ only through port.ts and units.ts");
 }
 
-// The package exports "." (core/index.ts) and "./port" (core/port.ts). In the sketch, relative paths reach anything,
-// so this rule stands in for the exports map: UI files import core/index only, the WebHID shell may add core/port,
-// and nothing in web/ reaches lab/, testing/, tools/, or a core internal. The one exception is the sketch's
-// `notImplemented` from core/units.
+// The package exports "." (core/index.ts) and "./port" (core/port.ts), and the resolver refuses any other subpath.
+// A relative path reaches any file, so web/ reaches the core only by package name: UI files import @tab60kit/core,
+// the WebHID shell may add @tab60kit/core/port, and relative imports stay inside web/. Nothing in web/ then reaches
+// lab/, testing/, tools/, or a core internal.
 {
 	const shell = "web/webhid-port.ts";
 	const problems: string[] = [];
 	for (const file of files.filter((path) => at(path).startsWith("web/"))) {
-		for (const { clause, target } of importsOf(file)) {
-			const name = at(target);
-			if (name.startsWith("web/") || name === "core/index.ts") continue;
-			if (name === "core/port.ts" && at(file) === shell) continue;
-			if (name === "core/units.ts" && /^\{\s*notImplemented\s*\}$/.test(clause)) continue;
-			problems.push(`${at(file)} imports ${name}`);
+		for (const { specifier, target } of importsOf(file)) {
+			const allowed = specifier.startsWith(".")
+				? target !== null && at(target).startsWith("web/")
+				: specifier === "@tab60kit/core" || (specifier === "@tab60kit/core/port" && at(file) === shell);
+			if (!allowed) problems.push(`${at(file)} imports ${specifier}`);
 		}
 	}
-	report("web-entries", problems, "web/ imports core/index, and only the WebHID shell adds core/port");
+	report("web-entries", problems, "web/ imports @tab60kit/core, only the WebHID shell adds @tab60kit/core/port, and relative imports stay in web/");
 }
 
 // One egress: the audit makes the only OutReport, and the WebHID link makes the only sendReport call.
