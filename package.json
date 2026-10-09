@@ -1,6 +1,7 @@
 {
 	"name": "@tab60kit/core",
 	"private": true,
+	"license": "MIT",
 	"type": "module",
 	"exports": {
 		".": "./core/index.ts",
