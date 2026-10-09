@@ -16,10 +16,10 @@
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import type { FlashableImage } from "./firmware";
-import { type BlInfo, type FlashWindow, type LayoutRefusal, inWindow } from "./flashmap";
+import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, imageSpan, inWindow, parseBlInfo, windowFor } from "./flashmap";
 import type { KeyId, KeyWrite, Layer, OsMode, Usage } from "./keymap";
-import type { DevicePort, DeviceWant, InReport, Link, OutReport } from "./port";
-import { type Crc32, type Mode, type Sum32, notImplemented } from "./units";
+import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkTimeout, type OutReport, type WantReason } from "./port";
+import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
 
 /** What a command does to the board. The gate and the UI read this, never the opcode. */
 export type Effect = "read" | "reboot" | "erase" | "write" | "sram-write";
@@ -479,6 +479,7 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 /** One link plus the state the audit judges frames against. Each session owns one; nothing else holds it. */
 interface Channel {
 	readonly link: Link;
+	readonly clock: Clock;
 	readonly clearance: Clearance;
 	/** Set once by attach after BL info validates. */
 	window: FlashWindow | null;
@@ -493,43 +494,168 @@ interface Request {
 }
 
 /**
- * Builds the 64 bytes for a request. Nothing trusts its output: transmit audits every frame it builds.
- * TODO: spec = COMMANDS[name]
- *   byte 0 = cmd; byte 1 = the fixed sub, or first + part for a range (part < count), or the payload length for WRITE
- *   bytes 2..3 = the value the vendor updater sends (pok3rtool sends 0; U2 reads the vendor's)
- *   payload from byte 4; zero padding to 64
+ * Request bytes 2..3. pok3rtool sends 0x0000 (R1 "Packet framing", VERIFIED in its source) and works on sibling
+ * CYKB bootloaders, and the app echoes the field and never checks it (R4 "Key concepts"). What the vendor updater
+ * sends there is unread, and nobody will read it for U1. Reply bytes 2..3 play no part in matching a reply: the
+ * transcript keeps them, and tools/u1-verdict.ts reports a nonzero value as a finding.
  */
+const REQUEST_BYTES_2_3 = 0x0000;
+
+/** The payload starts at byte 4 of a 64-byte report, so it holds at most 60 bytes (R1 "Packet framing"). */
+const PAYLOAD_OFFSET = 4;
+const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
+
+/** The error marker in reply bytes 0..1 (R1, R4): FF AA, with a u16 detail at bytes 4..5. */
+const ERROR_MARKER = [0xff, 0xaa] as const;
+
+const viewOf = (report: Uint8Array) => new DataView(report.buffer, report.byteOffset, report.byteLength);
+const payloadOf = (reply: InReport) => reply.subarray(PAYLOAD_OFFSET);
+
+/** Builds the 64 bytes for a request. Nothing trusts its output: transmit audits every frame it builds. */
 function encode(name: CommandName, request: Request): Uint8Array {
-	return notImplemented(`encode(${name}, part ${String(request.part)}, ${request.payload?.length ?? 0} bytes)`);
+	const spec: CommandSpec = COMMANDS[name];
+	const payload = request.payload ?? new Uint8Array(0);
+	const maxPayload = spec.sub === "length" ? EXPECTED_LAYOUT.writeChunkBytes : MAX_PAYLOAD_BYTES;
+	if (payload.length > maxPayload) throw new RangeError(`${name}: ${payload.length} payload bytes, at most ${maxPayload}`);
+	let sub: number;
+	if (spec.sub === "length") {
+		if (payload.length === 0) throw new RangeError(`${name}: WRITE needs a payload`);
+		sub = payload.length;
+	} else if (typeof spec.sub === "number") {
+		if (request.part !== undefined) throw new RangeError(`${name} has no parts`);
+		sub = spec.sub;
+	} else {
+		const { part } = request;
+		if (part === undefined || !Number.isInteger(part) || part < 0 || part >= spec.sub.count) {
+			throw new RangeError(`${name}: part ${String(part)} is outside 0..${spec.sub.count - 1}`);
+		}
+		sub = spec.sub.first + part;
+	}
+	const frame = new Uint8Array(TAB60.reportBytes);
+	const view = new DataView(frame.buffer);
+	view.setUint8(0, spec.cmd);
+	view.setUint8(1, sub);
+	view.setUint16(2, REQUEST_BYTES_2_3, true);
+	frame.set(payload, PAYLOAD_OFFSET);
+	return frame;
 }
 
+type ReplyVerdict = { readonly kind: "ack" } | { readonly kind: "refused"; readonly detail: number } | { readonly kind: "stale" };
+
 /**
- * The single path from the core to the wire.
- * TODO:
- *   frame = encode(name, request)
- *   verdict = auditEgress(frame, name, { mode: ch.link.mode, window: ch.window, cursor: ch.cursor,
- *                                        cleared: (command) => clears(ch.clearance, command) })
- *   refused "not-cleared" -> throw NotCleared(name, ch.clearance)          G1: nothing sent
- *   refused, any other code -> throw ProtocolInvariantBroken(refusal)      a core bug: nothing sent
- *   ch.link.discardPending()                                               a late reply must not pair with this request
- *   await ch.link.send(verdict.frame)
- *   if spec.reply === "none" -> return null                                the board resets; the caller expects LinkLost next
- *   loop until spec.timeoutMs elapses:
- *     reply = await ch.link.next(remaining)
- *     FF AA in bytes 0..1 -> if the command moves the cursor, ch.cursor = null; throw DeviceRefused(name, u16 at 4)
- *     echo matches, or WRITE and 1E 02 with next offset === verdict.cursor -> ch.cursor = verdict.cursor; return reply
- *     WRITE ack with any other next offset -> ch.cursor = null; throw DeviceRefused(name, next offset)
- *     anything else is stale: drop it and keep waiting
+ * Pairs one incoming report with the frame just sent (R1 "Packet framing", reply). An echo of bytes 0..1 is the
+ * answer; FF AA is a refusal with its u16 detail; a WRITE is answered by 1E 02 and the next offset, which must be
+ * the cursor the audit predicted. Anything else is a late reply to an earlier request. Bytes 2..3 take no part.
  */
+function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cursor: number | null): ReplyVerdict {
+	const view = viewOf(reply);
+	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) return { kind: "refused", detail: view.getUint16(4, true) };
+	if (spec.reply === "write-ack") {
+		if (reply[0] !== 0x1e || reply[1] !== 0x02) return { kind: "stale" };
+		const next = view.getUint32(4, true);
+		return next === cursor ? { kind: "ack" } : { kind: "refused", detail: next };
+	}
+	return reply[0] === sent[0] && reply[1] === sent[1] ? { kind: "ack" } : { kind: "stale" };
+}
+
+/** Commands the board answers by resetting instead of replying. Derived from the registry, so the types know which calls return null. */
+type SilentCommand = { [K in CommandName]: (typeof COMMANDS)[K]["reply"] extends "none" ? K : never }[CommandName];
+
+/**
+ * The single path from the core to the wire. Encodes, audits, sends, and pairs the reply. G1 refuses with
+ * NotCleared and any other audit refusal is a core bug; in both cases nothing was sent. `discardPending` runs before
+ * the send so a late reply to a timed-out request cannot pair with this one, and late replies that still arrive are
+ * dropped until the command's timeout passes.
+ */
+function transmit(ch: Channel, name: SilentCommand, request: Request): Promise<null>;
+function transmit(ch: Channel, name: Exclude<CommandName, SilentCommand>, request: Request): Promise<InReport>;
 async function transmit(ch: Channel, name: CommandName, request: Request): Promise<InReport | null> {
-	return notImplemented(
-		`transmit(${ch.link.mode}, ${name}) via ${encode.name} and ${auditEgress.name}, window ${String(ch.window?.end)}, part ${String(request.part)}`,
-	);
+	const frame = encode(name, request);
+	const verdict = auditEgress(frame, name, {
+		mode: ch.link.mode,
+		window: ch.window,
+		cursor: ch.cursor,
+		cleared: (command) => clears(ch.clearance, command),
+	});
+	if (!verdict.ok) {
+		if (verdict.refusal.code === "not-cleared") throw new NotCleared(name, ch.clearance);
+		throw new ProtocolInvariantBroken(verdict.refusal);
+	}
+	const spec: CommandSpec = COMMANDS[name];
+	ch.link.discardPending();
+	await ch.link.send(verdict.frame);
+	if (spec.reply === "none") return null;
+	const deadline = ch.clock.now() + spec.timeoutMs;
+	let remaining = spec.timeoutMs;
+	for (;;) {
+		const reply = await ch.link.next(remaining);
+		const outcome = classifyReply(spec, verdict.frame, reply, verdict.cursor);
+		if (outcome.kind === "stale") {
+			remaining = deadline - ch.clock.now();
+			if (remaining <= 0) throw new LinkTimeout(`${spec.label}: no reply within ${spec.timeoutMs} ms`);
+			continue;
+		}
+		if (outcome.kind === "refused") {
+			if (spec.address === "set-cursor" || spec.address === "at-cursor") ch.cursor = null;
+			throw new DeviceRefused(name, outcome.detail);
+		}
+		ch.cursor = verdict.cursor;
+		return reply;
+	}
+}
+
+/** u32 offset at payload byte 0 and u32 length at byte 4, little-endian (R1 "Commands"). */
+function rangePayload(span: Span): Uint8Array {
+	const payload = new Uint8Array(8);
+	const view = new DataView(payload.buffer);
+	view.setUint32(0, span.offset, true);
+	view.setUint32(4, span.length, true);
+	return payload;
+}
+
+const u32Of = (reply: InReport) => viewOf(reply).getUint32(PAYLOAD_OFFSET, true);
+
+/** READ MODE's payload byte 0 (R1 "Commands"). */
+const MODE_BYTE = { iap: 0, app: 1 } as const satisfies Record<Mode, number>;
+
+async function readModeByte(ch: Channel): Promise<number> {
+	return viewOf(await transmit(ch, "readMode", {})).getUint8(PAYLOAD_OFFSET);
+}
+
+/** READ MODE answered the other mode's byte on a link whose product ID said this one. */
+export class ModeDisagrees extends Error {
+	override readonly name = "ModeDisagrees";
+	constructor(
+		readonly productIdSays: Mode,
+		readonly readModeSays: number,
+	) {
+		super(`READ MODE answered ${readModeSays} on a ${productIdSays} link`);
+	}
+}
+
+async function probe(ch: Channel): Promise<void> {
+	const byte = await readModeByte(ch);
+	if (byte !== MODE_BYTE[ch.link.mode]) throw new ModeDisagrees(ch.link.mode, byte);
 }
 
 /** The 180-byte version page: parts 0, 1, and 2 of READ VERSION PAGE, 60 bytes each from absolute 0x3000 + 60 * i. */
 export interface VersionPageRead {
 	readonly bytes: Uint8Array;
+}
+
+async function readVersionPage(ch: Channel): Promise<VersionPageRead> {
+	const { count } = COMMANDS.readVersionPage.sub;
+	const bytes = new Uint8Array(count * MAX_PAYLOAD_BYTES);
+	for (let part = 0; part < count; part++) {
+		bytes.set(payloadOf(await transmit(ch, "readVersionPage", { part })), part * MAX_PAYLOAD_BYTES);
+	}
+	return { bytes };
+}
+
+/** RESET to app, then the link is done. Safe whatever the board holds: the IAP boots only a version page that carries its magic. */
+async function restartToApp(ch: Channel): Promise<void> {
+	await transmit(ch, "resetToApp", {});
+	await ch.link.close();
 }
 
 /** The live config channel (app mode). Every method throws NotCleared until U10 and U11 lift G1 for it. */
@@ -538,6 +664,18 @@ export interface ConfigChannel {
 	readLayer(layer: Layer): Promise<ReadonlyMap<KeyId, Usage>>;
 	setKey(write: KeyWrite): Promise<void>;
 	setOsMode(mode: OsMode): Promise<void>;
+}
+
+function configChannel(ch: Channel): ConfigChannel {
+	const gated = (names: readonly CommandName[], what: string): never => {
+		for (const name of names) if (!clears(ch.clearance, name)) throw new NotCleared(name, ch.clearance);
+		return notImplemented(what);
+	};
+	return {
+		readLayer: async (layer) => gated(["cfgReadReverseMap"], `readLayer(${layer})`),
+		setKey: async (write) => gated(["cfgSelectLayer", "cfgSetKey"], `setKey(${write.layer}, ${write.key}, ${write.usage})`),
+		setOsMode: async (mode) => gated(["cfgSetOsMode"], `setOsMode(${mode})`),
+	};
 }
 
 /** What opening a session needs: where links come from, what G1 lets this kit send, and the job's cancel signal. */
@@ -556,17 +694,15 @@ export interface AppSession {
 	readonly info: BlInfo;
 	readonly window: FlashWindow;
 	readVersionPage(): Promise<VersionPageRead>;
+	/** READ MODE as a liveness probe. Resolves when the board answers 1, normal mode. */
+	probe(): Promise<void>;
 	/**
-	 * Restarts the board into update mode and returns the bootloader session. This session is closed afterwards.
-	 * TODO, the order matters in a browser:
-	 *   opening = ctx.port.open({ modes: ["iap"], reason: "enter-update-mode" }, ctx.signal)   start first, do not await:
-	 *     a chooser opened inside the click's activation stays open and adds the row when the bootloader appears (R3 C7)
-	 *   await transmit(ch, "resetToIap", {})                                                   no reply; the app link dies
-	 *   await this.close()
-	 *   iapLink = await opening
-	 *   return attach(iapLink, ctx.clearance)                                                  same checks as connect()
+	 * Restarts the board into update mode and returns the bootloader session, or the refusal that attach found
+	 * there. This session is closed afterwards. The update-mode link is requested before the reset frame leaves,
+	 * because a chooser opened inside the click's activation stays open and adds the row when the bootloader
+	 * appears (R3 C7).
 	 */
-	enterIap(ctx: LinkContext): Promise<IapSession>;
+	enterIap(ctx: LinkContext): Promise<IapSession | IapRefused>;
 	readonly config: ConfigChannel;
 	close(): Promise<void>;
 }
@@ -608,17 +744,173 @@ export interface IapSession {
 export type Session = AppSession | IapSession;
 
 /**
- * Opens a link for `want`, then proves the board is the one this tool knows before returning a typed session.
- * TODO (shared with enterIap through an internal `attach(link, clearance)`):
- *   link = await ctx.port.open(want, ctx.signal); ch = { link, clearance: ctx.clearance, window: null, cursor: null }
- *   mode byte = READ MODE; refuse mode-disagrees unless it matches link.mode (0 = iap, 1 = app)
- *   info = parseBlInfo(READ BL INFO payload)
- *   fwInfo = link.mode === "iap" ? u16 of READ FW INFO : null
- *   ch.window = windowFor(info, fwInfo)
- *   on any refusal: close the link and return the refusal. A refused board never receives an addressed command.
+ * A board that attach refused, with its link still open so the caller can send it home. Only an update-mode link
+ * offers `restartToApp`: RESET to app is safe whatever the board holds, because the IAP boots only a version page
+ * that carries its magic, and without it a refused board stays in update mode, where the keyboard cannot type.
  */
-export async function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | LayoutRefusal> {
-	return notImplemented(
-		`connect(${want.modes.join("|")}, ${want.reason}, ${ctx.clearance.kind}, aborted=${ctx.signal.aborted}) to ${TAB60.productName.app}, chunks of ${EXPECTED_LAYOUT.writeChunkBytes}, via ${transmit.name}`,
-	);
+export interface AppRefused {
+	readonly mode: "app";
+	readonly refusal: LayoutRefusal;
+	readonly restartToApp: null;
+	close(): Promise<void>;
+}
+
+export interface IapRefused {
+	readonly mode: "iap";
+	readonly refusal: LayoutRefusal;
+	/** Sends RESET to app through the audited path, under the kit's clearance, then closes. */
+	restartToApp(): Promise<void>;
+	close(): Promise<void>;
+}
+
+export type Refused = AppRefused | IapRefused;
+
+class App implements AppSession {
+	readonly mode = "app";
+	readonly config: ConfigChannel;
+
+	constructor(
+		private readonly ch: Channel,
+		readonly info: BlInfo,
+		readonly window: FlashWindow,
+	) {
+		this.config = configChannel(ch);
+	}
+
+	readVersionPage(): Promise<VersionPageRead> {
+		return readVersionPage(this.ch);
+	}
+
+	probe(): Promise<void> {
+		return probe(this.ch);
+	}
+
+	async enterIap(ctx: LinkContext): Promise<IapSession | IapRefused> {
+		const opening = ctx.port.open({ modes: ["iap"], reason: "enter-update-mode" }, ctx.signal);
+		let iapLink: Link;
+		try {
+			await transmit(this.ch, "resetToIap", {});
+			await this.close();
+			iapLink = await opening;
+		} catch (error) {
+			opening.catch(() => undefined);
+			throw error;
+		}
+		return attach(iapLink, ctx, "iap");
+	}
+
+	close(): Promise<void> {
+		return this.ch.link.close();
+	}
+}
+
+class Iap implements IapSession {
+	readonly mode = "iap";
+
+	constructor(
+		private readonly ch: Channel,
+		readonly info: BlInfo,
+		readonly window: FlashWindow,
+	) {}
+
+	readVersionPage(): Promise<VersionPageRead> {
+		return readVersionPage(this.ch);
+	}
+
+	probe(): Promise<void> {
+		return probe(this.ch);
+	}
+
+	async checksum(imageBytes: number): Promise<{ readonly sum: Sum32; readonly crc: Crc32 | null }> {
+		const span = imageSpan(this.window, imageBytes);
+		if (span === null) throw new RangeError(`an image of ${imageBytes} bytes does not fit the window`);
+		const sum = sum32Literal(u32Of(await transmit(this.ch, "sum", { payload: rangePayload(span) })));
+		const crc = clears(this.ch.clearance, "crc") ? crc32Literal(u32Of(await transmit(this.ch, "crc", { payload: rangePayload(span) }))) : null;
+		return { sum, crc };
+	}
+
+	async eraseWindow(): Promise<void> {
+		return notImplemented(`eraseWindow(${this.window.pageSize})`);
+	}
+
+	async writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void> {
+		return notImplemented(`writeImage(${image.entry.id}, ${onChunk.name})`);
+	}
+
+	async writeVersionBlock(image: FlashableImage): Promise<void> {
+		return notImplemented(`writeVersionBlock(${image.entry.id})`);
+	}
+
+	exitToApp(): Promise<void> {
+		return restartToApp(this.ch);
+	}
+
+	close(): Promise<void> {
+		return this.ch.link.close();
+	}
+}
+
+/**
+ * Proves the board is the one this tool knows: READ MODE must agree with the product ID, BL info must match
+ * EXPECTED_LAYOUT, and in update mode FW INFO must agree with BL info. A refused board never receives an addressed
+ * command, because the window stays null until every check passed.
+ */
+async function inspect(ch: Channel): Promise<{ readonly info: BlInfo; readonly window: FlashWindow } | LayoutRefusal> {
+	const { mode } = ch.link;
+	const modeByte = await readModeByte(ch);
+	if (modeByte !== MODE_BYTE[mode]) return { code: "mode-disagrees", productIdSays: mode, readModeSays: modeByte };
+	const info = parseBlInfo(payloadOf(await transmit(ch, "readBlInfo", {})));
+	if ("code" in info) return info;
+	const fwInfo = mode === "iap" ? u32Of(await transmit(ch, "readFwInfo", {})) : null;
+	const window = windowFor(info, fwInfo);
+	if ("code" in window) return window;
+	return { info, window };
+}
+
+function refused(ch: Channel, refusal: LayoutRefusal): Refused {
+	const close = () => ch.link.close();
+	return ch.link.mode === "iap"
+		? { mode: "iap", refusal, restartToApp: () => restartToApp(ch), close }
+		: { mode: "app", refusal, restartToApp: null, close };
+}
+
+/** A link to a typed session, or a Refused that keeps the link. A link that throws during the checks is closed. */
+function attach(link: Link, ctx: LinkContext, as: "app"): Promise<AppSession | AppRefused>;
+function attach(link: Link, ctx: LinkContext, as: "iap"): Promise<IapSession | IapRefused>;
+function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session | Refused>;
+async function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session | Refused> {
+	if (link.mode !== as) {
+		await link.close();
+		throw new Error(`the port opened a ${link.mode} link for ${as}`);
+	}
+	const ch: Channel = { link, clock: ctx.port.clock, clearance: ctx.clearance, window: null, cursor: null };
+	let seen: Awaited<ReturnType<typeof inspect>>;
+	try {
+		seen = await inspect(ch);
+	} catch (error) {
+		await link.close();
+		throw error;
+	}
+	if ("code" in seen) return refused(ch, seen);
+	ch.window = seen.window;
+	return link.mode === "app" ? new App(ch, seen.info, seen.window) : new Iap(ch, seen.info, seen.window);
+}
+
+/** A want for exactly one mode, so `connect` can promise a session of that mode. */
+interface WantIn<M extends Mode> {
+	readonly modes: readonly [M];
+	readonly reason: WantReason;
+}
+
+/** Opens a link for `want`, then proves the board is the one this tool knows before returning a typed session. */
+export function connect(ctx: LinkContext, want: WantIn<"app">): Promise<AppSession | AppRefused>;
+export function connect(ctx: LinkContext, want: WantIn<"iap">): Promise<IapSession | IapRefused>;
+export function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | Refused>;
+export async function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | Refused> {
+	const link = await ctx.port.open(want, ctx.signal);
+	if (!want.modes.includes(link.mode)) {
+		await link.close();
+		throw new Error(`the port opened a ${link.mode} link for ${want.modes.join(" or ")}`);
+	}
+	return attach(link, ctx, link.mode);
 }
