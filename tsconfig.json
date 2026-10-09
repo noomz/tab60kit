@@ -15,5 +15,5 @@
 		"noEmit": true,
 		"skipLibCheck": true
 	},
-	"include": ["core/**/*.ts", "web/**/*.ts", "testing/**/*.ts", "tools/**/*.ts", "lab/**/*.ts", "probes/policy.test.ts", "probes/boundaries.ts"]
+	"include": ["core/**/*.ts", "web/**/*.ts", "testing/**/*.ts", "tools/**/*.ts", "lab/**/*.ts", "scripts/**/*.ts", "probes/policy.test.ts", "probes/boundaries.ts"]
 }
