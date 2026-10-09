@@ -18,7 +18,7 @@ import {
 	bootTarget,
 	report,
 	udevRules,
-} from "../core/index";
+} from "@tab60kit/core";
 
 export type AppView =
 	| { readonly kind: "unsupported"; readonly why: "no-webhid" | "insecure-context" }

@@ -32,7 +32,7 @@ done
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-cp -R core web "$work/"
+cp -R core web package.json "$work/"
 perl -0pi -e 's/(export type JobState =\n)/$1\t| { readonly kind: "paused"; readonly board: ChipState | null }\n/' "$work/core/job.ts"
 grep -q '"paused"' "$work/core/job.ts" || { echo "FAIL mutation did not apply"; exit 1; }
 out=$("$TSC" "${OPTS[@]}" "$work/web/webhid.d.ts" "$work/web/screens.ts" 2>&1)

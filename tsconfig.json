@@ -4,6 +4,7 @@
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
 		"lib": ["ES2022", "DOM"],
+		"types": ["bun"],
 		"strict": true,
 		"exactOptionalPropertyTypes": true,
 		"noUncheckedIndexedAccess": true,
@@ -14,5 +15,5 @@
 		"noEmit": true,
 		"skipLibCheck": true
 	},
-	"include": ["core/**/*.ts", "web/**/*.ts", "testing/**/*.ts", "tools/**/*.ts", "lab/**/*.ts"]
+	"include": ["core/**/*.ts", "web/**/*.ts", "testing/**/*.ts", "tools/**/*.ts", "lab/**/*.ts", "probes/policy.test.ts", "probes/boundaries.ts"]
 }

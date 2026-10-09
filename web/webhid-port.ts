@@ -7,9 +7,10 @@
  * so UI code holds neither a DevicePort nor a Link. `WebHidLink.send` is the page's only `sendReport` call, and it
  * accepts only frames the core's egress audit passed (OutReport). probes/boundaries.ts holds both rules.
  *
- * Imports the shell seam (core/port) and the UI entry for createKit. `notImplemented` is the sketch's one exception.
+ * Imports the shell seam (@tab60kit/core/port) and the UI entry for createKit. The package exports nothing else, so
+ * the sketch's `notImplemented` is copied below.
  */
-import { type Kit, createKit } from "../core/index";
+import { type Kit, createKit } from "@tab60kit/core";
 import {
 	Busy,
 	type Clearance,
@@ -28,8 +29,7 @@ import {
 	asInReport,
 	hidFilters,
 	modeOf,
-} from "../core/port";
-import { notImplemented } from "../core/units";
+} from "@tab60kit/core/port";
 
 /** What the UI may do with the chooser: answer a parked pick from a click, and know whether one is parked. */
 export interface Chooser {
@@ -62,6 +62,10 @@ export function startWebHid(hid: HID, locks: LockManager, lab?: LabSetup): { rea
 			},
 		},
 	};
+}
+
+function notImplemented(what: string): never {
+	throw new Error(`not implemented: ${what}`);
 }
 
 interface PendingPick {
