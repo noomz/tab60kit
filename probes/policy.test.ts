@@ -126,7 +126,7 @@ check("shipped caps: each blocked line asks for review and a capture", () =>
 	assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")),
 );
 
-// G1 as maturity. A lab clearance built here by cast, because labClearance refuses every row while all are unreviewed.
+// G1 as maturity. A lab clearance built here by cast, so the cases below pick the maturity they test.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
 const confirmed: Maturity = { level: "confirmed", by: "user", on: "2026-10-10", capture: "fixtures/u1-macos.json" };
 const unreviewed: Maturity = { level: "unreviewed" };
@@ -141,7 +141,10 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 	[lab, "erase", confirmed, false, "a lab session sends nothing it does not name, confirmed or not"],
 ];
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
-check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode"], "U1"), /review these rows/));
+check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "erase"], "U7"), /send them: erase$/));
+check("clearance: a lab session for the seven reviewed U1 rows", () =>
+	assert.equal(labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "U1").kind, "lab"),
+);
 
 // The registry. No (cmd, sub) pair names two rows; the version-page read covers parts 0..2 and nothing past them.
 const overlaps: string[] = [];
@@ -245,5 +248,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 1} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

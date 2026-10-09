@@ -81,10 +81,17 @@ export interface CommandSpec {
 const UNREVIEWED = { level: "unreviewed" } as const;
 
 /**
+ * The user's G1 lift for plan unit U1 ("Allow U1", design trail decision log, 2026-10-09; design.md open question 2):
+ * the seven rows a bootloader round trip and a read-only deep check need. Nine wire commands, because the
+ * version-page parts count separately. No erase, write, CRC, or config row.
+ */
+const REVIEWED_FOR_U1 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-09" } as const;
+
+/**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
- * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. Today every row is
- * unreviewed, so G1 forbids every output report until the user reviews rows and a lab session captures them
- * (docs/units.md U1, U7, U10, U11).
+ * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. The seven U1 rows are
+ * reviewed; every other row is unreviewed, so G1 forbids it until the user reviews it and a lab session captures
+ * it (docs/units.md U7, U10, U11).
  */
 export const COMMANDS = {
 	readBlInfo: {
@@ -98,7 +105,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	readFwInfo: {
 		label: "Read firmware info",
@@ -111,7 +118,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x4051B2 takes the write address from FW info" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	readMode: {
 		label: "Read mode",
@@ -124,7 +131,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:132-135; R4 app handler 0x767A" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	readVersionPage: {
 		label: "Read version page",
@@ -138,7 +145,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	resetToIap: {
 		label: "Restart into update mode",
@@ -151,7 +158,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	resetToApp: {
 		label: "Restart into normal mode",
@@ -164,7 +171,7 @@ export const COMMANDS = {
 		address: "none",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	erase: {
 		label: "Erase pages",
@@ -190,7 +197,7 @@ export const COMMANDS = {
 		address: "range",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U1,
 	},
 	crc: {
 		label: "CRC-32 of a range",
