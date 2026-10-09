@@ -7,7 +7,11 @@
 		"./port": "./core/port.ts"
 	},
 	"scripts": {
-		"build": "bun scripts/build.ts"
+		"build": "bun scripts/build.ts",
+		"typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
+		"probes": "TSC=node_modules/.bin/tsc probes/run.sh",
+		"reconcile": "bun testing/reconcile-model.ts",
+		"check": "bun run typecheck && bun test && bun run probes && bun run reconcile"
 	},
 	"devDependencies": {
 		"@types/bun": "1.3.13",
