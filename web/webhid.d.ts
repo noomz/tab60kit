@@ -1,0 +1,48 @@
+// The subset of WebHID the shell uses. TypeScript's DOM library does not ship WebHID; the real build takes
+// @types/w3c-web-hid instead of this file.
+
+interface HIDDeviceFilter {
+	vendorId?: number;
+	productId?: number;
+	usagePage?: number;
+	usage?: number;
+}
+
+interface HIDCollectionInfo {
+	readonly usagePage: number;
+	readonly usage: number;
+}
+
+interface HIDInputReportEvent extends Event {
+	readonly device: HIDDevice;
+	readonly reportId: number;
+	readonly data: DataView;
+}
+
+interface HIDConnectionEvent extends Event {
+	readonly device: HIDDevice;
+}
+
+interface HIDDevice extends EventTarget {
+	readonly opened: boolean;
+	readonly vendorId: number;
+	readonly productId: number;
+	readonly productName: string;
+	readonly collections: readonly HIDCollectionInfo[];
+	open(): Promise<void>;
+	close(): Promise<void>;
+	sendReport(reportId: number, data: BufferSource): Promise<void>;
+	addEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
+	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
+}
+
+interface HID extends EventTarget {
+	getDevices(): Promise<HIDDevice[]>;
+	requestDevice(options: { filters: HIDDeviceFilter[] }): Promise<HIDDevice[]>;
+	addEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
+	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
+}
+
+interface Navigator {
+	readonly hid: HID;
+}
