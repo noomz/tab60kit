@@ -24,7 +24,7 @@ const SETTLE_MS = 10;
 
 export type Recovery = "restart" | "try-again";
 
-/** One fake page session: Connect, then Deep check, then optionally a recovery click, with one injected fault. */
+/** One fake page session. It clicks Connect, then Deep check, then a recovery where the scenario names one. */
 export interface Scenario {
 	/** Lose the link right before the board receives this output report, counted from page load. */
 	readonly lossAt?: number;
@@ -127,19 +127,18 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 		running = null;
 		if (outcome !== "timer") phase = phaseAfterRun(entries, outcome);
 		await sleep(SETTLE_MS);
-		const landed: { readonly by: CancelRecord["by"]; readonly at: number } | null = cancelled;
 		const record: RunRecord = {
 			what,
 			phase: phase.kind,
 			board: board.mode,
 			leaked: hid.openHandles - holds(phase),
 			cancel:
-				landed === null
+				cancelled === null
 					? null
 					: {
-							by: landed.by,
-							landed: `in ${what} ${where(entries.slice(0, landed.at))}`,
-							framesAfter: entries.slice(landed.at, endedAt).flatMap((entry) => (entry.kind === "out" ? [entry.hex.slice(0, 4)] : [])),
+							by: cancelled.by,
+							landed: `in ${what} ${where(entries.slice(0, cancelled.at))}`,
+							framesAfter: entries.slice(cancelled.at, endedAt).flatMap((entry) => (entry.kind === "out" ? [entry.hex.slice(0, 4)] : [])),
 						},
 			stuck: outcome === "timer",
 			bringsHome,
@@ -178,7 +177,7 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 	};
 }
 
-/** The sweep's predicate. Every line is a reason the scenario failed; none means it passed. */
+/** The sweep's predicate. Each line is one reason the scenario failed, and an empty list means it passed. */
 export function problems(result: ScenarioResult): string[] {
 	const found: string[] = [];
 	const off = result.frames.filter((hex) => !U1_FRAMES.includes(hex));
@@ -198,7 +197,7 @@ export function problems(result: ScenarioResult): string[] {
 	return found;
 }
 
-export function describeScenario(scenario: Scenario): string {
+function describeScenario(scenario: Scenario): string {
 	const parts = [
 		scenario.lossAt === undefined ? null : `link lost at packet ${scenario.lossAt}${scenario.resetOnLoss ? " with an MCU reset" : ""}`,
 		scenario.recovery === undefined ? null : `${scenario.recovery} after a stranded Deep check`,
@@ -219,7 +218,7 @@ export interface SweepOptions {
 export interface SweepReport {
 	readonly scenarios: number;
 	readonly problems: readonly string[];
-	/** How many Cancels, by who sent them and where they landed, each list of frames followed. */
+	/** How many runs saw each Cancel sender, landing place, and list of frames after it. */
 	readonly afterCancel: ReadonlyMap<string, number>;
 }
 

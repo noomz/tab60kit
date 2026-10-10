@@ -81,13 +81,13 @@ export function phaseAfterRun(entries: readonly TranscriptEntry[], outcome: RunO
 type Granted = Extract<TranscriptEntry, { kind: "granted" }>;
 
 /** The part of WebHID the page reads at load. */
-export interface Grants {
+interface Grants {
 	getDevices(): Promise<readonly Pick<HIDDevice, "vendorId" | "productId">[]>;
 }
 
 /**
- * Where the page starts, before any click and with no frame sent: one `granted` entry per TAB 60 device the browser
- * still grants, and the away phase when one of them is the bootloader, which an earlier page left in update mode.
+ * Where the page starts, before any click and with no frame sent. It records one `granted` entry per TAB 60 device
+ * the browser still grants, and starts away when one of them is the bootloader, which an earlier page left there.
  */
 export async function atLoad(hid: Grants, now: () => number): Promise<{ readonly entries: readonly Granted[]; readonly phase: Phase }> {
 	const devices = await hid.getDevices();

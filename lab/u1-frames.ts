@@ -1,12 +1,12 @@
 /**
  * The nine frames U1 may send, as a runtime allowlist in the lab page's link wrap. It is a second gate behind the
- * core's egress audit, and its literals never come from the codec: this file reaches core/ only for port.ts types
+ * core's egress audit, and its literals never come from the codec. This file reaches core/ only for port.ts types
  * and what testing/transcript.ts pulls in (probes/boundaries.ts rule u1-frames-independence).
  */
 import type { Link } from "../core/port";
 import { type TranscriptEntry, hexOf, recording } from "../testing/transcript";
 
-/** The nine frames U1 may send, byte for byte, written out instead of encoded so neither gate trusts the codec. */
+/** Written out instead of encoded, so neither this allowlist nor the verdict trusts the codec. */
 export const U1_FRAMES: readonly string[] = [
 	"12020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 	"12000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
@@ -43,7 +43,7 @@ export function onlyU1Frames(link: Link): Link {
 	};
 }
 
-/** The lab's link wrap: the core sends through the allowlist, then the recording, then the WebHID link. */
+/** The allowlist sits outside the recording, so a refused frame never reaches the transcript or the board. */
 export const u1Wrap =
 	(sink: (entry: TranscriptEntry) => void, now?: () => number) =>
 	(link: Link): Link =>
