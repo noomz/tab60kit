@@ -19,7 +19,7 @@ export const U1_FRAMES: readonly string[] = [
 	"11010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 ];
 
-/** The lab refused a frame the core's audit passed, before it reached the transcript or the wire. */
+/** The lab refused a frame the core's audit passed, before it reached the wire. */
 export class FrameNotAllowed extends Error {
 	override readonly name = "FrameNotAllowed";
 
@@ -43,8 +43,11 @@ export function onlyU1Frames(link: Link): Link {
 	};
 }
 
-/** The allowlist sits outside the recording, so a refused frame never reaches the transcript or the board. */
+/**
+ * The allowlist sits inside the recording, so a refused frame never reaches the board, and the transcript keeps the
+ * attempt as an `out` entry followed by its `send-failed` entry, which the verdict's frames gate fails on.
+ */
 export const u1Wrap =
 	(sink: (entry: TranscriptEntry) => void, now?: () => number) =>
 	(link: Link): Link =>
-		onlyU1Frames(recording(link, sink, now));
+		recording(onlyU1Frames(link), sink, now);

@@ -231,7 +231,7 @@ test("FF AA to SUM sends RESET to app and closes the link, and the page shows aw
 	expect(r.board.mode).toBe("app");
 });
 
-test("a frame the allowlist refuses on the first update-mode probe ends the Deep check away, with only RESET to app after it", async () => {
+test("a frame the allowlist refuses on the first update-mode probe ends the Deep check away, fails the frames gate, and sends only RESET to app after it", async () => {
 	const forged = `1202${"0".repeat(122)}ff`;
 	let readModes = 0;
 	let sentBefore = -1;
@@ -254,8 +254,12 @@ test("a frame the allowlist refuses on the first update-mode probe ends the Deep
 	const error = await rejection(u1DeepCheck(app, r.ctx()));
 	expect(error).toMatchObject({ name: "FrameNotAllowed", hex: forged });
 	expect(error).toBeInstanceOf(FrameNotAllowed);
-	expect(r.pairs().slice(sentBefore)).toEqual(["1101"]);
-	expect(r.entries.some((entry) => "hex" in entry && entry.hex === forged)).toBe(false);
+	expect(r.pairs().slice(sentBefore)).toEqual(["1202", "1101"]);
+	expect(r.entries.filter((entry) => "hex" in entry && entry.hex === forged).map((entry) => entry.kind)).toEqual(["out", "send-failed"]);
+	expect(r.board.violations).toEqual([]);
+	const own = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
+	const transcript: Transcript = { format: "tab60kit-transcript/1", recordedAt: "2026-10-10T00:00:00.000Z", environment: { fake: "plain" }, entries: r.entries };
+	expect((await evaluateU1(transcript, { expected: own, typing: "types" })).frames).toMatchObject({ pass: false, detail: expect.stringContaining(forged) });
 	expect(r.log.some((line) => line.includes(forged))).toBe(true);
 	expect(r.hid.openHandles).toBe(0);
 	expect(phaseAfterRun(r.entries, outcomeOfError(error))).toEqual(AWAY);

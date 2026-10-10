@@ -8,7 +8,7 @@ import { FakeTab60 } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
 import type { TranscriptEntry } from "./transcript";
 
-test("the allowlist refuses a SUM the audit accepts before the transcript or the board sees it", async () => {
+test("the allowlist refuses a SUM the audit accepts before the board sees it, and the transcript keeps the refusal", async () => {
 	const board = new FakeTab60({ starting: "update-mode-erased", target: TARGET });
 	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["iap"], isActive: () => true });
 	const entries: TranscriptEntry[] = [];
@@ -25,7 +25,8 @@ test("the allowlist refuses a SUM the audit accepts before the transcript or the
 	expect(error).toBeInstanceOf(FrameNotAllowed);
 	expect(error).toMatchObject({ hex: sumOverFirstKilobyte.padEnd(128, "0") });
 	expect(board.packetsReceived).toBe(received);
-	expect(entries.filter((entry) => entry.kind === "out" && entry.hex.startsWith("1d01"))).toEqual([]);
+	const refused = sumOverFirstKilobyte.padEnd(128, "0");
+	expect(entries.filter((entry) => "hex" in entry && entry.hex === refused).map((entry) => entry.kind)).toEqual(["out", "send-failed"]);
 	await session.close();
 	expect(hid.openHandles).toBe(0);
 });
