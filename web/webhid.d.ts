@@ -8,9 +8,22 @@ interface HIDDeviceFilter {
 	usage?: number;
 }
 
+interface HIDReportItem {
+	readonly reportSize: number;
+	readonly reportCount: number;
+}
+
+interface HIDReportInfo {
+	readonly reportId: number;
+	readonly items: readonly HIDReportItem[];
+}
+
 interface HIDCollectionInfo {
 	readonly usagePage: number;
 	readonly usage: number;
+	readonly inputReports: readonly HIDReportInfo[];
+	readonly outputReports: readonly HIDReportInfo[];
+	readonly featureReports: readonly HIDReportInfo[];
 }
 
 interface HIDInputReportEvent extends Event {
@@ -34,6 +47,8 @@ interface HIDDevice extends EventTarget {
 	sendReport(reportId: number, data: BufferSource): Promise<void>;
 	addEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
 	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
+	removeEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
+	removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
 }
 
 interface HID extends EventTarget {
@@ -41,6 +56,8 @@ interface HID extends EventTarget {
 	requestDevice(options: { filters: HIDDeviceFilter[] }): Promise<HIDDevice[]>;
 	addEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
 	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
+	removeEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
+	removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
 }
 
 interface Navigator {

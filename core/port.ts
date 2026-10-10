@@ -113,3 +113,60 @@ export class OsPermissionDenied extends Error {
 export class Busy extends Error {
 	override readonly name = "Busy";
 }
+
+interface Waiter {
+	readonly resolve: (report: InReport) => void;
+	readonly reject: (error: Error) => void;
+}
+
+/**
+ * The input half of a Link, shared by every shell so they agree on what `next`, `discardPending`, and a lost link
+ * mean: reports queue in arrival order, `next` hands out the oldest or waits up to its timeout, and `end` rejects
+ * every waiter, now and later, with the link's LinkLost.
+ */
+export class ReportQueue {
+	readonly #queue: InReport[] = [];
+	readonly #waiters: Waiter[] = [];
+	#ended: LinkLost | null = null;
+
+	push(report: InReport): void {
+		if (this.#ended !== null) return;
+		const waiter = this.#waiters.shift();
+		if (waiter === undefined) this.#queue.push(report);
+		else waiter.resolve(report);
+	}
+
+	next(timeoutMs: number): Promise<InReport> {
+		if (this.#ended !== null) return Promise.reject(this.#ended);
+		const queued = this.#queue.shift();
+		if (queued !== undefined) return Promise.resolve(queued);
+		return new Promise<InReport>((resolve, reject) => {
+			const waiter: Waiter = {
+				resolve: (report) => {
+					clearTimeout(timer);
+					resolve(report);
+				},
+				reject: (error) => {
+					clearTimeout(timer);
+					reject(error);
+				},
+			};
+			const timer = setTimeout(() => {
+				this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
+				reject(new LinkTimeout(`no input report within ${timeoutMs} ms`));
+			}, timeoutMs);
+			this.#waiters.push(waiter);
+		});
+	}
+
+	discardPending(): void {
+		this.#queue.length = 0;
+	}
+
+	end(error: LinkLost): void {
+		if (this.#ended !== null) return;
+		this.#ended = error;
+		this.#queue.length = 0;
+		for (const waiter of this.#waiters.splice(0)) waiter.reject(error);
+	}
+}
