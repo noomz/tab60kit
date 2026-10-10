@@ -3,7 +3,7 @@ import type { AppSession, Refused } from "../core/protocol";
 import { FakeTab60 } from "../testing/fake-tab60";
 import { FakeHid, FakeLocks } from "../testing/fake-webhid";
 import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
-import { startWebHidLab } from "../web/webhid-port";
+import { type PortEvent, startWebHidLab } from "../web/webhid-port";
 import { evaluateU1 } from "./u1-checks";
 import { type DeepCheckEnd, type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "./u1-job";
 
@@ -67,6 +67,25 @@ function log(line: string): void {
 	ui.log.textContent += `${(now() / 1000).toFixed(3)}s ${line}\n`;
 }
 
+const pid = (productId: number) => `0x${productId.toString(16)}`;
+
+function describeEvent(event: PortEvent): string {
+	switch (event.kind) {
+		case "pick":
+			return `pick (${event.path}, ${event.reason}): ${event.productId === null ? "no device" : pid(event.productId)} after ${Math.round(event.waitMs)} ms`;
+		case "opened":
+			return `opened ${event.productName} ${pid(event.productId)}, ${event.collections.length} collection(s)`;
+		case "open-attempt":
+			return `open attempt ${event.attempt} on ${pid(event.productId)}: ${event.error ?? "ok"}`;
+		case "close-timeout":
+			return `close of ${pid(event.productId)} did not settle in time; counted as closed`;
+		default: {
+			const exhaustive: never = event;
+			return exhaustive;
+		}
+	}
+}
+
 function hardware(mode: FakeMode | null): { readonly hid: HID; readonly locks: LockManager; readonly board: FakeTab60 | null } {
 	if (mode === null) return { hid: navigator.hid, locks: navigator.locks, board: null };
 	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 } });
@@ -102,7 +121,7 @@ function start(): void {
 		onEvent: (event) => {
 			entries.push({ t: now(), ...event });
 			if (event.kind === "opened") lastOpened = event.productId;
-			log(event.kind === "pick" ? `pick (${event.path}, ${event.reason}): ${event.productId === null ? "no device" : `0x${event.productId.toString(16)}`} after ${Math.round(event.waitMs)} ms` : event.kind === "opened" ? `opened ${event.productName} 0x${event.productId.toString(16)}, ${event.collections.length} collection(s)` : `open attempt ${event.attempt} on 0x${event.productId.toString(16)}: ${event.error ?? "ok"}`);
+			log(describeEvent(event));
 		},
 	});
 	const transcript = (): Transcript => ({

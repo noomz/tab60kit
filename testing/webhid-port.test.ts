@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Busy, LinkLost, LinkTimeout, OsPermissionDenied, PickCancelled } from "../core/port";
+import { Busy, DeviceAlreadyOpen, LinkLost, LinkTimeout, OpenTimedOut, OsPermissionDenied, PickCancelled } from "../core/port";
 import { connect, labClearance } from "../core/protocol";
 import { type PortEvent, osOf, startWebHidLab } from "../web/webhid-port";
 import { FakeTab60 } from "./fake-tab60";
@@ -106,6 +106,78 @@ test("an aborted signal rejects a parked pick with the signal's reason", async (
 	await expect(opening).rejects.toThrow("cancelled by the page");
 	expect(chooser.needsClick).toBeNull();
 });
+
+test("an abort right after the open starts rejects with its reason, and no chooser opens", async () => {
+	const { port, events, hid } = lab();
+	const controller = new AbortController();
+	const opening = port.open(APP, controller.signal);
+	controller.abort(new Error("cancelled from the page"));
+	await expect(opening).rejects.toThrow("cancelled from the page");
+	expect(picks(events)).toEqual([]);
+	expect(hid.device.opened).toBe(false);
+});
+
+test("a device picked after the abort is not opened", async () => {
+	const { port, events, hid, resetBoard } = lab();
+	const controller = new AbortController();
+	const opening = port.open(IAP, controller.signal);
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	controller.abort(new Error("cancelled from the page"));
+	resetBoard();
+	await expect(opening).rejects.toThrow("cancelled from the page");
+	expect(picks(events)).toEqual(["activation:1304"]);
+	expect(hid.device.opened).toBe(false);
+	expect(events.some((event) => event.kind === "open-attempt")).toBe(false);
+});
+
+test("a chooser that closes empty after the abort rejects at once instead of parking", async () => {
+	const controller = new AbortController();
+	const cancelWhileOpen = () => {
+		controller.abort(new Error("cancelled from the page"));
+		return true;
+	};
+	const { port, chooser } = lab({ rowAppearsInOpenChooser: false, isActive: cancelWhileOpen });
+	await expect(port.open(IAP, controller.signal)).rejects.toThrow("cancelled from the page");
+	expect(chooser.needsClick).toBeNull();
+});
+
+test("an open that does not settle in 2 s is OpenTimedOut at once, with no retry", async () => {
+	const { port, hid, events } = lab();
+	hid.device.open = () => new Promise<void>(() => undefined);
+	const started = performance.now();
+	await expect(port.open(APP, signal())).rejects.toBeInstanceOf(OpenTimedOut);
+	expect(performance.now() - started).toBeGreaterThanOrEqual(1_990);
+	expect(events.filter((event) => event.kind === "open-attempt").map((event) => event.error?.split(":")[0])).toEqual(["OpenTimedOut"]);
+}, 5_000);
+
+test("an open that settles after its timeout is closed again, so nothing holds the device", async () => {
+	const { port, hid } = lab();
+	const device = hid.device;
+	const open = device.open.bind(device);
+	device.open = () => new Promise<void>((resolve, reject) => setTimeout(() => open().then(resolve, reject), 2_100));
+	await expect(port.open(APP, signal())).rejects.toBeInstanceOf(OpenTimedOut);
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	expect(device.opened).toBe(false);
+}, 6_000);
+
+test("a device this page already holds open is DeviceAlreadyOpen at once, not OsPermissionDenied", async () => {
+	const { port, events } = lab();
+	await port.open(APP, signal());
+	await expect(port.open(APP, signal())).rejects.toBeInstanceOf(DeviceAlreadyOpen);
+	const attempts = events.filter((event) => event.kind === "open-attempt");
+	expect(attempts.map((event) => (event.error === null ? "ok" : event.error.split(":")[0]))).toEqual(["ok", "InvalidStateError"]);
+});
+
+test("a close that does not settle in 2 s counts as closed and reports close-timeout once", async () => {
+	const { port, hid, events } = lab();
+	const link = await port.open(APP, signal());
+	hid.device.close = () => new Promise<void>(() => undefined);
+	const started = performance.now();
+	await link.close();
+	expect(performance.now() - started).toBeGreaterThanOrEqual(1_990);
+	await link.close();
+	expect(events.filter((event) => event.kind === "close-timeout")).toEqual([{ kind: "close-timeout", productId: 0x0304 }]);
+}, 5_000);
 
 test("a device the OS refuses to open is OsPermissionDenied after bounded retries, each reported", async () => {
 	const { port, events } = lab({ openFailures: Number.POSITIVE_INFINITY });

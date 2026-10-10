@@ -58,7 +58,7 @@ export interface DevicePort {
 	 * Resolves with a link to the TAB 60 vendor interface in one of `want.modes`. Never resolves a link for any other device.
 	 * Web: may open a chooser at once (if the click's activation is still live) or wait for a pick from a click.
 	 * Node: polls enumeration by VID, PID, and usage page. Fake: reconnects at once.
-	 * Rejects with PickCancelled, OsPermissionDenied, or the signal's AbortError.
+	 * Rejects with PickCancelled, OsPermissionDenied, OpenTimedOut, DeviceAlreadyOpen, or the signal's reason.
 	 */
 	open(want: DeviceWant, signal: AbortSignal): Promise<Link>;
 
@@ -111,6 +111,16 @@ export class OsPermissionDenied extends Error {
 	constructor(readonly os: "linux" | "other") {
 		super(`the OS refused access to the vendor interface (${os})`);
 	}
+}
+
+/** device.open() did not settle in time. The handle may be stale (R3 C12), so the shell does not retry it. */
+export class OpenTimedOut extends Error {
+	override readonly name = "OpenTimedOut";
+}
+
+/** device.open() threw InvalidStateError, which means this page already holds the device open. */
+export class DeviceAlreadyOpen extends Error {
+	override readonly name = "DeviceAlreadyOpen";
 }
 
 /** Another tab or process holds the board. */

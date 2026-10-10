@@ -13,12 +13,14 @@ import {
 	type Clearance,
 	type Clock,
 	type DevicePort,
+	DeviceAlreadyOpen,
 	type DeviceWant,
 	type InReport,
 	type Link,
 	LinkLost,
 	LinkTimeout,
 	type Mode,
+	OpenTimedOut,
 	OsPermissionDenied,
 	type OutReport,
 	PickCancelled,
@@ -54,7 +56,9 @@ export type PortEvent =
 	/** One chooser: opened inside the click's activation, or from a parked pick's click. `productId` null means closed empty. */
 	| { readonly kind: "pick"; readonly reason: WantReason; readonly path: "activation" | "parked"; readonly productId: number | null; readonly waitMs: number }
 	| { readonly kind: "open-attempt"; readonly productId: number; readonly attempt: number; readonly error: string | null }
-	| { readonly kind: "opened"; readonly productId: number; readonly productName: string; readonly collections: readonly CollectionReport[] };
+	| { readonly kind: "opened"; readonly productId: number; readonly productName: string; readonly collections: readonly CollectionReport[] }
+	/** device.close() did not settle in time, and the shell counted the device as closed. */
+	| { readonly kind: "close-timeout"; readonly productId: number };
 
 /** For lab pages only (docs/units.md U1, U7, U10, U11). The shipped page passes none. */
 export interface LabSetup {
@@ -94,6 +98,8 @@ const LOCK_NAME = "tab60kit:device";
 const OPEN_ATTEMPTS = 5;
 const OPEN_RETRY_MS = 200;
 const SEND_TIMEOUT_MS = 1_000;
+const OPEN_TIMEOUT_MS = 2_000;
+const CLOSE_TIMEOUT_MS = 2_000;
 const REPORT_ID = 0;
 
 const browserClock: Clock = {
@@ -117,6 +123,7 @@ const browserClock: Clock = {
 };
 
 const isSecurityError = (error: unknown): boolean => error instanceof DOMException && error.name === "SecurityError";
+const isInvalidState = (error: unknown): boolean => error instanceof DOMException && error.name === "InvalidStateError";
 const isInputReport = (event: Event): event is HIDInputReportEvent => "reportId" in event && "data" in event;
 const isConnectionEvent = (event: Event): event is HIDConnectionEvent => "device" in event;
 const message = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
@@ -135,6 +142,30 @@ const collectionsOf = (device: HIDDevice): CollectionReport[] =>
 
 const hasVendorCollection = (device: HIDDevice): boolean =>
 	device.collections.some((collection) => collection.usagePage === TAB60.usagePage && collection.usage === TAB60.usage);
+
+const TIMED_OUT = Symbol("timed out");
+
+/** `work`, or TIMED_OUT once `ms` pass first. Chromium adds no timeout to HID calls (R3 C12). */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const late = new Promise<typeof TIMED_OUT>((resolve) => {
+		timer = setTimeout(() => resolve(TIMED_OUT), ms);
+	});
+	try {
+		return await Promise.race([work, late]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** A close that does not settle in time counts as closed, and the shell reports it. Never rejects. */
+async function closeDevice(device: HIDDevice, report: (event: PortEvent) => void): Promise<void> {
+	try {
+		if ((await within(device.close(), CLOSE_TIMEOUT_MS)) === TIMED_OUT) report({ kind: "close-timeout", productId: device.productId });
+	} catch {
+		// Chromium rejects only while an open or close is in progress or after forget(); the device is finished either way.
+	}
+}
 
 class WebHidPort implements DevicePort {
 	#pending: PendingPick | null = null;
@@ -211,19 +242,27 @@ class WebHidPort implements DevicePort {
 		);
 	}
 
+	/** The page cannot close a chooser, so an abort that lands while one is open takes effect when it closes. */
 	async chosen(want: DeviceWant, signal: AbortSignal): Promise<HIDDevice> {
+		signal.throwIfAborted();
 		const startedAt = this.clock.now();
-		try {
-			const [device] = await this.hid.requestDevice({ filters: [...hidFilters(want.modes)] });
-			this.report({ kind: "pick", reason: want.reason, path: "activation", productId: device?.productId ?? null, waitMs: this.clock.now() - startedAt });
-			if (device !== undefined) return device;
-		} catch (error) {
-			if (!isSecurityError(error)) throw error;
-		}
-		return this.park(want, signal);
+		const device = await this.hid.requestDevice({ filters: [...hidFilters(want.modes)] }).then(
+			([picked]) => {
+				this.report({ kind: "pick", reason: want.reason, path: "activation", productId: picked?.productId ?? null, waitMs: this.clock.now() - startedAt });
+				return picked;
+			},
+			(error: unknown) => {
+				if (isSecurityError(error)) return undefined;
+				throw error;
+			},
+		);
+		if (device === undefined) return this.park(want, signal);
+		signal.throwIfAborted();
+		return device;
 	}
 
 	park(want: DeviceWant, signal: AbortSignal): Promise<HIDDevice> {
+		if (signal.aborted) return Promise.reject(signal.reason);
 		if (this.#pending !== null) throw new Error("a device pick is already pending");
 		return new Promise<HIDDevice>((resolve, reject) => {
 			const onAbort = () => {
@@ -242,23 +281,35 @@ class WebHidPort implements DevicePort {
 	async openDevice(device: HIDDevice, signal: AbortSignal): Promise<Link> {
 		const { productId } = device;
 		for (let attempt = 1; ; attempt++) {
+			signal.throwIfAborted();
+			const opening = device.open();
+			let outcome: void | typeof TIMED_OUT;
 			try {
-				await device.open();
-				this.report({ kind: "open-attempt", productId, attempt, error: null });
-				break;
+				outcome = await within(opening, OPEN_TIMEOUT_MS);
 			} catch (error) {
 				this.report({ kind: "open-attempt", productId, attempt, error: message(error) });
+				if (isInvalidState(error)) throw new DeviceAlreadyOpen(`${device.productName} (0x${productId.toString(16)}) is already open in this page`);
 				if (attempt >= OPEN_ATTEMPTS) throw new OsPermissionDenied(osOf(navigator.userAgent));
 				await this.clock.sleep(OPEN_RETRY_MS, signal);
+				continue;
 			}
+			if (outcome === TIMED_OUT) {
+				// An open that settles after its timeout would hold the device with no link to close it.
+				void opening.then(() => closeDevice(device, this.report), () => undefined);
+				const error = new OpenTimedOut(`device.open() did not settle within ${OPEN_TIMEOUT_MS} ms`);
+				this.report({ kind: "open-attempt", productId, attempt, error: message(error) });
+				throw error;
+			}
+			this.report({ kind: "open-attempt", productId, attempt, error: null });
+			break;
 		}
 		const mode = modeOf(productId);
 		if (!hasVendorCollection(device) || mode === null) {
-			await device.close();
+			await closeDevice(device, this.report);
 			throw new Error(`${device.productName} (0x${productId.toString(16)}) has no vendor collection on usage page 0x${TAB60.usagePage.toString(16)}`);
 		}
 		this.report({ kind: "opened", productId, productName: device.productName, collections: collectionsOf(device) });
-		return new WebHidLink(device, mode, this.hid);
+		return new WebHidLink(device, mode, this.hid, this.report);
 	}
 }
 
@@ -273,6 +324,7 @@ class WebHidLink implements Link {
 		private readonly device: HIDDevice,
 		readonly mode: Mode,
 		private readonly hid: HID,
+		private readonly report: (event: PortEvent) => void,
 	) {
 		let settle = () => undefined as void;
 		this.lost = new Promise<void>((resolve) => {
@@ -335,11 +387,6 @@ class WebHidLink implements Link {
 	async close(): Promise<void> {
 		const wasOpen = this.#ended === null;
 		this.#end(new LinkLost("the link was closed"));
-		if (!wasOpen) return;
-		try {
-			await this.device.close();
-		} catch {
-			// Chromium rejects only while an open or close is in progress or after forget(); the link is finished either way.
-		}
+		if (wasOpen) await closeDevice(this.device, this.report);
 	}
 }
