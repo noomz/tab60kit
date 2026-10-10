@@ -37,9 +37,16 @@ export interface CheckResult {
 }
 
 export interface U1Verdict {
+	/** A gate beside the nine checks: any frame off the golden list fails the run, whatever the checks say. */
+	readonly frames: { readonly title: string; readonly pass: boolean; readonly detail: string };
 	readonly checks: readonly CheckResult[];
 	readonly findings: readonly string[];
 	readonly commands: readonly string[];
+}
+
+/** The run passes only when every frame was golden and all nine checks passed. */
+export function passes(verdict: U1Verdict): boolean {
+	return verdict.frames.pass && verdict.checks.every((check) => check.pass);
 }
 
 interface Exchange {
@@ -137,12 +144,49 @@ function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, fi
 	return out;
 }
 
-function entryFindings(entries: readonly TranscriptEntry[]): string[] {
+function checkFrames(entries: readonly TranscriptEntry[]): U1Verdict["frames"] {
+	const title = "Every frame sent is one of the nine golden frames";
+	const sent = entries.flatMap((entry) => (entry.kind === "out" ? [entry.hex] : entry.kind === "out-write" ? [`WRITE ${entry.header}`] : []));
+	const off = [...new Set(sent.filter((frame) => !U1_FRAMES.includes(frame)))];
+	if (off.length > 0) return { title, pass: false, detail: `${off.length} sent frames are not golden: ${off.join(", ")}` };
+	return { title, pass: true, detail: `all ${sent.length} out entries are golden` };
+}
+
+/** The `out` entry at `index` failed to send when its `send-failed` entry comes before the next `out` entry. */
+function sendFailed(entries: readonly TranscriptEntry[], index: number): boolean {
+	const sent = entries[index];
+	for (let i = index + 1; i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry?.kind === "out") return false;
+		if (entry?.kind === "send-failed" && sent?.kind === "out" && entry.hex === sent.hex) return true;
+	}
+	return false;
+}
+
+const isResetToApp = (entry: TranscriptEntry | undefined) => entry?.kind === "out" && entry.hex.startsWith("1101");
+
+/** RESET to app sends that failed, after which the board still came back before the next RESET to app. */
+function returnsAfterFailedResets(entries: readonly TranscriptEntry[], expected: U1Expected): number {
+	let returns = 0;
+	for (let i = 0; i < entries.length; i++) {
+		if (!isResetToApp(entries[i]) || !sendFailed(entries, i)) continue;
+		for (let j = i + 1; j < entries.length && !isResetToApp(entries[j]); j++) {
+			const entry = entries[j];
+			if (entry?.kind === "opened" && entry.productId === expected.appProductId) {
+				returns++;
+				break;
+			}
+		}
+	}
+	return returns;
+}
+
+function entryFindings(entries: readonly TranscriptEntry[], expected: U1Expected): string[] {
 	const findings: string[] = [];
-	const off = [...new Set(entries.flatMap((entry) => (entry.kind === "out" && !U1_FRAMES.includes(entry.hex) ? [entry.hex] : [])))];
-	if (off.length > 0) findings.push(`${off.length} frames are not among the nine golden frames: ${off.join(", ")}`);
 	const failed = entries.flatMap((entry) => (entry.kind === "send-failed" ? [entry.hex.slice(0, 4)] : []));
 	if (failed.length > 0) findings.push(`${failed.length} sends rejected, so the board may or may not have taken them: ${[...new Set(failed)].join(", ")}`);
+	const returns = returnsAfterFailedResets(entries, expected);
+	if (returns > 0) findings.push(`${returns} times ${hex(expected.appProductId, 4)} opened after a RESET to app whose send failed, so that return does not show the reset worked`);
 	const slowCloses = entries.flatMap((entry) => (entry.kind === "close-timeout" ? [hex(entry.productId, 4)] : []));
 	if (slowCloses.length > 0) findings.push(`${slowCloses.length} closes did not settle in time and were counted as closed: ${slowCloses.join(", ")}`);
 	const discarded = entries.filter((entry) => entry.kind === "discarded").length;
@@ -238,31 +282,24 @@ function checkSum(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	return { id: 7, title, pass: sums.length > 0 && seen.length === 1 && seen[0] === expected.imageSum32, detail: sums.length === 0 ? "no SUM over the image range answered" : seen.map((n) => hex(n, 8)).join(", ") };
 }
 
-function lastIndex<T>(items: readonly T[], matches: (item: T) => boolean): number {
-	for (let i = items.length - 1; i >= 0; i--) {
-		const item = items[i];
-		if (item !== undefined && matches(item)) return i;
-	}
-	return -1;
-}
-
-/** A board brought back by a cold boot and a Connect click must not pass as RESET to app working (F7). */
+/**
+ * A board brought back by a cold boot and a Connect click must not pass as RESET to app working (F7), and neither
+ * may a return after a RESET to app whose send failed.
+ */
 function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
-	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} through the confirm pick and types`;
+	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} for the confirm and types`;
 	const result = (pass: boolean, detail: string): CheckResult => ({ id: 8, title, pass, detail });
-	const reset = lastIndex(entries, (entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
-	if (reset === -1) return result(false, "no RESET to app sent");
+	const resets = entries.flatMap((entry, index) => (isResetToApp(entry) ? [index] : []));
+	if (resets.length === 0) return result(false, "no RESET to app sent");
+	const reset = resets.filter((index) => !sendFailed(entries, index)).at(-1);
+	if (reset === undefined) return result(false, `the only RESET to app sends (${resets.length}) failed, so nothing shows the board took one`);
 	const after = entries.slice(reset + 1);
-	const open = after.findIndex((entry) => entry.kind === "opened" && entry.productId === expected.appProductId);
-	if (open === -1) return result(false, `no ${hex(expected.appProductId, 4)} opened after the last RESET to app`);
-	const picks = after.slice(0, open).flatMap((entry) => (entry.kind === "pick" ? [entry] : []));
-	if (picks.some((pick) => pick.reason === "connect")) return result(false, "a Connect pick came between the last RESET to app and the open, so the open does not show the reset worked");
-	const pick = picks.at(-1);
-	if (pick === undefined || pick.reason !== "confirm-normal-mode" || pick.productId !== expected.appProductId) {
-		return result(false, `the ${hex(expected.appProductId, 4)} open did not come from the confirm-normal-mode pick`);
-	}
+	const open = after.findIndex((entry) => entry.kind === "opened" && entry.productId === expected.appProductId && entry.reason === "confirm-normal-mode");
+	if (open === -1) return result(false, `no ${hex(expected.appProductId, 4)} opened for the confirm after the last RESET to app that left`);
+	const pick = after.slice(0, open).flatMap((entry) => (entry.kind === "pick" && entry.reason === "confirm-normal-mode" ? [entry] : [])).at(-1);
+	const how = pick === undefined ? "the confirm, through a granted device and no chooser," : `the confirm pick (${pick.path})`;
 	const typed = after.slice(open + 1).some((entry) => entry.kind === "typing" && entry.chars > 0);
-	const back = `RESET to app sent; the confirm pick (${pick.path}) opened ${hex(expected.appProductId, 4)}`;
+	const back = `RESET to app sent; ${how} opened ${hex(expected.appProductId, 4)}`;
 	if (!typed) return result(false, `${back}; no typing entry after that open`);
 	if (typing !== "types") return result(false, `${back}; ${typing === "not-observed" ? "typing not observed yet" : "the human says the board does not type"}`);
 	return result(true, `${back}; typing confirmed`);
@@ -329,7 +366,7 @@ export async function evaluateU1(transcript: Transcript, options: EvaluateOption
 	const { expected } = options;
 	const findings: string[] = [];
 	const all = exchanges(transcript.entries, expected, findings);
-	findings.push(...entryFindings(transcript.entries));
+	findings.push(...entryFindings(transcript.entries, expected));
 	const checks: CheckResult[] = [
 		checkPick(transcript.entries, expected),
 		checkDevice(transcript.entries, expected),
@@ -341,5 +378,5 @@ export async function evaluateU1(transcript: Transcript, options: EvaluateOption
 		checkBack(transcript.entries, expected, options.typing),
 		checkProbes(all, expected),
 	];
-	return { checks, findings, commands: [...new Set(all.map((e) => pair(e.cmd, e.sub)))] };
+	return { frames: checkFrames(transcript.entries), checks, findings, commands: [...new Set(all.map((e) => pair(e.cmd, e.sub)))] };
 }

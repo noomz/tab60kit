@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { type TypingObservation, type U1Verdict, evaluateU1 } from "../lab/u1-checks";
+import { type TypingObservation, type U1Verdict, evaluateU1, passes } from "../lab/u1-checks";
 import { U1_EXPECTED } from "../lab/u1-job";
 import { type Environment, type Transcript, parseTranscript } from "../testing/transcript";
 
@@ -73,11 +73,13 @@ export async function verdictMain(argv: readonly string[]): Promise<number> {
 	mkdirSync(dirname(args.out), { recursive: true });
 	writeFileSync(args.out, `${JSON.stringify(fixture, null, "\t")}\n`);
 	for (const [key, value] of Object.entries(transcript.environment)) console.log(`environment ${key}: ${value}`);
+	const { frames } = verdict;
+	console.log(`${frames.pass ? "PASS" : "FAIL"} ${frames.title}\n     ${frames.detail}`);
 	for (const check of verdict.checks) console.log(`${check.pass ? "PASS" : "FAIL"} ${check.id}. ${check.title}\n     ${check.detail}`);
 	for (const finding of verdict.findings) console.log(`FINDING ${finding}`);
 	console.log(`commands sent: ${verdict.commands.join(" ")}`);
 	console.log(`wrote ${args.out}`);
-	return verdict.checks.every((check) => check.pass) ? 0 : 1;
+	return passes(verdict) ? 0 : 1;
 }
 
 if (import.meta.main) process.exit(await verdictMain(process.argv.slice(2)));

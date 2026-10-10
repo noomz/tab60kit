@@ -1,9 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../core/firmware";
-import { type TypingObservation, type U1Expected, evaluateU1 } from "../lab/u1-checks";
+import { type TypingObservation, type U1Expected, evaluateU1, passes } from "../lab/u1-checks";
 import { U1_EXPECTED } from "../lab/u1-job";
 import { verdictMain } from "../tools/u1-verdict";
 import { TARGET, recordFakeRun } from "./fake-run";
@@ -39,7 +39,9 @@ const appended = (transcript: Transcript, ...more: TranscriptEntry[]): Transcrip
 
 test("the default fake run passes every check, with no findings, over the nine commands", async () => {
 	const result = await verdict(baseline);
+	expect(result.frames).toEqual({ title: "Every frame sent is one of the nine golden frames", pass: true, detail: "all 76 out entries are golden" });
 	expect(result.checks.map((check) => `${check.id}:${check.pass}`)).toEqual(["1:true", "2:true", "3:true", "4:true", "5:true", "6:true", "7:true", "8:true", "9:true"]);
+	expect(passes(result)).toBe(true);
 	expect(result.findings).toEqual([]);
 	expect(result.commands).toEqual(["12/02", "12/00", "12/20", "12/21", "12/22", "11/00", "12/01", "1d/01", "11/01"]);
 });
@@ -93,9 +95,28 @@ test("check 8 needs the human's word, a typing entry after the confirm open, and
 	expect(await detail(baseline, 8, "not-observed")).toMatch(/typing not observed yet/);
 	expect(await failing(untyped)).toEqual([8]);
 	expect(await detail(untyped, 8)).toMatch(/no typing entry after that open/);
-	const noConfirmPick = typed({ ...untyped, entries: untyped.entries.filter((entry) => !(entry.kind === "pick" && entry.reason === "confirm-normal-mode")) });
-	expect(await failing(noConfirmPick)).toEqual([8]);
-	expect(await detail(noConfirmPick, 8)).toMatch(/did not come from the confirm-normal-mode pick/);
+	const connectOpen = rewrite(baseline, (entry) => entry.kind === "opened" && entry.reason === "confirm-normal-mode", 0, (entry) => (entry.kind === "opened" ? { ...entry, reason: "connect" } : entry));
+	expect(await failing(connectOpen)).toEqual([8]);
+	expect(await detail(connectOpen, 8)).toMatch(/no 0x0304 opened for the confirm after the last RESET to app that left/);
+});
+
+test("check 8 accepts a confirm open through a device the grant kept, with no chooser", async () => {
+	const granted = { ...baseline, entries: baseline.entries.filter((entry) => !(entry.kind === "pick" && entry.reason === "confirm-normal-mode")) };
+	expect(await failing(granted)).toEqual([]);
+	expect(await detail(granted, 8)).toMatch(/through a granted device and no chooser/);
+});
+
+test("check 8 counts only a RESET to app whose send did not fail, and a return after a failed one is a finding", async () => {
+	const at = baseline.entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
+	const reset = baseline.entries[at];
+	if (reset?.kind !== "out") throw new Error("no RESET to app in the baseline");
+	const failedReset: Transcript = {
+		...baseline,
+		entries: [...baseline.entries.slice(0, at + 1), { t: reset.t, kind: "lost" }, { t: reset.t, kind: "send-failed", hex: reset.hex, error: "LinkLost: the device disconnected" }, ...baseline.entries.slice(at + 1)],
+	};
+	expect(await failing(failedReset)).toEqual([8]);
+	expect(await detail(failedReset, 8)).toMatch(/the only RESET to app sends \(1\) failed/);
+	expect((await verdict(failedReset)).findings).toContain("1 times 0x0304 opened after a RESET to app whose send failed, so that return does not show the reset worked");
 });
 
 test("check 8 accepts a parked confirm pick", async () => {
@@ -121,14 +142,15 @@ test("check 9 fails when the probes went out closer together than the page's spa
 	expect(await detail(baseline, 9, "types", { ...fakeExpected, probeSpacingMs: 500 })).toMatch(/shortest send gap \d ms/);
 });
 
-test("findings name nonzero reply bytes 2..3, FF AA replies, and frames off the golden list", async () => {
+test("findings name nonzero reply bytes 2..3 and FF AA replies, and the frames gate names a frame off the golden list", async () => {
 	const nonzero = rewrite(baseline, reply("1202"), 3, withHex(4, "beef"));
 	expect((await verdict(nonzero)).findings).toEqual(["reply bytes 2..3 nonzero in 1 replies: 0xefbe"]);
 	const refused = rewrite(baseline, reply("1220"), 0, withHex(0, "ffaa"));
 	expect((await verdict(refused)).findings).toEqual(["1 FF AA replies to: 12/20"]);
 	const junk = "1202dead".padEnd(128, "0");
-	const off = appended(baseline, { t: 0, kind: "out", hex: junk });
-	expect((await verdict(off)).findings).toEqual(["1 requests unanswered: 12/02", `1 frames are not among the nine golden frames: ${junk}`]);
+	const off = await verdict(appended(baseline, { t: 0, kind: "out", hex: junk }));
+	expect(off.findings).toEqual(["1 requests unanswered: 12/02"]);
+	expect(off.frames).toMatchObject({ pass: false, detail: `1 sent frames are not golden: ${junk}` });
 });
 
 test("findings name failed sends, slow closes, dropped reports, and a hidden tab", async () => {
@@ -164,9 +186,45 @@ test("the CLI writes the fixture with its environment for a real-looking transcr
 		expect(fixture.format).toBe("tab60kit-u1-verdict/1");
 		expect(fixture.typing).toBe("types");
 		expect(fixture.environment).toEqual(transcript.environment);
+		expect(fixture.frames.pass).toBe(true);
 		expect(fixture.checks.filter((check: { pass: boolean }) => !check.pass).map((check: { id: number }) => check.id)).toEqual([6, 9]);
 		expect(fixture.transcript.entries).toHaveLength(baseline.entries.length);
 		expect(await verdictMain([file])).toBe(2);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+async function runCli(transcript: Transcript, dir: string, name: string) {
+	const file = join(dir, `${name}.json`);
+	writeFileSync(file, JSON.stringify(transcript));
+	const out = join(dir, `${name}-fixture.json`);
+	const log = spyOn(console, "log").mockImplementation(() => undefined);
+	try {
+		const code = await verdictMain([file, "--types", "--out", out]);
+		return { code, lines: log.mock.calls.map((args) => args.join(" ")), out };
+	} finally {
+		log.mockRestore();
+	}
+}
+
+test("a frame off the golden list fails the run with all nine checks green, and the CLI prints the gate and exits 1", async () => {
+	const lastByteFf = rewrite(baseline, (entry) => entry.kind === "out" && entry.hex.startsWith("1101"), 0, (entry) => (entry.kind === "out" ? { ...entry, hex: `${entry.hex.slice(0, 126)}ff` } : entry));
+	const write = `1f0400000000${"ab".repeat(26)}`.padEnd(128, "0");
+	const cases: readonly [string, Transcript, string][] = [
+		["a RESET to app whose last byte is ff", lastByteFf, `${"1101".padEnd(126, "0")}ff`],
+		["an appended 1f 04 frame", appended(baseline, { t: (baseline.entries.at(-1)?.t ?? 0) + 1, kind: "out", hex: write }), write],
+	];
+	const dir = mkdtempSync(join(tmpdir(), "u1-verdict-"));
+	try {
+		for (const [why, transcript, off] of cases) {
+			const result = await verdict(transcript);
+			expect({ why, failing: result.checks.filter((check) => !check.pass).map((check) => check.id), frames: result.frames.pass, passes: passes(result) }).toEqual({ why, failing: [], frames: false, passes: false });
+			expect(result.frames.detail).toContain(off);
+			const { code, lines, out } = await runCli(real(transcript), dir, why.replaceAll(" ", "-"));
+			expect({ why, code, gate: lines.find((line) => line.includes("Every frame sent")) }).toEqual({ why, code: 1, gate: expect.stringMatching(/^FAIL Every frame sent is one of the nine golden frames\n.*not golden/) });
+			expect(JSON.parse(readFileSync(out, "utf8")).frames.pass).toBe(false);
+		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

@@ -32,6 +32,7 @@ const ui = {
 	download: element("download", HTMLButtonElement),
 	recovery: element("recovery", HTMLPreElement),
 	typing: element("typing", HTMLInputElement),
+	frames: element("frames", HTMLParagraphElement),
 	checks: element("checks", HTMLOListElement),
 	findings: element("findings", HTMLUListElement),
 	log: element("log", HTMLPreElement),
@@ -145,6 +146,7 @@ function start(): void {
 			li.textContent = text;
 			return li;
 		};
+		ui.frames.textContent = `${verdict.frames.pass ? "PASS" : "FAIL"} ${verdict.frames.title}. ${verdict.frames.detail}`;
 		ui.checks.replaceChildren(...verdict.checks.map((check) => item(`${check.pass ? "PASS" : "FAIL"} ${check.id}. ${check.title}. ${check.detail}`)));
 		ui.findings.replaceChildren(...verdict.findings.map((finding) => item(`Finding: ${finding}`)));
 	};

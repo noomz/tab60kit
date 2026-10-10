@@ -448,5 +448,5 @@ test("check 8 fails when RESET to app never brought the board back and a later C
 	const own = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
 	const check8 = (await evaluateU1({ ...transcript, entries }, { expected: own, typing: "types" })).checks[7];
 	expect(check8?.pass).toBe(false);
-	expect(check8?.detail).toMatch(/a Connect pick came between the last RESET to app and the open/);
+	expect(check8?.detail).toMatch(/no 0x0304 opened for the confirm after the last RESET to app that left/);
 });
