@@ -31,6 +31,8 @@ export interface FakeOptions {
 	/** The board answers this command in this mode `ms` late, once, after answering `skip` (default 0) earlier ones on time. */
 	readonly slowOnce?: { readonly cmd: number; readonly sub: number; readonly mode: Mode; readonly ms: number; readonly skip?: number };
 	readonly blInfo?: Uint8Array;
+	/** The bootloader answers READ BL INFO with these bytes instead of the 52 at 0x400, so only the update-mode attach sees them. */
+	readonly blInfoInIap?: Uint8Array;
 	readonly fwInfo?: number;
 	readonly versionBlock?: Uint8Array;
 	/** A delay keeps a chooser opened by the reset's click on screen before the bootloader row appears, as on a real board. */
@@ -299,7 +301,7 @@ export class FakeTab60 {
 		if (this.#mode === "iap" && this.ignoreInIap) return;
 		const mode = this.#mode;
 		const versionPagePart = (part: number) => reply(this.#flash.subarray(PROTOCOL_BASE + part * PAYLOAD_BYTES, PROTOCOL_BASE + (part + 1) * PAYLOAD_BYTES));
-		if (cmd === 0x12 && sub === 0x00) return reply(this.#flash.subarray(BL_INFO_ADDR, BL_INFO_ADDR + BL_INFO_BYTES));
+		if (cmd === 0x12 && sub === 0x00) return reply((mode === "iap" ? this.options.blInfoInIap : undefined) ?? this.#flash.subarray(BL_INFO_ADDR, BL_INFO_ADDR + BL_INFO_BYTES));
 		if (cmd === 0x12 && sub === 0x02) return reply(Uint8Array.of(mode === "app" ? 1 : 0));
 		if (cmd === 0x12 && sub >= 0x20 && sub < 0x20 + (mode === "app" ? VERSION_PAGE_PARTS_APP : VERSION_PAGE_PARTS_IAP)) return versionPagePart(sub - 0x20);
 		if (mode === "app" && cmd === 0x11 && sub === 0x00) return this.#reset("iap");

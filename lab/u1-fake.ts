@@ -1,6 +1,6 @@
 /** DOM-free, so testing/u1-fake-modes.test.ts drives every mode through the page's own run logic. */
 import type { Mode } from "../core/units";
-import { type FakeOptions, FakeTab60 } from "../testing/fake-tab60";
+import { type FakeOptions, FakeTab60, blInfoBlock } from "../testing/fake-tab60";
 import { FakeHid, type FakeHidOptions, FakeLocks } from "../testing/fake-webhid";
 import { U1_EXPECTED } from "./u1-job";
 import type { Run } from "./u1-state";
@@ -56,7 +56,7 @@ const MODES: Readonly<Record<FakeMode, ModeSpec>> = {
 			if (recovers(what)) hid.chooser = "pick";
 		},
 	},
-	refused: { board: () => ({ fwInfo: 2 * U1_EXPECTED.fwOffset }) },
+	refused: { board: () => ({ blInfoInIap: blInfoBlock({ fwPages: U1_EXPECTED.fwPages + 1 }) }) },
 	"sum-refused": { board: () => ({ refuseOnce: SUM }) },
 	drop: { board: (probes) => ({ loseLinkAtPacket: packetsBeforeUpdateProbe(probes, PROBE_TO_DROP) }) },
 	slow: { board: () => ({ slowOnce: { ...READ_MODE, mode: "iap", ms: SLOW_ANSWER_MS, skip: ATTACH_READ_MODES + PROBE_TO_SLOW - 1 } }) },

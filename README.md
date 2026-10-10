@@ -61,7 +61,7 @@ Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json
 | `?fake=parked` | The update-mode chooser misses its row, so that pick waits for a click | Pick |
 | `?fake=deaf` | The bootloader ignores every frame | Try again or Restart into normal mode |
 | `?fake=cancelled` | Every chooser from the Deep check click on closes with no device. The first closed chooser only parks the pick. Click Pick, and the second chooser also closes with no device, which leaves the page in the away state | Try again or Restart into normal mode |
-| `?fake=refused` | FW INFO disagrees with BL info, so the update-mode attach refuses | Restart into normal mode |
+| `?fake=refused` | BL info in update mode reports fw_pages 0xE8 instead of 0xE7, so the update-mode attach refuses | Restart into normal mode |
 | `?fake=sum-refused` | SUM answers FF AA once, and the page sends the board home | Connect |
 | `?fake=drop` | The link drops on the fifth update-mode probe, and the board comes back in update mode | Try again |
 | `?fake=slow` | The fifth update-mode probe answers after 700 ms. Check 9 records it and fails on the 1.2 s gap between answers, as plan U1's rule says | none needed |

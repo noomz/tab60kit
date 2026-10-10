@@ -48,7 +48,7 @@ test("observe in normal mode reads the version page and nothing else", async () 
 });
 
 test("observe in update mode sums the catalog's image length and recognizes the official sum", async () => {
-	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000"), ...pageReplies(page), sumReply(0xf3d3dbd2)]);
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000004000200"), ...pageReplies(page), sumReply(0xf3d3dbd2)]);
 	const session = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
 	const observed = await observe(session, live);
@@ -59,7 +59,7 @@ test("observe in update mode sums the catalog's image length and recognizes the 
 });
 
 test("observe in update mode reports an unrecognized sum", async () => {
-	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000"), ...pageReplies(page), sumReply(0x12345678)]);
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000004000200"), ...pageReplies(page), sumReply(0x12345678)]);
 	const session = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
 	const observed = await observe(session, live);
@@ -70,7 +70,7 @@ test("observe in update mode reports an unrecognized sum", async () => {
 });
 
 test("leaveUpdateMode resets into normal mode, then confirms with a normal-mode session", async () => {
-	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000")]);
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000004000200")]);
 	const app = new ScriptedLink("app", [report("1202000001"), report("12000000" + BL_INFO_HEX)]);
 	const port = new ScriptedPort([iap, app]);
 	const progress: Activity[] = [];
@@ -84,12 +84,12 @@ test("leaveUpdateMode resets into normal mode, then confirms with a normal-mode 
 	expect(port.opens.at(-1)).toEqual({ modes: ["app"], reason: "confirm-normal-mode" });
 });
 
-const iapAttach = () => [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000")];
+const iapAttach = () => [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000004000200")];
 const appAttach = () => [report("1202000001"), report("12000000" + BL_INFO_HEX)];
 const resetFails = (frame: Uint8Array) => (frame[0] === 0x11 ? new LinkLost("sendReport failed") : null);
 
 test("leaveUpdateMode sends a refused board home through its own RESET to app, then confirms", async () => {
-	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000040000")]);
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX.replace("0002e700", "0002e800")), report("1201000004000200")]);
 	const app = new ScriptedLink("app", appAttach());
 	const port = new ScriptedPort([iap, app]);
 	const refused = await connect(ctx(port), { modes: ["iap"], reason: "enter-update-mode" });
@@ -126,7 +126,7 @@ test("a failed RESET to app with no board to confirm rethrows the send's error",
 });
 
 test("leaveUpdateMode treats a cancelled confirm pick as Skip", async () => {
-	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000")]);
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000004000200")]);
 	const port = new ScriptedPort([iap]);
 	const session = await connect(ctx(port), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);

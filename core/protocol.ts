@@ -119,7 +119,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x4051B2 takes the write address from FW info" },
+		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
 		maturity: REVIEWED_FOR_U1,
 	},
 	readMode: {
@@ -917,8 +917,9 @@ async function inspect(ch: Channel, signal: AbortSignal): Promise<{ readonly inf
 	if (modeByte !== MODE_BYTE[mode]) return { code: "mode-disagrees", productIdSays: mode, readModeSays: modeByte };
 	const info = parseBlInfo(payloadOf(await transmit(ch, "readBlInfo", {}, signal)));
 	if ("code" in info) return info;
-	const fwInfo = mode === "iap" ? u32Of(await transmit(ch, "readFwInfo", {}, signal)) : null;
-	const window = windowFor(info, fwInfo);
+	// Read for the transcript only. Nothing checks the reply (design.md question 8).
+	if (mode === "iap") await transmit(ch, "readFwInfo", {}, signal);
+	const window = windowFor(info);
 	if ("code" in window) return window;
 	return { info, window };
 }

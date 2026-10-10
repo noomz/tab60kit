@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { connect } from "../core/protocol";
 import { FAKE_MODES, type FakeMode, fakeHardware } from "../lab/u1-fake";
 import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Run } from "../lab/u1-job";
@@ -124,6 +125,18 @@ test("?fake=reloaded starts away from the bootloader's grant, and Restart from t
 	expect(openHandlesAfterClose).toBe(0);
 	expect(fake.board.mode).toBe("app");
 	expect(fake.board.violations).toEqual([]);
+});
+
+test("?fake=refused attaches in normal mode and refuses the update-mode attach on BL info's fw_pages", async () => {
+	const { board } = fakeHardware("refused", { probes: PROBES });
+	const ctx = { port: board.port(), clearance: u1Clearance(), signal: new AbortController().signal };
+	const app = await connect(ctx, { modes: ["app"], reason: "connect" });
+	if ("refusal" in app) throw new Error(`normal mode refused: ${app.refusal.code}`);
+	const iap = await app.enterIap(ctx);
+	if (!("refusal" in iap)) throw new Error("the update-mode attach did not refuse");
+	expect(iap.refusal).toEqual({ code: "layout-mismatch", field: "fwPages", expected: 0xe7, got: 0xe8 });
+	await iap.restartToApp();
+	expect(board.violations).toEqual([]);
 });
 
 test("?fake=drop records the RESET to app it could not send on the dropped link", async () => {

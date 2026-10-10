@@ -38,7 +38,6 @@ export type LayoutRefusal =
 			readonly expected: number;
 			readonly got: number;
 	  }
-	| { readonly code: "fw-info-disagrees"; readonly blInfoFwOffset: number; readonly fwInfoOffset: number }
 	| { readonly code: "mode-disagrees"; readonly productIdSays: "app" | "iap"; readonly readModeSays: number };
 
 declare const windowBrand: unique symbol;
@@ -105,16 +104,13 @@ export function parseBlInfo(payload: Uint8Array): BlInfo | LayoutRefusal {
 	};
 }
 
-/** Builds the window, or refuses the board. `fwInfoOffset` is READ FW INFO's u32 in update mode and null in normal mode. */
-export function windowFor(info: BlInfo, fwInfoOffset: number | null): FlashWindow | LayoutRefusal {
+/** Builds the window, or refuses the board. */
+export function windowFor(info: BlInfo): FlashWindow | LayoutRefusal {
 	if (info.identityHex !== EXPECTED_LAYOUT.identityHex) return { code: "identity-mismatch", got: info.identityHex };
 	for (const field of ["fwOffset", "pageSize", "fwPages"] as const) {
 		if (info[field] !== EXPECTED_LAYOUT[field]) {
 			return { code: "layout-mismatch", field, expected: EXPECTED_LAYOUT[field], got: info[field] };
 		}
-	}
-	if (fwInfoOffset !== null && fwInfoOffset !== info.fwOffset) {
-		return { code: "fw-info-disagrees", blInfoFwOffset: info.fwOffset, fwInfoOffset };
 	}
 	const base = EXPECTED_LAYOUT.protocolBase;
 	const window: Omit<FlashWindow, typeof windowBrand> = {

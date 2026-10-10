@@ -40,12 +40,13 @@ const GOLDEN = {
 
 const modeReply = (mode: "app" | "iap") => report(mode === "app" ? "12020000" + "01" : "12020000" + "00");
 const blInfoReply = (hex = BL_INFO_HEX) => report("12000000" + hex);
-const fwInfoReply = (offset = 0x200) => report("12010000" + toHex(fromHex(offset.toString(16).padStart(8, "0")).reverse()));
+const fwInfoReply = (payload = "04000200") => report("12010000" + payload);
 const pageReply = (part: number) => report(`122${part}0000` + "ab".repeat(60));
 const sumReply = report("1d010000" + "d2dbd3f3");
 
 const appAttach = () => [modeReply("app"), blInfoReply()];
 const iapAttach = () => [modeReply("iap"), blInfoReply(), fwInfoReply()];
+const fwPagesDifferInIap = () => [modeReply("iap"), blInfoReply(BL_INFO_HEX.replace("0002e700", "0002e800")), fwInfoReply()];
 
 const ctx = (port: ScriptedPort, signal = new AbortController().signal, cleared: Clearance = clearance) => ({
 	port,
@@ -161,7 +162,7 @@ const refusals: readonly [string, "app" | "iap", (InReport | Error)[], Record<st
 	["READ MODE says normal mode on an update-mode link", "iap", [modeReply("app")], { code: "mode-disagrees", productIdSays: "iap", readModeSays: 1 }],
 	["identity bytes differ", "app", [modeReply("app"), blInfoReply(BL_INFO_HEX.replace("d9040413", "d9048212"))], { code: "identity-mismatch" }],
 	["fw_offset differs", "app", [modeReply("app"), blInfoReply(BL_INFO_HEX.replace("0002e700", "0004e700"))], { code: "layout-mismatch", field: "fwOffset", got: 0x400 }],
-	["FW INFO disagrees with BL info", "iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)], { code: "fw-info-disagrees", blInfoFwOffset: 0x200, fwInfoOffset: 0x400 }],
+	["fw_pages differs in update mode", "iap", fwPagesDifferInIap(), { code: "layout-mismatch", field: "fwPages", got: 0xe8 }],
 ];
 for (const [why, mode, replies, refusal] of refusals) {
 	test(`connect refuses when ${why}`, async () => {
@@ -186,13 +187,23 @@ for (const [why, mode, replies, refusal] of refusals) {
 }
 
 test("a refused update-mode board never receives an addressed command", async () => {
-	const iap = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)]);
+	const iap = new ScriptedLink("iap", fwPagesDifferInIap());
 	const result = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
 	if (!("refusal" in result)) throw new Error("connected");
 	expect(iap.sent.map((f) => toHex(f.subarray(0, 1)))).toEqual(["12", "12", "12"]);
 });
 
 const pairsOf = (link: ScriptedLink) => link.sent.map((f) => toHex(f.subarray(0, 2)));
+
+test("an update-mode attach takes its window from BL info whatever FW INFO answers, and sends FW INFO once", async () => {
+	for (const payload of ["04000200", "ff".repeat(60)]) {
+		const iap = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(payload)]);
+		const session = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "enter-update-mode" });
+		if ("refusal" in session) throw new Error(`FW INFO ${payload}: ${session.refusal.code}`);
+		expect(session.window).toMatchObject({ base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 });
+		expect(pairsOf(iap)).toEqual(["1202", "1200", "1201"]);
+	}
+});
 
 test("enterIap sends no reset when its update-mode open has already failed", async () => {
 	const app = new ScriptedLink("app", appAttach());
@@ -264,7 +275,7 @@ test("a normal-mode attach that throws closes its link and rethrows the error it
 });
 
 test("restartToApp closes the link even when the reset's send fails", async () => {
-	const iap = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)]);
+	const iap = new ScriptedLink("iap", fwPagesDifferInIap());
 	iap.sendError = (frame) => (frame[0] === 0x11 ? new LinkLost("unplugged") : null);
 	const result = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "enter-update-mode" });
 	if (!("refusal" in result) || result.restartToApp === null) throw new Error("not an update-mode refusal");
@@ -294,7 +305,7 @@ test("after an abort, probe, readVersionPage, and checksum reject with its reaso
 
 test("RESET to app still leaves after the job's abort, from a session, a refusal, and a failed attach", async () => {
 	const session = new ScriptedLink("iap", iapAttach());
-	const refusal = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)]);
+	const refusal = new ScriptedLink("iap", fwPagesDifferInIap());
 	const failedAttach = new ScriptedLink("iap", [modeReply("iap")]);
 	const port = new ScriptedPort([session, refusal, failedAttach]);
 	const controller = new AbortController();
