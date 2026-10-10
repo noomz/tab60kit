@@ -80,6 +80,7 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 			{ t: 9, kind: "close-timeout", productId: 0x1304 },
 			{ t: 10, kind: "visibility", state: "hidden" },
 			{ t: 11, kind: "typing", chars: 3 },
+			{ t: 12, kind: "granted", productId: 0x1304 },
 		],
 	};
 	expect(parseTranscript(JSON.parse(JSON.stringify(transcript)))).toEqual(transcript);

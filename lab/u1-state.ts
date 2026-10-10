@@ -1,5 +1,5 @@
 /** DOM-free, so the recovery tests reach the same derivation the page renders. */
-import { TAB60 } from "../core/device";
+import { TAB60, modeOf } from "../core/device";
 import { type DeviceWant, type Mode, PickCancelled, type WantReason } from "../core/port";
 import type { AppRefused, AppSession, IapRefused, Refused } from "../core/protocol";
 import type { TranscriptEntry } from "../testing/transcript";
@@ -25,11 +25,15 @@ export type RunOutcome =
 
 const RESET_TO_IAP = "1100";
 
-/** True from a RESET to IAP handed to the link, acknowledged or not, until a normal-mode link opens (F2). */
+/**
+ * True from a RESET to IAP handed to the link, acknowledged or not, or from an update-mode device granted at load,
+ * until a normal-mode link opens (F2).
+ */
 export function awayFromHome(entries: readonly TranscriptEntry[]): boolean {
 	let away = false;
 	for (const entry of entries) {
 		if (entry.kind === "out" && entry.hex.startsWith(RESET_TO_IAP)) away = true;
+		if (entry.kind === "granted" && entry.productId === TAB60.productId.iap) away = true;
 		if (entry.kind === "opened" && entry.productId === TAB60.productId.app) away = false;
 	}
 	return away;
@@ -52,6 +56,23 @@ export function phaseAfterRun(entries: readonly TranscriptEntry[], outcome: RunO
 			return exhaustive;
 		}
 	}
+}
+
+type Granted = Extract<TranscriptEntry, { kind: "granted" }>;
+
+/** The part of WebHID the page reads at load. */
+export interface Grants {
+	getDevices(): Promise<readonly Pick<HIDDevice, "vendorId" | "productId">[]>;
+}
+
+/**
+ * Where the page starts, before any click and with no frame sent: one `granted` entry per TAB 60 device the browser
+ * still grants, and the away phase when one of them is the bootloader, which an earlier page left in update mode.
+ */
+export async function atLoad(hid: Grants, now: () => number): Promise<{ readonly entries: readonly Granted[]; readonly phase: Phase }> {
+	const devices = await hid.getDevices();
+	const entries = devices.flatMap((device) => (device.vendorId === TAB60.vendorId && modeOf(device.productId) !== null ? [{ t: now(), kind: "granted" as const, productId: device.productId }] : []));
+	return { entries, phase: awayFromHome(entries) ? { kind: "away", holding: null } : { kind: "idle" } };
 }
 
 /** A Cancel click and a closed chooser are the user's choice. Anything else failed. */

@@ -5,7 +5,7 @@ import { FakeHid, type FakeHidOptions, FakeLocks } from "../testing/fake-webhid"
 import { U1_EXPECTED } from "./u1-job";
 import type { Run } from "./u1-state";
 
-export const FAKE_MODES = ["plain", "parked", "deaf", "cancelled", "refused", "sum-refused", "drop", "slow"] as const;
+export const FAKE_MODES = ["plain", "parked", "deaf", "cancelled", "refused", "sum-refused", "drop", "slow", "reloaded"] as const;
 export type FakeMode = (typeof FAKE_MODES)[number];
 export const isFakeMode = (value: string): value is FakeMode => FAKE_MODES.some((mode) => mode === value);
 
@@ -60,6 +60,11 @@ const MODES: Readonly<Record<FakeMode, ModeSpec>> = {
 	"sum-refused": { board: () => ({ refuseOnce: SUM }) },
 	drop: { board: (probes) => ({ loseLinkAtPacket: packetsBeforeUpdateProbe(probes, PROBE_TO_DROP) }) },
 	slow: { board: () => ({ slowOnce: { ...READ_MODE, mode: "iap", ms: SLOW_ANSWER_MS, skip: ATTACH_READ_MODES + PROBE_TO_SLOW - 1 } }) },
+	/** A reload after an earlier page left the board in update mode, with the bootloader still granted. */
+	reloaded: {
+		board: () => ({ starting: "update-mode-official-image" }),
+		setup: ({ hid }) => hid.grant(),
+	},
 };
 
 export interface FakeHardware extends Fakes {

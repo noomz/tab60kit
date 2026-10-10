@@ -179,6 +179,9 @@ function entryFindings(entries: readonly TranscriptEntry[], expected: U1Expected
 	if (slowCloses.length > 0) findings.push(`${slowCloses.length} closes did not settle in time and were counted as closed: ${slowCloses.join(", ")}`);
 	const discarded = entries.filter((entry) => entry.kind === "discarded").length;
 	if (discarded > 0) findings.push(`${discarded} input reports were dropped unread before a send`);
+	if (entries.some((entry) => entry.kind === "granted" && entry.productId === expected.iapProductId)) {
+		findings.push(`the page loaded with ${hex(expected.iapProductId, 4)} granted, so an earlier page left the board in update mode`);
+	}
 	const hidden = entries.filter((entry) => entry.kind === "visibility" && entry.state === "hidden").length;
 	if (hidden > 0) findings.push(`the tab was hidden ${hidden} times, and a hidden tab slows timers, so check 9's timing may measure the tab`);
 	return findings;

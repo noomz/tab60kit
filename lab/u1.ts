@@ -13,6 +13,7 @@ import {
 	type Phase,
 	type Run,
 	type RunOutcome,
+	atLoad,
 	awayFromHome,
 	outcomeOfError,
 	phaseAfterRun,
@@ -80,7 +81,7 @@ function describeEvent(event: PortEvent): string {
 
 const fakeLink = (mode: FakeMode) => (mode === "plain" ? "?fake" : `?fake=${mode}`);
 
-function start(): void {
+async function start(): Promise<void> {
 	if (fakeMode !== null && !isFakeMode(fakeMode)) {
 		ui.clearance.textContent = `Unknown ?fake value "${fakeMode}". Use ${FAKE_MODES.map(fakeLink).join(", ")}.`;
 		return;
@@ -98,6 +99,10 @@ function start(): void {
 	}
 	ui.clearance.textContent = `Lab clearance: ${U1_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : `Fake board (${fakeMode}).`}`;
 
+	const fake = fakeMode === null ? null : fakeHardware(fakeMode, { probes: U1_PROBES.probes });
+	const hid = fake?.hid ?? navigator.hid;
+	const load = await atLoad(hid, now);
+
 	const preconditions = PRECONDITIONS.map(({ key, label }) => {
 		const box = document.createElement("input");
 		box.type = "checkbox";
@@ -111,10 +116,10 @@ function start(): void {
 	});
 	const preconditionsMet = () => preconditions.every(({ box }) => box.checked);
 
-	const fake = fakeMode === null ? null : fakeHardware(fakeMode, { probes: U1_PROBES.probes });
-	const entries: TranscriptEntry[] = [];
+	const entries: TranscriptEntry[] = [...load.entries];
+	for (const { productId } of load.entries) log(`granted at load: ${pid(productId)}`);
 	let lastOpened: number | null = null;
-	const { port, chooser } = startWebHidLab(fake?.hid ?? navigator.hid, fake?.locks ?? navigator.locks, {
+	const { port, chooser } = startWebHidLab(hid, fake?.locks ?? navigator.locks, {
 		wrap: u1Wrap((entry) => entries.push(entry), now),
 		onEvent: (event) => {
 			entries.push({ t: now(), ...event });
@@ -138,9 +143,9 @@ function start(): void {
 	const recordVisibility = () => entries.push({ t: now(), kind: "visibility", state: document.visibilityState === "hidden" ? "hidden" : "visible" });
 	recordVisibility();
 	document.addEventListener("visibilitychange", recordVisibility);
-	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing");
+	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing" && entry.kind !== "granted");
 
-	let phase: Phase = { kind: "idle" };
+	let phase: Phase = load.phase;
 	let controller: AbortController | null = null;
 	let parked: DeviceWant | null = null;
 
@@ -236,4 +241,6 @@ function start(): void {
 	render();
 }
 
-start();
+start().catch((error: unknown) => {
+	ui.clearance.textContent = `This page cannot start. ${describe(error)}`;
+});

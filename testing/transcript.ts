@@ -66,6 +66,8 @@ export type TranscriptEntry =
 	| { readonly t: number; readonly kind: "send-failed"; readonly hex: string; readonly error: string }
 	/** The shell counted a device.close() that did not settle in time as closed. */
 	| { readonly t: number; readonly kind: "close-timeout"; readonly productId: number }
+	/** A TAB 60 device the browser still granted when the page loaded, before any click. */
+	| { readonly t: number; readonly kind: "granted"; readonly productId: number }
 	/** The page's visibility, at its start and on each change. A hidden tab slows timers, which check 9 measures. */
 	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
 	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
@@ -163,6 +165,7 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 		case "send-failed":
 			return { t, kind, hex: reportHex(value, where), error: string(value, "error", where) };
 		case "close-timeout":
+		case "granted":
 			return { t, kind, productId: number(value, "productId", where) };
 		case "visibility": {
 			const state = string(value, "state", where);

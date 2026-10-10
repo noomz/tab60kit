@@ -16,7 +16,7 @@ import { type Sha256, notImplemented } from "../core/units";
 
 export interface FakeOptions {
 	/** What the board holds at the start of the test. */
-	readonly starting: "official-image" | "untrusted-image" | "update-mode-erased" | "update-mode-partial-version-block";
+	readonly starting: "official-image" | "update-mode-official-image" | "untrusted-image" | "update-mode-erased" | "update-mode-partial-version-block";
 	/** The image a correct run ends with, from the catalog entry the test flashes. */
 	readonly target: { readonly imageBytes: number; readonly wireSum32: number };
 	/**
@@ -170,6 +170,7 @@ export class FakeTab60 {
 		this.#mode = starting === "official-image" || starting === "untrusted-image" ? "app" : "iap";
 		switch (starting) {
 			case "official-image":
+			case "update-mode-official-image":
 				this.#flash.set(page, PROTOCOL_BASE);
 				this.#flash.set(official, PROTOCOL_BASE + FW_OFFSET);
 				break;

@@ -169,6 +169,12 @@ test("findings name failed sends, slow closes, dropped reports, and a hidden tab
 	]);
 });
 
+test("a transcript that starts with the bootloader granted gets a finding, and one with the keyboard granted gets none", async () => {
+	const grantedAtLoad = (productId: number): Transcript => ({ ...baseline, entries: [{ t: 0, kind: "granted", productId }, ...baseline.entries] });
+	expect((await verdict(grantedAtLoad(0x1304))).findings).toEqual(["the page loaded with 0x1304 granted, so an earlier page left the board in update mode"]);
+	expect((await verdict(grantedAtLoad(0x0304))).findings).toEqual([]);
+});
+
 const real = (transcript: Transcript, environment: Partial<Transcript["environment"]> = {}): Transcript => ({
 	...transcript,
 	environment: { ...transcript.environment, fake: "no", tool: "abc1234", cableIn: "yes", karabinerLedOff: "yes", secondKeyboardAtHand: "yes", ...environment },

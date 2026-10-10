@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { FAKE_MODES, type FakeMode, fakeHardware } from "../lab/u1-fake";
 import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Run } from "../lab/u1-job";
-import { type Phase, type Run, type RunOutcome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
+import { type Phase, type Run, type RunOutcome, atLoad, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
 import type { TranscriptEntry } from "./transcript";
 
@@ -24,7 +24,8 @@ interface Step {
 
 async function drive(mode: FakeMode, runs: readonly Run[]) {
 	const fake = fakeHardware(mode, { probes: PROBES, hid: { isActive: () => true } });
-	const entries: TranscriptEntry[] = [];
+	const load = await atLoad(fake.hid, () => performance.now());
+	const entries: TranscriptEntry[] = [...load.entries];
 	const { port, chooser } = startWebHidLab(fake.hid, fake.locks, {
 		wrap: u1Wrap((entry) => entries.push(entry)),
 		onEvent: (event) => entries.push({ t: performance.now(), ...event }),
@@ -32,7 +33,7 @@ async function drive(mode: FakeMode, runs: readonly Run[]) {
 	const user = setInterval(() => chooser.needsClick?.modes.includes(fake.hid.device.mode) && chooser.pick(), 2);
 	const frames = () => entries.flatMap((entry) => (entry.kind === "out" ? [entry.hex.slice(0, 4)] : []));
 	const steps: Step[] = [];
-	let phase: Phase = { kind: "idle" };
+	let phase: Phase = load.phase;
 	try {
 		for (const what of runs) {
 			const before = frames().length;
@@ -55,7 +56,7 @@ async function drive(mode: FakeMode, runs: readonly Run[]) {
 	if (phase.kind === "connected") await phase.app.close();
 	if (phase.kind === "refused") await phase.refused.close();
 	if (phase.kind === "away" && phase.holding !== null) await phase.holding.close();
-	return { steps, entries, fake, finalPhase: phase.kind, openHandlesAfterClose: fake.hid.openHandles };
+	return { start: load.phase.kind, steps, entries, fake, finalPhase: phase.kind, openHandlesAfterClose: fake.hid.openHandles };
 }
 
 const SCRIPTS: Readonly<Record<FakeMode, readonly Step[]>> = {
@@ -97,21 +98,33 @@ const SCRIPTS: Readonly<Record<FakeMode, readonly Step[]>> = {
 		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
 		{ what: "deep-check", frames: DEEP, phase: "connected", openHandles: 1 },
 	],
+	reloaded: [{ what: "try-again", frames: UPDATE_CHECKS, phase: "connected", openHandles: 1 }],
 };
 
 for (const mode of FAKE_MODES) {
 	test(`?fake=${mode}: each run sends only the nine frames, ends in its phase, and leaks no link`, async () => {
 		const script = SCRIPTS[mode];
-		const { steps, fake, finalPhase, openHandlesAfterClose } = await drive(
+		const { start, steps, fake, finalPhase, openHandlesAfterClose } = await drive(
 			mode,
 			script.map((step) => step.what),
 		);
+		expect(start).toBe(mode === "reloaded" ? "away" : "idle");
 		expect(steps).toEqual([...script]);
 		expect(finalPhase).toBe("connected");
 		expect(openHandlesAfterClose).toBe(0);
 		expect(fake.board.violations).toEqual([]);
 	}, 10_000);
 }
+
+test("?fake=reloaded starts away from the bootloader's grant, and Restart from there brings the board home", async () => {
+	const { start, steps, fake, finalPhase, openHandlesAfterClose } = await drive("reloaded", ["restart"]);
+	expect(start).toBe("away");
+	expect(steps).toEqual([{ what: "restart", frames: [...UPDATE_ATTACH, ...HOME], phase: "connected", openHandles: 1 }]);
+	expect(finalPhase).toBe("connected");
+	expect(openHandlesAfterClose).toBe(0);
+	expect(fake.board.mode).toBe("app");
+	expect(fake.board.violations).toEqual([]);
+});
 
 test("?fake=drop records the RESET to app it could not send on the dropped link", async () => {
 	const { entries } = await drive("drop", ["connect", "deep-check"]);
