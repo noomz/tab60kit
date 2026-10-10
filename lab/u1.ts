@@ -15,10 +15,12 @@ import {
 	type RunOutcome,
 	atLoad,
 	awayFromHome,
+	cancelLabel,
 	outcomeOfError,
 	phaseAfterRun,
 	pickHint,
 	pickLabel,
+	showsRecovery,
 } from "./u1-state";
 
 function fakeModeOf(search: string): string | null {
@@ -116,15 +118,17 @@ async function start(): Promise<void> {
 	});
 	const preconditionsMet = () => preconditions.every(({ box }) => box.checked);
 
-	const entries: TranscriptEntry[] = [...load.entries];
-	for (const { productId } of load.entries) log(`granted at load: ${pid(productId)}`);
+	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
+	let phase: Phase = load.phase;
+	let controller: AbortController | null = null;
+	let parked: DeviceWant | null = null;
 	const { port, chooser } = startWebHidLab(hid, fake?.locks ?? navigator.locks, {
-		wrap: u1Wrap((entry) => entries.push(entry), now),
+		wrap: u1Wrap((entry) => record(entry), now),
 		onEvent: (event) => {
-			entries.push({ t: now(), ...event });
 			if (event.kind === "opened") lastOpened = event.productId;
 			log(describeEvent(event));
+			record({ t: now(), ...event });
 		},
 	});
 	const transcript = (): Transcript => ({
@@ -140,14 +144,7 @@ async function start(): Promise<void> {
 		},
 		entries: [...entries],
 	});
-	const recordVisibility = () => entries.push({ t: now(), kind: "visibility", state: document.visibilityState === "hidden" ? "hidden" : "visible" });
-	recordVisibility();
-	document.addEventListener("visibilitychange", recordVisibility);
 	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing" && entry.kind !== "granted");
-
-	let phase: Phase = load.phase;
-	let controller: AbortController | null = null;
-	let parked: DeviceWant | null = null;
 
 	const render = () => {
 		const want = chooser.needsClick;
@@ -163,13 +160,26 @@ async function start(): Promise<void> {
 		ui.pickHint.hidden = hint === null;
 		ui.pickHint.textContent = hint ?? "";
 		ui.cancel.hidden = phase.kind !== "running";
-		ui.cancel.textContent = awayFromHome(entries) ? "Stop and send the board home" : "Cancel";
+		ui.cancel.textContent = cancelLabel(entries);
 		ui.tryAgain.hidden = !away;
 		ui.restart.hidden = !away;
-		ui.recovery.hidden = !away;
+		ui.recovery.hidden = !showsRecovery(phase, want, entries);
 		ui.recovery.textContent = AWAY_RECOVERY;
 		ui.download.disabled = !ran();
 	};
+
+	/** Every transcript entry goes through here, so the page shows a state change on the entry that makes it. */
+	const record = (entry: TranscriptEntry) => {
+		entries.push(entry);
+		render();
+	};
+	for (const entry of load.entries) {
+		log(`granted at load: ${pid(entry.productId)}`);
+		record(entry);
+	}
+	const recordVisibility = () => record({ t: now(), kind: "visibility", state: document.visibilityState === "hidden" ? "hidden" : "visible" });
+	recordVisibility();
+	document.addEventListener("visibilitychange", recordVisibility);
 
 	const showVerdict = async () => {
 		if (!ran()) return;
@@ -220,7 +230,7 @@ async function start(): Promise<void> {
 	ui.pick.addEventListener("click", () => chooser.pick());
 	ui.cancel.addEventListener("click", () => controller?.abort(new DOMException("cancelled from the page", "AbortError")));
 	ui.typing.addEventListener("input", () => {
-		if (lastOpened === TAB60.productId.app) entries.push({ t: now(), kind: "typing", chars: ui.typing.value.length });
+		if (lastOpened === TAB60.productId.app) record({ t: now(), kind: "typing", chars: ui.typing.value.length });
 		void showVerdict();
 	});
 	addEventListener("beforeunload", (event) => {

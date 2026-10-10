@@ -39,6 +39,26 @@ export function awayFromHome(entries: readonly TranscriptEntry[]): boolean {
 	return away;
 }
 
+/** True from an update-mode link's `opened` entry until a `closed`, `lost`, or other `opened` entry follows it. */
+export function updateModeLinkOpen(entries: readonly TranscriptEntry[]): boolean {
+	let open = false;
+	for (const entry of entries) {
+		if (entry.kind === "opened") open = entry.productId === TAB60.productId.iap;
+		if (entry.kind === "closed" || entry.kind === "lost") open = false;
+	}
+	return open;
+}
+
+/** Only a run that holds an update-mode session sends RESET to app when cancelled. Any other Cancel only stops it. */
+export function cancelLabel(entries: readonly TranscriptEntry[]): string {
+	return updateModeLinkOpen(entries) ? "Stop and send the board home" : "Stop";
+}
+
+/** The recovery text, for an away page and for a run that waits on a parked pick while the board may be away. */
+export function showsRecovery(phase: Phase, parked: DeviceWant | null, entries: readonly TranscriptEntry[]): boolean {
+	return phase.kind === "away" || (phase.kind === "running" && parked !== null && awayFromHome(entries));
+}
+
 /** A link the run left open decides the phase. With none, the transcript says whether the board may be away. */
 export function phaseAfterRun(entries: readonly TranscriptEntry[], outcome: RunOutcome): Phase {
 	switch (outcome.kind) {
