@@ -18,6 +18,8 @@ export interface U1Expected {
 	readonly fwOffset: number;
 	readonly pageSize: number;
 	readonly fwPages: number;
+	/** FW INFO's first 4 payload bytes in update mode, as hex. The other 56 must be zero. The core never checks them. Only this verdict does. */
+	readonly fwInfoHex: string;
 	readonly versionPageSha256: string;
 	readonly imageBytes: number;
 	readonly imageSum32: number;
@@ -241,10 +243,19 @@ function checkBlInfo(all: readonly Exchange[], expected: U1Expected): CheckResul
 }
 
 function checkFwInfo(all: readonly Exchange[], expected: U1Expected): CheckResult {
-	const title = `FW INFO in update mode returns ${hex(expected.fwOffset, 3)}`;
+	const zeros = expected.reportBytes - PAYLOAD - expected.fwInfoHex.length / 2;
+	const title = `FW INFO in update mode returns ${expected.fwInfoHex.match(/../g)?.join(" ")} and ${zeros} zero bytes on every read`;
+	const golden = expected.fwInfoHex + "00".repeat(zeros);
 	const reads = all.filter(echoed).filter((e) => is(e, READ_FW_INFO));
-	const seen = new Set(reads.map((e) => view(e.reply).getUint32(PAYLOAD, true)));
-	return { id: 5, title, pass: reads.length > 0 && seen.size === 1 && seen.has(expected.fwOffset), detail: reads.length === 0 ? "no FW INFO reply" : [...seen].map((n) => hex(n, 8)).join(", ") };
+	const seen = [...new Set(reads.map((e) => toHex(e.reply.subarray(PAYLOAD))))];
+	const answeredInUpdateMode = reads.some((e) => e.mode === "iap");
+	const shown = seen.map((payload) => (payload === golden ? `${expected.fwInfoHex} and ${zeros} zero bytes` : payload));
+	return {
+		id: 5,
+		title,
+		pass: answeredInUpdateMode && seen.length === 1 && seen[0] === golden,
+		detail: answeredInUpdateMode ? `${reads.length} reads answered ${shown.join(", ")}` : "no FW INFO answered in update mode",
+	};
 }
 
 async function checkVersionPage(all: readonly Exchange[], expected: U1Expected): Promise<CheckResult> {

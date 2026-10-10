@@ -15,7 +15,7 @@ const CHECKS = [
 	[2, true, "USB-HID IAP: 0xff00/1 in 64 out 64 feature 0"],
 	[3, true, "normal mode answered {1}, update mode answered {0} over 67 reads"],
 	[4, true, "fw_offset 0x200, page_size 0x200, fw_pages 0xe7, identity 00000000d904041340700404ffffffff"],
-	[5, false, "0x00020004"],
+	[5, true, "3 reads answered 04000200 and 56 zero bytes"],
 	[6, true, "2 reads hashed to ca529cf626ef0b18877dcced28a91cad6f58d085473bcc2330b6df845439d345"],
 	[7, false, "no SUM over the image range answered"],
 	[8, true, "RESET to app sent; the confirm pick (activation) opened 0x0304; typing confirmed"],
@@ -26,7 +26,7 @@ const CHECKS = [
 	],
 ];
 
-test("the first hardware session's transcript still parses whole, and its verdict has not changed", async () => {
+test("the first hardware session's transcript still parses whole, and its verdict fails only checks 1, 7, and 9, with check 5 passing on the board's own FW INFO answer", async () => {
 	const transcript = parseTranscript(raw);
 	expect(raw).toStrictEqual(transcript);
 	const verdict = await evaluateU1(transcript, { expected: U1_EXPECTED, typing: "types" });

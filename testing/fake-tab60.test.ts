@@ -57,10 +57,10 @@ test("RESET to IAP detaches the plug, flips the mode, and resolves a waiting ope
 });
 
 test("update mode answers FW INFO, the version page parts 0..2 only, and SUM over the stored image", async () => {
-	const board = new FakeTab60({ starting: "update-mode-erased", target, fwInfo: 0x200 });
+	const board = new FakeTab60({ starting: "update-mode-erased", target });
 	const { ask } = tap(board);
 	expect(await ask("12020000")).toEqual(["1202000000".padEnd(128, "0")]);
-	expect(await ask("12010000")).toEqual(["1201000000020000".padEnd(128, "0")]);
+	expect(await ask("12010000")).toEqual(["1201000004000200".padEnd(128, "0")]);
 	expect((await ask("12220000"))[0]?.slice(0, 4)).toBe("1222");
 	expect((await ask("12230000"))[0]?.slice(0, 4)).toBe("ffaa");
 	expect(await ask("1d010000" + "00020000dc850000")).toEqual(["1d010000" + "d2dbd3f3".padEnd(120, "0")]);

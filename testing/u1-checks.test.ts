@@ -73,9 +73,35 @@ test("check 4 fails when BL info's identity bytes differ", async () => {
 	expect(await failing(transcript)).toEqual([4]);
 });
 
-test("check 5 fails when FW INFO disagrees with the layout, or answers FF AA", async () => {
-	expect(await failing(rewrite(baseline, reply("1201"), 0, withHex(8, "00040000")))).toEqual([5]);
-	expect(await failing(rewrite(baseline, reply("1201"), 0, refusedReply))).toEqual([5]);
+test("check 5 passes on the board's own FW INFO answer, 04 00 02 00 and 56 zero bytes", async () => {
+	expect((await verdict(baseline)).checks[4]).toEqual({
+		id: 5,
+		title: "FW INFO in update mode returns 04 00 02 00 and 56 zero bytes on every read",
+		pass: true,
+		detail: "1 reads answered 04000200 and 56 zero bytes",
+	});
+});
+
+test("check 5 fails on any other payload, on a second read that differs, and when no FW INFO answered in update mode", async () => {
+	const fwInfo = reply("1201");
+	const { entries } = baseline;
+	const at = entries.findIndex(fwInfo);
+	const [out, answer] = [entries[at - 1], entries[at]];
+	if (out?.kind !== "out" || answer?.kind !== "in") throw new Error("no FW INFO exchange in the baseline");
+	const lastByte01 = `${answer.hex.slice(0, 126)}01`;
+	const firstOpen = entries.findIndex((entry) => entry.kind === "opened");
+	const none = "no FW INFO answered in update mode";
+	const cases: readonly [string, Transcript, string][] = [
+		["another payload, 00 02 00 00", rewrite(baseline, fwInfo, 0, withHex(8, "00020000")), `1 reads answered 00020000${"00".repeat(56)}`],
+		["a nonzero byte after the first four", rewrite(baseline, fwInfo, 0, withHex(16, "01")), `1 reads answered 0400020001${"00".repeat(55)}`],
+		["a nonzero last byte", rewrite(baseline, fwInfo, 0, withHex(126, "01")), `1 reads answered ${lastByte01.slice(8)}`],
+		["a second read that differs", { ...baseline, entries: [...entries.slice(0, at + 1), out, { ...answer, hex: lastByte01 }, ...entries.slice(at + 1)] }, `2 reads answered 04000200 and 56 zero bytes, ${lastByte01.slice(8)}`],
+		["FF AA", rewrite(baseline, fwInfo, 0, refusedReply), none],
+		["no reply", { ...baseline, entries: entries.filter((entry) => !fwInfo(entry)) }, none],
+		["an answer on the normal-mode link only", { ...baseline, entries: [...entries.slice(0, firstOpen + 1), out, answer, ...entries.slice(firstOpen + 1, at - 1), ...entries.slice(at + 1)] }, none],
+	];
+	const results = await Promise.all(cases.map(async ([why, transcript]) => ({ why, failing: await failing(transcript), detail: await detail(transcript, 5) })));
+	expect(results).toEqual(cases.map(([why, , shown]) => ({ why, failing: [5], detail: shown })));
 });
 
 test("check 6 fails when the version page hashes differently", async () => {

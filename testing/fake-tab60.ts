@@ -33,7 +33,6 @@ export interface FakeOptions {
 	readonly blInfo?: Uint8Array;
 	/** The bootloader answers READ BL INFO with these bytes instead of the 52 at 0x400, so only the update-mode attach sees them. */
 	readonly blInfoInIap?: Uint8Array;
-	readonly fwInfo?: number;
 	readonly versionBlock?: Uint8Array;
 	/** A delay keeps a chooser opened by the reset's click on screen before the bootloader row appears, as on a real board. */
 	readonly reenumerateAfterMs?: number;
@@ -62,6 +61,8 @@ const PAGE_SIZE = 0x200;
 const FW_OFFSET = 0x200;
 const FW_PAGES = 0xe7;
 const WINDOW_BYTES = FW_PAGES * PAGE_SIZE;
+/** FW INFO's answer in the first hardware session (U1 transcript, 2026-10-10). */
+const FW_INFO = Uint8Array.of(0x04, 0x00, 0x02, 0x00);
 export const VERSION_BLOCK_BYTES = 180;
 const VERSION_PAGE_PARTS_APP = 8;
 const VERSION_PAGE_PARTS_IAP = 3;
@@ -148,7 +149,6 @@ const realClock: Clock = {
 export class FakeTab60 {
 	#mode: Mode;
 	readonly #flash = new Uint8Array(FLASH_BYTES).fill(0xff);
-	readonly #fwInfo: number;
 	readonly #sockets = new Set<Socket>();
 	readonly #arrivals: { readonly modes: readonly Mode[]; readonly resolve: () => void }[] = [];
 	readonly #enumerationListeners = new Set<(mode: Mode) => void>();
@@ -161,7 +161,6 @@ export class FakeTab60 {
 
 	constructor(readonly options: FakeOptions) {
 		const { starting, target } = options;
-		this.#fwInfo = options.fwInfo ?? FW_OFFSET;
 		this.#refuseOnce = options.refuseOnce ?? null;
 		this.#slowOnce = options.slowOnce ?? null;
 		this.#slowSkip = options.slowOnce?.skip ?? 0;
@@ -306,11 +305,7 @@ export class FakeTab60 {
 		if (cmd === 0x12 && sub >= 0x20 && sub < 0x20 + (mode === "app" ? VERSION_PAGE_PARTS_APP : VERSION_PAGE_PARTS_IAP)) return versionPagePart(sub - 0x20);
 		if (mode === "app" && cmd === 0x11 && sub === 0x00) return this.#reset("iap");
 		if (mode === "iap") {
-			if (cmd === 0x12 && sub === 0x01) {
-				const payload = new Uint8Array(4);
-				new DataView(payload.buffer).setUint32(0, this.#fwInfo, true);
-				return reply(payload);
-			}
+			if (cmd === 0x12 && sub === 0x01) return reply(FW_INFO);
 			if (cmd === 0x1d && sub === 0x01) {
 				const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 				const offset = view.getUint32(4, true);

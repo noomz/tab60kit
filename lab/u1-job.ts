@@ -42,6 +42,8 @@ export const U1_EXPECTED: U1Expected = {
 	fwOffset: EXPECTED_LAYOUT.fwOffset,
 	pageSize: EXPECTED_LAYOUT.pageSize,
 	fwPages: EXPECTED_LAYOUT.fwPages,
+	/** What the board answered on all three FW INFO reads of the first hardware session (testing/fixtures/tab60kit-u1-2026-10-10T12-16-20-942Z.json). */
+	fwInfoHex: "04000200",
 	versionPageSha256: V1_01_13.versionBlock.sha256,
 	imageBytes: V1_01_13.image.bytes,
 	imageSum32: V1_01_13.image.wireSum32,
