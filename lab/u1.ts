@@ -19,6 +19,7 @@ export function startU1(hid: HID, locks: LockManager) {
 	const { kit, chooser } = startWebHid(hid, locks, {
 		clearance,
 		wrap: (link) => recording(link, (entry) => entries.push(entry)),
+		onEvent: () => undefined,
 	});
 	const transcript = (environment: Readonly<Record<string, string>>): Transcript => ({
 		format: "tab60kit-transcript/1",

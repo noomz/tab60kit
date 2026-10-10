@@ -64,6 +64,7 @@ lint_mutation "UI code that imports a core internal" web-entries web/screens.ts 
 lint_mutation "UI code that imports the shell entry" web-entries web/screens.ts 'import type { Link } from "@tab60kit/core/port";'
 lint_mutation "a cast to OutReport outside the audit" one-egress web/webhid-port.ts 'export const forged = new Uint8Array(64) as OutReport;'
 lint_mutation "a sendReport call outside the WebHID link" one-egress lab/u1.ts 'export const raw = (device: HIDDevice) => device.sendReport(0, new Uint8Array(64));'
+lint_mutation "shipped page code that takes the lab port" lab-port web/main.ts 'import { startWebHidLab } from "./webhid-port"; void startWebHidLab;'
 
 echo "failures: $fails"
 exit $fails
