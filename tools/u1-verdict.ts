@@ -2,14 +2,26 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type TypingObservation, type U1Verdict, evaluateU1 } from "../lab/u1-checks";
 import { U1_EXPECTED } from "../lab/u1-job";
-import { type Transcript, parseTranscript } from "../testing/transcript";
+import { type Environment, type Transcript, parseTranscript } from "../testing/transcript";
 
 export interface U1Fixture extends U1Verdict {
 	readonly format: "tab60kit-u1-verdict/1";
 	readonly evaluatedAt: string;
 	readonly transcriptFile: string;
 	readonly typing: TypingObservation;
+	readonly environment: Environment;
 	readonly transcript: Transcript;
+}
+
+const CLEAN_COMMIT = /^[0-9a-f]{7,40}$/;
+
+/** F9: why a transcript cannot be evidence for the fixture, or null. Only the real board, from a clean build, counts. */
+export function notEvidence(environment: Environment): string | null {
+	if (environment.fake !== "no") return `environment.fake is "${environment.fake}", and a fake board is not evidence`;
+	const { tool } = environment;
+	if (tool === undefined) return "environment.tool is missing, so nothing names the build that recorded it";
+	if (!CLEAN_COMMIT.test(tool)) return `environment.tool is "${tool}", and only a build from a clean commit is evidence`;
+	return null;
 }
 
 interface Args {
@@ -44,17 +56,24 @@ export async function verdictMain(argv: readonly string[]): Promise<number> {
 		return 2;
 	}
 	const transcript = parseTranscript(JSON.parse(readFileSync(args.transcriptFile, "utf8")));
+	const refusal = notEvidence(transcript.environment);
+	if (refusal !== null) {
+		console.error(`${refusal}. Wrote nothing.`);
+		return 2;
+	}
 	const verdict = await evaluateU1(transcript, { expected: U1_EXPECTED, typing: args.typing });
 	const fixture: U1Fixture = {
 		format: "tab60kit-u1-verdict/1",
 		evaluatedAt: new Date().toISOString(),
 		transcriptFile: args.transcriptFile,
 		typing: args.typing,
+		environment: transcript.environment,
 		...verdict,
 		transcript,
 	};
 	mkdirSync(dirname(args.out), { recursive: true });
 	writeFileSync(args.out, `${JSON.stringify(fixture, null, "\t")}\n`);
+	for (const [key, value] of Object.entries(transcript.environment)) console.log(`environment ${key}: ${value}`);
 	for (const check of verdict.checks) console.log(`${check.pass ? "PASS" : "FAIL"} ${check.id}. ${check.title}\n     ${check.detail}`);
 	for (const finding of verdict.findings) console.log(`FINDING ${finding}`);
 	console.log(`commands sent: ${verdict.commands.join(" ")}`);

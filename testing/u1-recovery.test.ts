@@ -1,14 +1,20 @@
 import { expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { sha256 } from "../core/firmware";
 import { type Link, LinkLost, LinkTimeout, PickCancelled } from "../core/port";
 import { DeviceRefused, type EgressContext, IapAttachFailed, auditEgress, clears, connect } from "../core/protocol";
-import { type U1Context, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "../lab/u1-job";
+import { evaluateU1 } from "../lab/u1-checks";
+import { type U1Context, U1_EXPECTED, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "../lab/u1-job";
 import { awayFromHome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
-import { TARGET } from "./fake-run";
-import { type FakeOptions, FakeTab60 } from "./fake-tab60";
+import { verdictMain } from "../tools/u1-verdict";
+import { TARGET, recordFakeRun } from "./fake-run";
+import { type FakeOptions, FakeTab60, syntheticVersionBlock } from "./fake-tab60";
 import { FakeHid, type FakeHidOptions, FakeLocks } from "./fake-webhid";
 import { ScriptedLink, ScriptedPort, fromHex, report, toHex } from "./scripted";
-import { type TranscriptEntry, recording } from "./transcript";
+import { type Transcript, type TranscriptEntry, recording } from "./transcript";
 
 const PROBES = 3;
 const probes = (n: number) => Array.from({ length: n }, () => "1202");
@@ -294,4 +300,39 @@ test("the audit refuses junk in bytes 2..63 of the U1 frames", () => {
 	const past = (head: string) => `${head}0000${"ab".repeat(60)}`;
 	expect([refusal(past("1100"), "resetToIap", "app"), refusal(past("1202"), "readMode", "app"), refusal(past("1220"), "readVersionPage", "iap")]).toEqual(["payload-overrun", "payload-overrun", "payload-overrun"]);
 	expect([refusal("1100", "resetToIap", "app"), refusal("1202", "readMode", "app"), refusal("1220", "readVersionPage", "iap")]).toEqual(["ok", "ok", "ok"]);
+});
+
+test("the CLI refuses a fake transcript with exit 2 and writes no fixture, even when every check would pass", async () => {
+	const { transcript } = await recordFakeRun();
+	const fake: Transcript = { ...transcript, environment: { ...transcript.environment, fake: "plain", tool: "abc1234-dirty" } };
+	const own = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
+	const typedFake: Transcript = { ...fake, entries: [...fake.entries, { t: (fake.entries.at(-1)?.t ?? 0) + 1, kind: "typing", chars: 4 }] };
+	expect((await evaluateU1(typedFake, { expected: own, typing: "types" })).checks.every((check) => check.pass)).toBe(true);
+	const dir = mkdtempSync(join(tmpdir(), "u1-recovery-"));
+	try {
+		const file = join(dir, "t.json");
+		writeFileSync(file, JSON.stringify(typedFake));
+		const out = join(dir, "u1-macos.json");
+		expect(await verdictMain([file, "--types", "--out", out])).toBe(2);
+		expect(existsSync(out)).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("check 8 fails when RESET to app never brought the board back and a later Connect found 0x0304", async () => {
+	const { transcript } = await recordFakeRun();
+	const at = transcript.entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
+	const t = transcript.entries[at]?.t ?? 0;
+	const entries: TranscriptEntry[] = [
+		...transcript.entries.slice(0, at + 1),
+		{ t: t + 1, kind: "pick", reason: "confirm-normal-mode", path: "parked", productId: null, waitMs: 5000 },
+		{ t: t + 60_000, kind: "pick", reason: "connect", path: "activation", productId: 0x0304, waitMs: 2000 },
+		{ t: t + 60_001, kind: "opened", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
+		{ t: t + 60_002, kind: "typing", chars: 5 },
+	];
+	const own = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
+	const check8 = (await evaluateU1({ ...transcript, entries }, { expected: own, typing: "types" })).checks[7];
+	expect(check8?.pass).toBe(false);
+	expect(check8?.detail).toMatch(/a Connect pick came between the last RESET to app and the open/);
 });

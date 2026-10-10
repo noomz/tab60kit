@@ -47,6 +47,7 @@ export const U1_EXPECTED: U1Expected = {
 	imageSum32: V1_01_13.image.wireSum32,
 	probes: U1_PROBES.probes,
 	maxProbeGapMs: WRITE_LINK_RULE.maxProbeGapMs,
+	probeSpacingMs: U1_PROBES.everyMs,
 };
 
 export interface U1Context extends LinkContext {

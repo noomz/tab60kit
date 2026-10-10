@@ -22,6 +22,8 @@ export interface U1Expected {
 	readonly imageSum32: number;
 	readonly probes: number;
 	readonly maxProbeGapMs: number;
+	/** How far apart the page sends its probes. Check 9 requires each gap to be at least 90% of it. Fake runs pass 0. */
+	readonly probeSpacingMs: number;
 }
 
 /** Plan check 8's human half: whether the board types after the run. */
@@ -51,7 +53,9 @@ interface Exchange {
 }
 
 type Answered = Exchange & { readonly reply: Uint8Array; readonly replyT: number };
-const answered = (exchange: Exchange): exchange is Answered => exchange.reply !== null && exchange.replyT !== null;
+/** A reply that repeats the request's bytes 0..1. An FF AA reply never counts as an answer. */
+const echoed = (exchange: Exchange): exchange is Answered =>
+	exchange.reply !== null && exchange.replyT !== null && exchange.reply[0] === exchange.cmd && exchange.reply[1] === exchange.sub;
 
 const READ_BL_INFO = [0x12, 0x00] as const;
 const READ_FW_INFO = [0x12, 0x01] as const;
@@ -63,7 +67,21 @@ const RESET_TO_APP = [0x11, 0x01] as const;
 const ERROR_MARKER = [0xff, 0xaa] as const;
 const PAYLOAD = 4;
 
-export const U1_COMMANDS: readonly string[] = ["12/02", "12/00", "12/01", "12/20", "12/21", "12/22", "1d/01", "11/00", "11/01"];
+/** The nine frames U1 may send, byte for byte, written out instead of encoded so the verdict never trusts the codec. */
+export const U1_FRAMES: readonly string[] = [
+	"12020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"12000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"12010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"12200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"12210000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"12220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"1d01000000020000dc85000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"11000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	"11010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+];
+
+/** Check 9 accepts a probe gap down to this share of the page's spacing (450 ms of 500). */
+const SPACING_TOLERANCE = 0.9;
 
 const pair = (cmd: number, sub: number) => `${cmd.toString(16).padStart(2, "0")}/${sub.toString(16).padStart(2, "0")}`;
 const hex = (n: number, digits: number) => `0x${n.toString(16).padStart(digits, "0")}`;
@@ -114,9 +132,23 @@ function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, fi
 	if (unanswered.length > 0) findings.push(`${unanswered.length} requests unanswered: ${[...new Set(unanswered.map((e) => pair(e.cmd, e.sub)))].join(", ")}`);
 	if (refusals.length > 0) findings.push(`${refusals.length} FF AA replies to: ${[...new Set(refusals.map((e) => pair(e.cmd, e.sub)))].join(", ")}`);
 	if (losses > 0) findings.push(`link lost ${losses} times with no reset sent`);
-	const outside = [...new Set(out.map((e) => pair(e.cmd, e.sub)))].filter((seen) => !U1_COMMANDS.includes(seen));
-	if (outside.length > 0) findings.push(`frames outside the nine U1 commands: ${outside.join(", ")}`);
 	return out;
+}
+
+/** What the transcript records besides the exchanges: frames off the golden list, failed sends, slow closes, dropped reports, a hidden tab. */
+function entryFindings(entries: readonly TranscriptEntry[]): string[] {
+	const findings: string[] = [];
+	const off = [...new Set(entries.flatMap((entry) => (entry.kind === "out" && !U1_FRAMES.includes(entry.hex) ? [entry.hex] : [])))];
+	if (off.length > 0) findings.push(`${off.length} frames are not among the nine golden frames: ${off.join(", ")}`);
+	const failed = entries.flatMap((entry) => (entry.kind === "send-failed" ? [entry.hex.slice(0, 4)] : []));
+	if (failed.length > 0) findings.push(`${failed.length} sends rejected, so the board may or may not have taken them: ${[...new Set(failed)].join(", ")}`);
+	const slowCloses = entries.flatMap((entry) => (entry.kind === "close-timeout" ? [hex(entry.productId, 4)] : []));
+	if (slowCloses.length > 0) findings.push(`${slowCloses.length} closes did not settle in time and were counted as closed: ${slowCloses.join(", ")}`);
+	const discarded = entries.filter((entry) => entry.kind === "discarded").length;
+	if (discarded > 0) findings.push(`${discarded} input reports were dropped unread before a send`);
+	const hidden = entries.filter((entry) => entry.kind === "visibility" && entry.state === "hidden").length;
+	if (hidden > 0) findings.push(`the tab was hidden ${hidden} times, and a hidden tab slows timers, so check 9's timing may measure the tab`);
+	return findings;
 }
 
 function checkPick(entries: readonly TranscriptEntry[], expected: U1Expected): CheckResult {
@@ -154,7 +186,7 @@ function checkDevice(entries: readonly TranscriptEntry[], expected: U1Expected):
 
 function checkReadMode(all: readonly Exchange[]): CheckResult {
 	const title = "READ MODE returns 0 in update mode and 1 in normal mode";
-	const reads = all.filter(answered).filter((e) => is(e, READ_MODE));
+	const reads = all.filter(echoed).filter((e) => is(e, READ_MODE));
 	const byMode: Record<Mode, Set<number>> = { app: new Set(), iap: new Set() };
 	for (const read of reads) if (read.mode !== null) byMode[read.mode].add(read.reply[PAYLOAD] ?? -1);
 	const pass = reads.length > 0 && byMode.app.size === 1 && byMode.app.has(1) && byMode.iap.size === 1 && byMode.iap.has(0);
@@ -163,7 +195,7 @@ function checkReadMode(all: readonly Exchange[]): CheckResult {
 
 function checkBlInfo(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `BL info reports fw_offset ${hex(expected.fwOffset, 3)}, page_size ${hex(expected.pageSize, 3)}, fw_pages ${hex(expected.fwPages, 2)}, and identity ${expected.identityHex}`;
-	const reads = all.filter(answered).filter((e) => is(e, READ_BL_INFO));
+	const reads = all.filter(echoed).filter((e) => is(e, READ_BL_INFO));
 	const seen = new Set(
 		reads.map((e) => {
 			const payload = e.reply.subarray(PAYLOAD);
@@ -177,7 +209,7 @@ function checkBlInfo(all: readonly Exchange[], expected: U1Expected): CheckResul
 
 function checkFwInfo(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `FW INFO in update mode returns ${hex(expected.fwOffset, 3)}`;
-	const reads = all.filter(answered).filter((e) => is(e, READ_FW_INFO));
+	const reads = all.filter(echoed).filter((e) => is(e, READ_FW_INFO));
 	const seen = new Set(reads.map((e) => view(e.reply).getUint32(PAYLOAD, true)));
 	return { id: 5, title, pass: reads.length > 0 && seen.size === 1 && seen.has(expected.fwOffset), detail: reads.length === 0 ? "no FW INFO reply" : [...seen].map((n) => hex(n, 8)).join(", ") };
 }
@@ -186,7 +218,7 @@ async function checkVersionPage(all: readonly Exchange[], expected: U1Expected):
 	const title = "READ VERSION PAGE parts 0, 1, and 2 return 180 bytes that hash to the catalog's version block";
 	const hashes: string[] = [];
 	for (let i = 0; i + 3 <= all.length; i++) {
-		const parts = all.slice(i, i + 3).filter(answered);
+		const parts = all.slice(i, i + 3).filter(echoed);
 		if (parts.length !== 3 || !parts.every((e, part) => e.cmd === 0x12 && e.sub === READ_VERSION_PAGE_FIRST + part)) continue;
 		const page = new Uint8Array(180);
 		parts.forEach((e, part) => page.set(e.reply.subarray(PAYLOAD, PAYLOAD + 60), part * 60));
@@ -199,51 +231,76 @@ async function checkVersionPage(all: readonly Exchange[], expected: U1Expected):
 function checkSum(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `SUM over [${hex(expected.fwOffset, 3)}, ${hex(expected.fwOffset, 3)} + ${expected.imageBytes}) returns ${hex(expected.imageSum32, 8)}`;
 	const sums = all
-		.filter(answered)
+		.filter(echoed)
 		.filter((e) => is(e, SUM) && view(e.request).getUint32(PAYLOAD, true) === expected.fwOffset && view(e.request).getUint32(PAYLOAD + 4, true) === expected.imageBytes);
 	const seen = [...new Set(sums.map((e) => view(e.reply).getUint32(PAYLOAD, true)))];
 	return { id: 7, title, pass: sums.length > 0 && seen.length === 1 && seen[0] === expected.imageSum32, detail: sums.length === 0 ? "no SUM over the image range answered" : seen.map((n) => hex(n, 8)).join(", ") };
 }
 
+function lastIndex<T>(items: readonly T[], matches: (item: T) => boolean): number {
+	for (let i = items.length - 1; i >= 0; i--) {
+		const item = items[i];
+		if (item !== undefined && matches(item)) return i;
+	}
+	return -1;
+}
+
+/**
+ * F7: the 0x0304 open must follow the last RESET to app through the confirm-normal-mode pick, with no Connect pick
+ * between them, so a board brought back by a cold boot and Connect cannot pass. Typing must follow that open.
+ */
 function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
-	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} and types`;
-	const opened = entries.filter((entry) => entry.kind === "opened");
-	const last = opened.at(-1);
-	const reset = entries.some((entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
-	const enumerated = reset && last !== undefined && last.kind === "opened" && last.productId === expected.appProductId;
-	const typed = typing === "types";
-	const detail = `${reset ? "RESET to app sent" : "no RESET to app sent"}; last opened ${last === undefined || last.kind !== "opened" ? "nothing" : hex(last.productId, 4)}; typing ${typing === "not-observed" ? "not observed yet" : typed ? "confirmed" : "failed"}`;
-	return { id: 8, title, pass: enumerated && typed, detail };
+	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} through the confirm pick and types`;
+	const result = (pass: boolean, detail: string): CheckResult => ({ id: 8, title, pass, detail });
+	const reset = lastIndex(entries, (entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
+	if (reset === -1) return result(false, "no RESET to app sent");
+	const after = entries.slice(reset + 1);
+	const open = after.findIndex((entry) => entry.kind === "opened" && entry.productId === expected.appProductId);
+	if (open === -1) return result(false, `no ${hex(expected.appProductId, 4)} opened after the last RESET to app`);
+	const picks = after.slice(0, open).flatMap((entry) => (entry.kind === "pick" ? [entry] : []));
+	if (picks.some((pick) => pick.reason === "connect")) return result(false, "a Connect pick came between the last RESET to app and the open, so the open does not show the reset worked");
+	const pick = picks.at(-1);
+	if (pick === undefined || pick.reason !== "confirm-normal-mode" || pick.productId !== expected.appProductId) {
+		return result(false, `the ${hex(expected.appProductId, 4)} open did not come from the confirm-normal-mode pick`);
+	}
+	const typed = after.slice(open + 1).some((entry) => entry.kind === "typing" && entry.chars > 0);
+	const back = `RESET to app sent; the confirm pick (${pick.path}) opened ${hex(expected.appProductId, 4)}`;
+	if (!typed) return result(false, `${back}; no typing entry after that open`);
+	if (typing !== "types") return result(false, `${back}; ${typing === "not-observed" ? "typing not observed yet" : "the human says the board does not type"}`);
+	return result(true, `${back}; typing confirmed`);
 }
 
 function checkProbes(all: readonly Exchange[], expected: U1Expected): CheckResult {
-	const title = `${expected.probes} READ MODE probes in a row in each mode, every answer within ${expected.maxProbeGapMs} ms of the last`;
+	const title = `${expected.probes} READ MODE probes in a row in each mode, sent ${expected.probeSpacingMs} ms apart, every answer within ${expected.maxProbeGapMs} ms of the last`;
 	interface Run {
 		readonly length: number;
 		readonly maxGap: number;
 		readonly slowest: number;
+		readonly minSendGap: number;
 		readonly answered: boolean;
 	}
-	const best: Record<Mode, Run> = {
-		app: { length: 0, maxGap: 0, slowest: 0, answered: true },
-		iap: { length: 0, maxGap: 0, slowest: 0, answered: true },
-	};
+	const none: Run = { length: 0, maxGap: 0, slowest: 0, minSendGap: Number.POSITIVE_INFINITY, answered: true };
+	const best: Record<Mode, Run> = { app: none, iap: none };
 	const consider = (run: readonly Exchange[]) => {
 		const first = run[0];
 		if (first === undefined || first.mode === null || run.length <= best[first.mode].length) return;
 		let maxGap = 0;
 		let slowest = 0;
-		let previous: number | null = null;
+		let minSendGap = Number.POSITIVE_INFINITY;
+		let previousReply: number | null = null;
+		let previousSend: number | null = null;
 		for (const e of run) {
-			if (e.replyT === null) {
-				previous = null;
+			if (previousSend !== null) minSendGap = Math.min(minSendGap, e.t - previousSend);
+			previousSend = e.t;
+			if (!echoed(e)) {
+				previousReply = null;
 				continue;
 			}
 			slowest = Math.max(slowest, e.replyT - e.t);
-			if (previous !== null) maxGap = Math.max(maxGap, e.replyT - previous);
-			previous = e.replyT;
+			if (previousReply !== null) maxGap = Math.max(maxGap, e.replyT - previousReply);
+			previousReply = e.replyT;
 		}
-		best[first.mode] = { length: run.length, maxGap, slowest, answered: run.every(answered) };
+		best[first.mode] = { length: run.length, maxGap, slowest, minSendGap, answered: run.every(echoed) };
 	};
 	let run: Exchange[] = [];
 	for (const e of all) {
@@ -255,9 +312,13 @@ function checkProbes(all: readonly Exchange[], expected: U1Expected): CheckResul
 		if (probe) run.push(e);
 	}
 	consider(run);
-	const ok = (mode: Mode) => best[mode].length >= expected.probes && best[mode].answered && best[mode].maxGap <= expected.maxProbeGapMs;
+	const ok = (mode: Mode) =>
+		best[mode].length >= expected.probes &&
+		best[mode].answered &&
+		best[mode].maxGap <= expected.maxProbeGapMs &&
+		best[mode].minSendGap >= SPACING_TOLERANCE * expected.probeSpacingMs;
 	const describe = (mode: Mode) =>
-		`${mode === "app" ? "normal" : "update"} mode: ${best[mode].length} in a row, ${best[mode].answered ? "all answered" : "some unanswered"}, longest gap ${Math.round(best[mode].maxGap)} ms, slowest answer ${Math.round(best[mode].slowest)} ms`;
+		`${mode === "app" ? "normal" : "update"} mode: ${best[mode].length} in a row, ${best[mode].answered ? "all answered" : "some unanswered"}, longest gap ${Math.round(best[mode].maxGap)} ms, slowest answer ${Math.round(best[mode].slowest)} ms, shortest send gap ${Math.round(best[mode].minSendGap)} ms`;
 	return { id: 9, title, pass: ok("app") && ok("iap"), detail: `${describe("app")}; ${describe("iap")}` };
 }
 
@@ -270,6 +331,7 @@ export async function evaluateU1(transcript: Transcript, options: EvaluateOption
 	const { expected } = options;
 	const findings: string[] = [];
 	const all = exchanges(transcript.entries, expected, findings);
+	findings.push(...entryFindings(transcript.entries));
 	const checks: CheckResult[] = [
 		checkPick(transcript.entries, expected),
 		checkDevice(transcript.entries, expected),
