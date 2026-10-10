@@ -9,7 +9,10 @@
 import type { DevicePort, Link, WantReason } from "../core/port";
 import { type Sha256, notImplemented, sha256Literal } from "../core/units";
 
-/** Tool version and commit, OS, browser, and whether Karabiner-Elements was running. */
+/**
+ * What the page records about the session: the tool commit, user agent, platform, page URL, the `?fake` mode, and the
+ * three precondition keys (lab/u1-state.ts PRECONDITIONS).
+ */
 export interface Environment extends Readonly<Record<string, string>> {
 	/** "no" for the real WebHID, otherwise the page's ?fake mode. tools/u1-verdict.ts accepts only "no". */
 	readonly fake: string;

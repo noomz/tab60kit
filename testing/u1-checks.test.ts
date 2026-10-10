@@ -171,7 +171,7 @@ test("findings name failed sends, slow closes, dropped reports, and a hidden tab
 
 const real = (transcript: Transcript, environment: Partial<Transcript["environment"]> = {}): Transcript => ({
 	...transcript,
-	environment: { ...transcript.environment, fake: "no", tool: "abc1234", ...environment },
+	environment: { ...transcript.environment, fake: "no", tool: "abc1234", cableIn: "yes", karabinerLedOff: "yes", secondKeyboardAtHand: "yes", ...environment },
 });
 
 test("the CLI writes the fixture with its environment for a real-looking transcript, and exits by the verdict", async () => {
@@ -249,6 +249,29 @@ test("the CLI exits 2 with one line naming the file, and writes nothing, for a t
 			expect({ name, code, written: existsSync(out), lines: lines.length }).toEqual({ name, code: 2, written: false, lines: 1 });
 			expect(lines[0]).toStartWith(`${file}: `);
 			expect(lines[0]).not.toContain("\n");
+		}
+	} finally {
+		errors.mockRestore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the CLI refuses a real-looking transcript that does not record every precondition as met, with exit 2 and no file", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "u1-verdict-"));
+	const errors = spyOn(console, "error").mockImplementation(() => undefined);
+	try {
+		const { cableIn: _cableIn, ...noCable } = real(baseline).environment;
+		const cases: readonly [string, Transcript, string][] = [
+			["no cableIn key", { ...baseline, environment: noCable }, "The cable is in"],
+			["secondKeyboardAtHand no", real(baseline, { secondKeyboardAtHand: "no" }), "A second keyboard is at hand"],
+		];
+		for (const [why, transcript, unmet] of cases) {
+			const file = join(dir, `${why.replaceAll(" ", "-")}.json`);
+			writeFileSync(file, JSON.stringify(transcript));
+			const out = join(dir, `${why.replaceAll(" ", "-")}-fixture.json`);
+			errors.mockClear();
+			expect({ why, code: await verdictMain([file, "--types", "--out", out]), written: existsSync(out) }).toEqual({ why, code: 2, written: false });
+			expect(errors.mock.calls.map((args) => args.join(" "))).toEqual([`the transcript does not record these preconditions as met: ${unmet}. Wrote nothing.`]);
 		}
 	} finally {
 		errors.mockRestore();

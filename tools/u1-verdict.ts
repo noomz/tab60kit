@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { type TypingObservation, type U1Verdict, evaluateU1, passes } from "../lab/u1-checks";
 import { U1_EXPECTED } from "../lab/u1-job";
+import { unmetPreconditions } from "../lab/u1-state";
 import { type Environment, type Transcript, parseTranscript } from "../testing/transcript";
 
 export interface U1Fixture extends U1Verdict {
@@ -20,6 +21,8 @@ function notEvidence(environment: Environment): string | null {
 	const { tool } = environment;
 	if (tool === undefined) return "environment.tool is missing, so nothing names the build that recorded it";
 	if (!CLEAN_COMMIT.test(tool)) return `environment.tool is "${tool}", and only a build from a clean commit is evidence`;
+	const unmet = unmetPreconditions(environment);
+	if (unmet.length > 0) return `the transcript does not record these preconditions as met: ${unmet.join("; ")}`;
 	return null;
 }
 

@@ -6,7 +6,19 @@ import { evaluateU1 } from "./u1-checks";
 import { FAKE_MODES, type FakeMode, fakeHardware, isFakeMode } from "./u1-fake";
 import { u1Wrap } from "./u1-frames";
 import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } from "./u1-job";
-import { AWAY_RECOVERY, type Phase, type Run, type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun, pickHint, pickLabel } from "./u1-state";
+import {
+	AWAY_RECOVERY,
+	PRECONDITIONS,
+	PRECONDITION_MET,
+	type Phase,
+	type Run,
+	type RunOutcome,
+	awayFromHome,
+	outcomeOfError,
+	phaseAfterRun,
+	pickHint,
+	pickLabel,
+} from "./u1-state";
 
 function fakeModeOf(search: string): string | null {
 	const value = new URLSearchParams(search).get("fake");
@@ -23,6 +35,7 @@ function element<T extends HTMLElement>(id: string, type: new () => T): T {
 
 const ui = {
 	clearance: element("clearance", HTMLParagraphElement),
+	preconditions: element("preconditions", HTMLFieldSetElement),
 	connect: element("connect", HTMLButtonElement),
 	deepCheck: element("deepcheck", HTMLButtonElement),
 	pick: element("pick", HTMLButtonElement),
@@ -85,6 +98,19 @@ function start(): void {
 	}
 	ui.clearance.textContent = `Lab clearance: ${U1_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : `Fake board (${fakeMode}).`}`;
 
+	const preconditions = PRECONDITIONS.map(({ key, label }) => {
+		const box = document.createElement("input");
+		box.type = "checkbox";
+		box.addEventListener("change", () => render());
+		const row = document.createElement("label");
+		row.append(box, ` ${label}`);
+		const line = document.createElement("div");
+		line.append(row);
+		ui.preconditions.append(line);
+		return { key, box };
+	});
+	const preconditionsMet = () => preconditions.every(({ box }) => box.checked);
+
 	const fake = fakeMode === null ? null : fakeHardware(fakeMode, { probes: U1_PROBES.probes });
 	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
@@ -105,6 +131,7 @@ function start(): void {
 			platform: navigator.platform,
 			fake: fakeMode ?? "no",
 			page: location.href,
+			...Object.fromEntries(preconditions.map(({ key, box }) => [key, box.checked ? PRECONDITION_MET : "no"])),
 		},
 		entries: [...entries],
 	});
@@ -123,7 +150,7 @@ function start(): void {
 		parked = want;
 		const away = phase.kind === "away";
 		const canConnect = phase.kind === "idle" || phase.kind === "connected" || phase.kind === "failed" || phase.kind === "refused" || (phase.kind === "away" && phase.holding === null);
-		ui.connect.disabled = !canConnect;
+		ui.connect.disabled = !canConnect || !preconditionsMet();
 		ui.deepCheck.disabled = phase.kind !== "connected";
 		ui.pick.hidden = want === null;
 		ui.pick.textContent = pickLabel(want);

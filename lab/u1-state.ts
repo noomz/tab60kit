@@ -92,3 +92,17 @@ export const AWAY_RECOVERY = [
 	"Or run the vendor updater with -force on MaruStation.",
 	"Keep this tab visible during a run. A hidden tab slows its timers.",
 ].join("\n");
+
+/** The session conditions the U1 G1 lift requires. The page records each key in the transcript's environment. */
+export const PRECONDITIONS = [
+	{ key: "cableIn", label: "The cable is in" },
+	{ key: "karabinerLedOff", label: "Karabiner's LED manipulation is off" },
+	{ key: "secondKeyboardAtHand", label: "A second keyboard is at hand" },
+] as const;
+
+export const PRECONDITION_MET = "yes";
+
+/** The labels of the preconditions that `environment` does not record as met. */
+export function unmetPreconditions(environment: Readonly<Record<string, string>>): string[] {
+	return PRECONDITIONS.filter(({ key }) => environment[key] !== PRECONDITION_MET).map(({ label }) => label);
+}
