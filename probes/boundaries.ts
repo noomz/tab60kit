@@ -105,12 +105,12 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 	report("one-egress", problems, "one cast to OutReport (core/protocol.ts auditEgress); sendReport only in web/webhid-port.ts");
 }
 
-// The lab port: startWebHidLab hands the DevicePort itself out, so only lab pages may name it. The shipped page
-// reaches the board through startWebHid alone, which returns a kit and a chooser.
+// The lab port: startWebHidLab hands the DevicePort itself out, so only lab pages and test code may name it. The
+// shipped page reaches the board through startWebHid alone, which returns a kit and a chooser.
 {
-	const allowed = (file: string) => file.startsWith("lab/") || file === "web/webhid-port.ts" || file.endsWith(".test.ts");
+	const allowed = (file: string) => file.startsWith("lab/") || file.startsWith("testing/") || file === "web/webhid-port.ts" || file.endsWith(".test.ts");
 	const problems = files.filter((file) => !allowed(at(file)) && /\bstartWebHidLab\b/.test(readFileSync(file, "utf8"))).map(at);
-	report("lab-port", problems.map((file) => `${file} references startWebHidLab`), "only lab/ and the WebHID shell reference startWebHidLab");
+	report("lab-port", problems.map((file) => `${file} references startWebHidLab`), "only lab/, testing/, tests, and the WebHID shell reference startWebHidLab");
 }
 
 process.exit(failures);

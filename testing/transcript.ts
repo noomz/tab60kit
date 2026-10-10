@@ -7,8 +7,7 @@
  * byte-exact without redistributing vendor bytes.
  */
 import type { DevicePort, Link, WantReason } from "../core/port";
-import type { Sha256 } from "../core/units";
-import { notImplemented } from "../core/units";
+import { type Sha256, notImplemented, sha256Literal } from "../core/units";
 
 export interface Transcript {
 	readonly format: "tab60kit-transcript/1";
@@ -90,7 +89,8 @@ export function recording(link: Link, sink: (entry: TranscriptEntry) => void, no
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const REPORT_HEX = /^[0-9a-f]{128}$/;
-const WANT_REASONS: readonly WantReason[] = ["connect", "enter-update-mode", "after-link-loss", "confirm-normal-mode"];
+const WANT_REASONS: readonly string[] = ["connect", "enter-update-mode", "after-link-loss", "confirm-normal-mode"] satisfies readonly WantReason[];
+const isWantReason = (value: string): value is WantReason => WANT_REASONS.includes(value);
 
 function fail(where: string, what: string): never {
 	throw new TypeError(`transcript ${where}: ${what}`);
@@ -152,10 +152,10 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 			const reason = string(value, "reason", where);
 			const path = string(value, "path", where);
 			const productId = value.productId;
-			if (!WANT_REASONS.some((known) => known === reason)) fail(where, `unknown reason ${reason}`);
+			if (!isWantReason(reason)) fail(where, `unknown reason ${reason}`);
 			if (path !== "activation" && path !== "parked") fail(where, `unknown path ${path}`);
 			if (productId !== null && typeof productId !== "number") fail(where, "productId is neither null nor a number");
-			return { t, kind, reason: reason as WantReason, path, productId, waitMs: number(value, "waitMs", where) };
+			return { t, kind, reason, path, productId, waitMs: number(value, "waitMs", where) };
 		}
 		case "out-write":
 			return {
@@ -163,7 +163,7 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 				kind,
 				header: string(value, "header", where),
 				payloadBytes: number(value, "payloadBytes", where),
-				payloadSha256: string(value, "payloadSha256", where) as Sha256,
+				payloadSha256: sha256Literal(string(value, "payloadSha256", where)),
 			};
 		default:
 			return fail(where, `unknown kind ${kind}`);

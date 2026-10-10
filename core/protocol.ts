@@ -793,6 +793,7 @@ class App implements AppSession {
 			await this.close();
 			iapLink = await opening;
 		} catch (error) {
+			// The open is still pending, and nobody will await it now: swallow its rejection so it cannot surface as an unhandled one.
 			opening.catch(() => undefined);
 			throw error;
 		}

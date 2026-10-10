@@ -8,7 +8,7 @@ import { verdictMain } from "../tools/u1-verdict";
 import { versionBlock } from "./fake-tab60";
 import { VENDOR_COLLECTION } from "./fake-webhid";
 import { type Transcript, type TranscriptEntry } from "./transcript";
-import { TARGET, recordFakeRun } from "./u1-job.test";
+import { TARGET, recordFakeRun } from "./fake-run";
 
 /** The fake's page is V1.01.13-shaped, not the vendor's bytes, so the fake run is judged against its own hash. */
 const fakeExpected: U1Expected = { ...U1_EXPECTED, versionPageSha256: await sha256(versionBlock()) };

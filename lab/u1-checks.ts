@@ -74,6 +74,9 @@ interface Exchange {
 	readonly replyT: number | null;
 }
 
+type Answered = Exchange & { readonly reply: Uint8Array; readonly replyT: number };
+const answered = (exchange: Exchange): exchange is Answered => exchange.reply !== null && exchange.replyT !== null;
+
 const READ_BL_INFO = [0x12, 0x00] as const;
 const READ_FW_INFO = [0x12, 0x01] as const;
 const READ_MODE = [0x12, 0x02] as const;
@@ -177,19 +180,19 @@ function checkDevice(entries: readonly TranscriptEntry[], expected: U1Expected):
 
 function checkReadMode(all: readonly Exchange[]): CheckResult {
 	const title = "READ MODE returns 0 in update mode and 1 in normal mode";
-	const reads = all.filter((e) => is(e, READ_MODE) && e.reply !== null);
+	const reads = all.filter(answered).filter((e) => is(e, READ_MODE));
 	const byMode: Record<Mode, Set<number>> = { app: new Set(), iap: new Set() };
-	for (const read of reads) if (read.mode !== null && read.reply !== null) byMode[read.mode].add(read.reply[PAYLOAD] ?? -1);
+	for (const read of reads) if (read.mode !== null) byMode[read.mode].add(read.reply[PAYLOAD] ?? -1);
 	const pass = reads.length > 0 && byMode.app.size === 1 && byMode.app.has(1) && byMode.iap.size === 1 && byMode.iap.has(0);
 	return { id: 3, title, pass, detail: `normal mode answered {${[...byMode.app].join(",")}}, update mode answered {${[...byMode.iap].join(",")}} over ${reads.length} reads` };
 }
 
 function checkBlInfo(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `BL info reports fw_offset ${hex(expected.fwOffset, 3)}, page_size ${hex(expected.pageSize, 3)}, fw_pages ${hex(expected.fwPages, 2)}, and identity ${expected.identityHex}`;
-	const reads = all.filter((e) => is(e, READ_BL_INFO) && e.reply !== null);
+	const reads = all.filter(answered).filter((e) => is(e, READ_BL_INFO));
 	const seen = new Set(
 		reads.map((e) => {
-			const payload = e.reply!.subarray(PAYLOAD);
+			const payload = e.reply.subarray(PAYLOAD);
 			const v = view(payload);
 			return `fw_offset ${hex(v.getUint16(0x20, true), 3)}, page_size ${hex(v.getUint16(0x24, true), 3)}, fw_pages ${hex(v.getUint16(0x22, true), 2)}, identity ${toHex(payload.subarray(4, 20))}`;
 		}),
@@ -200,19 +203,19 @@ function checkBlInfo(all: readonly Exchange[], expected: U1Expected): CheckResul
 
 function checkFwInfo(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `FW INFO in update mode returns ${hex(expected.fwOffset, 3)}`;
-	const reads = all.filter((e) => is(e, READ_FW_INFO) && e.reply !== null);
-	const seen = new Set(reads.map((e) => view(e.reply!).getUint32(PAYLOAD, true)));
+	const reads = all.filter(answered).filter((e) => is(e, READ_FW_INFO));
+	const seen = new Set(reads.map((e) => view(e.reply).getUint32(PAYLOAD, true)));
 	return { id: 5, title, pass: reads.length > 0 && seen.size === 1 && seen.has(expected.fwOffset), detail: reads.length === 0 ? "no FW INFO reply" : [...seen].map((n) => hex(n, 8)).join(", ") };
 }
 
 async function checkVersionPage(all: readonly Exchange[], expected: U1Expected): Promise<CheckResult> {
 	const title = "READ VERSION PAGE parts 0, 1, and 2 return 180 bytes that hash to the catalog's version block";
 	const hashes: string[] = [];
-	for (let i = 0; i + 2 < all.length; i++) {
-		const parts = [all[i]!, all[i + 1]!, all[i + 2]!];
-		if (!parts.every((e, part) => e.cmd === 0x12 && e.sub === READ_VERSION_PAGE_FIRST + part && e.reply !== null)) continue;
+	for (let i = 0; i + 3 <= all.length; i++) {
+		const parts = all.slice(i, i + 3).filter(answered);
+		if (parts.length !== 3 || !parts.every((e, part) => e.cmd === 0x12 && e.sub === READ_VERSION_PAGE_FIRST + part)) continue;
 		const page = new Uint8Array(180);
-		parts.forEach((e, part) => page.set(e.reply!.subarray(PAYLOAD, PAYLOAD + 60), part * 60));
+		parts.forEach((e, part) => page.set(e.reply.subarray(PAYLOAD, PAYLOAD + 60), part * 60));
 		hashes.push(await sha256(page));
 	}
 	const seen = [...new Set(hashes)];
@@ -221,8 +224,10 @@ async function checkVersionPage(all: readonly Exchange[], expected: U1Expected):
 
 function checkSum(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `SUM over [${hex(expected.fwOffset, 3)}, ${hex(expected.fwOffset, 3)} + ${expected.imageBytes}) returns ${hex(expected.imageSum32, 8)}`;
-	const sums = all.filter((e) => is(e, SUM) && e.reply !== null && view(e.request).getUint32(PAYLOAD, true) === expected.fwOffset && view(e.request).getUint32(PAYLOAD + 4, true) === expected.imageBytes);
-	const seen = [...new Set(sums.map((e) => view(e.reply!).getUint32(PAYLOAD, true)))];
+	const sums = all
+		.filter(answered)
+		.filter((e) => is(e, SUM) && view(e.request).getUint32(PAYLOAD, true) === expected.fwOffset && view(e.request).getUint32(PAYLOAD + 4, true) === expected.imageBytes);
+	const seen = [...new Set(sums.map((e) => view(e.reply).getUint32(PAYLOAD, true)))];
 	return { id: 7, title, pass: sums.length > 0 && seen.length === 1 && seen[0] === expected.imageSum32, detail: sums.length === 0 ? "no SUM over the image range answered" : seen.map((n) => hex(n, 8)).join(", ") };
 }
 
@@ -239,36 +244,46 @@ function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, bo
 
 function checkProbes(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	const title = `${expected.probes} READ MODE probes in a row in each mode, every answer within ${expected.maxProbeGapMs} ms of the last`;
-	const runs: Record<Mode, { length: number; maxGap: number; slowest: number; answered: boolean }> = {
+	interface Run {
+		readonly length: number;
+		readonly maxGap: number;
+		readonly slowest: number;
+		readonly answered: boolean;
+	}
+	const best: Record<Mode, Run> = {
 		app: { length: 0, maxGap: 0, slowest: 0, answered: true },
 		iap: { length: 0, maxGap: 0, slowest: 0, answered: true },
 	};
-	let i = 0;
-	while (i < all.length) {
-		const start = all[i]!;
-		if (!is(start, READ_MODE) || start.mode === null) {
-			i++;
-			continue;
-		}
-		let end = i;
-		while (end < all.length && is(all[end]!, READ_MODE) && all[end]!.mode === start.mode) end++;
-		const run = all.slice(i, end);
-		const best = runs[start.mode];
-		if (run.length > best.length) {
-			let maxGap = 0;
-			let slowest = 0;
-			for (let k = 0; k < run.length; k++) {
-				const e = run[k]!;
-				if (e.replyT !== null) slowest = Math.max(slowest, e.replyT - e.t);
-				const previous = run[k - 1];
-				if (previous?.replyT != null && e.replyT !== null) maxGap = Math.max(maxGap, e.replyT - previous.replyT);
+	const consider = (run: readonly Exchange[]) => {
+		const first = run[0];
+		if (first === undefined || first.mode === null || run.length <= best[first.mode].length) return;
+		let maxGap = 0;
+		let slowest = 0;
+		let previous: number | null = null;
+		for (const e of run) {
+			if (e.replyT === null) {
+				previous = null;
+				continue;
 			}
-			runs[start.mode] = { length: run.length, maxGap, slowest, answered: run.every((e) => e.reply !== null) };
+			slowest = Math.max(slowest, e.replyT - e.t);
+			if (previous !== null) maxGap = Math.max(maxGap, e.replyT - previous);
+			previous = e.replyT;
 		}
-		i = end;
+		best[first.mode] = { length: run.length, maxGap, slowest, answered: run.every(answered) };
+	};
+	let run: Exchange[] = [];
+	for (const e of all) {
+		const probe = is(e, READ_MODE) && e.mode !== null;
+		if (!probe || (run.length > 0 && run[0]?.mode !== e.mode)) {
+			consider(run);
+			run = [];
+		}
+		if (probe) run.push(e);
 	}
-	const ok = (mode: Mode) => runs[mode].length >= expected.probes && runs[mode].answered && runs[mode].maxGap <= expected.maxProbeGapMs;
-	const describe = (mode: Mode) => `${mode === "app" ? "normal" : "update"} mode: ${runs[mode].length} in a row, ${runs[mode].answered ? "all answered" : "some unanswered"}, longest gap ${Math.round(runs[mode].maxGap)} ms, slowest answer ${Math.round(runs[mode].slowest)} ms`;
+	consider(run);
+	const ok = (mode: Mode) => best[mode].length >= expected.probes && best[mode].answered && best[mode].maxGap <= expected.maxProbeGapMs;
+	const describe = (mode: Mode) =>
+		`${mode === "app" ? "normal" : "update"} mode: ${best[mode].length} in a row, ${best[mode].answered ? "all answered" : "some unanswered"}, longest gap ${Math.round(best[mode].maxGap)} ms, slowest answer ${Math.round(best[mode].slowest)} ms`;
 	return { id: 9, title, pass: ok("app") && ok("iap"), detail: `${describe("app")}; ${describe("iap")}` };
 }
 
