@@ -166,6 +166,7 @@ export interface FlashOptions {
  *         iap / "exit-to-app":          verified = true; session = await leaveUpdateMode(obs.session, ctx)
  *                                       null (confirm skipped) -> finished(official, confirmedInNormalMode: false)
  *                                       otherwise loop: the next observation in normal mode returns "done"
+ *     catch IapAttachFailed: close its link, then handle its cause as below (no observation exists to decide a reset)
  *     catch LinkLost or LinkTimeout: events.push(lost or timeout at clock.now()); session = null
  *                                    attempts = zero per step              a drop is not a failed attempt
  *                                    ++losses > MAX_LINK_LOSSES -> stopped(too-many-link-losses); progress(link-lost); continue

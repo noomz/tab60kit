@@ -134,7 +134,8 @@ export function report(chip: ChipState): ChipReport {
 /**
  * Connect, or reuse the open session, and observe. Read-only.
  * TODO: session = start ?? connect(ctx, { modes: ["app", "iap"], reason: "connect" }). Both modes, because a board
- * left in update mode by an interrupted flash must show up here and offer to finish it. Observe, finish.
+ * left in update mode by an interrupted flash must show up here and offer to finish it. Observe, finish. An
+ * update-mode attach that throws arrives as IapAttachFailed with its link still open, so restartToApp or close it.
  */
 export const quickCheck: Job = async (start, ctx) => {
 	return notImplemented(`quickCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
@@ -148,6 +149,7 @@ export const quickCheck: Job = async (start, ctx) => {
  *   if app: session = obs.session.enterIap(ctx); obs = observe(session)
  *   if bootTarget(obs.chip) is "normal-mode" or "boots-unchecked-image": leaveUpdateMode(session, ctx)
  *   otherwise stay in update mode and finish: the report says a flash is needed before the board can type
+ *   connect and enterIap can both reject IapAttachFailed, whose open link must be restarted or closed
  */
 export const deepCheck: Job = async (start, ctx) => {
 	return notImplemented(`deepCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
