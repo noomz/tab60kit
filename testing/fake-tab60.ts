@@ -39,6 +39,11 @@ export interface FakeOptions {
 	readonly fwInfo?: number;
 	/** The 180-byte version block a starting state with a page holds. Default: `versionBlock()`. */
 	readonly versionBlock?: Uint8Array;
+	/**
+	 * How long after a reset the board enumerates again. A real board takes about a second, long after a chooser
+	 * opened by the same click is on screen; a few milliseconds keep that order without slowing tests.
+	 */
+	readonly reenumerateAfterMs?: number;
 }
 
 export type Violation =
@@ -266,7 +271,7 @@ export class FakeTab60 {
 		const index = this.#packets++;
 		if (this.options.loseLinkAtPacket === index) {
 			this.#detachAll();
-			if (this.options.resetOnLoss) this.#enumerate(this.#bootMode());
+			if (this.options.resetOnLoss) this.#reset(this.#bootMode());
 			return;
 		}
 		queueMicrotask(() => this.#handle(socket, bytes));
@@ -348,7 +353,7 @@ export class FakeTab60 {
 
 	#reset(into: Mode): void {
 		this.#detachAll();
-		this.#enumerate(into);
+		setTimeout(() => this.#enumerate(into), this.options.reenumerateAfterMs ?? 2);
 	}
 
 	#detachAll(): void {

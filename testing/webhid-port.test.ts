@@ -69,7 +69,7 @@ test("a chooser that closes empty parks a pick instead of failing, and the click
 	await new Promise((resolve) => setTimeout(resolve, 0));
 	expect(chooser.needsClick).toEqual(IAP);
 	resetBoard();
-	await new Promise((resolve) => setTimeout(resolve, 0));
+	await new Promise((resolve) => setTimeout(resolve, 10));
 	chooser.pick();
 	expect((await opening).mode).toBe("iap");
 	expect(picks(events)).toEqual(["activation:none", "parked:1304"]);

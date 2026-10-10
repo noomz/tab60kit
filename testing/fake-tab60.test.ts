@@ -15,7 +15,7 @@ function tap(board: FakeTab60) {
 	const ask = async (hex: string) => {
 		const before = reports.length;
 		plug.send(frame(hex));
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 5));
 		return reports.slice(before);
 	};
 	return { ask, reports, detached: () => detached };

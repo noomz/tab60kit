@@ -1,13 +1,12 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { PAGES, build, toolCommit } from "../scripts/build";
 
 const out = mkdtempSync(join(tmpdir(), "tab60kit-build-"));
 afterAll(() => rmSync(out, { recursive: true, force: true }));
-const build = Bun.spawnSync([process.execPath, join(import.meta.dir, "../scripts/build.ts"), out]);
-if (build.exitCode !== 0) throw new Error(`scripts/build.ts failed:\n${build.stderr}`);
-const dist = join(out, "dist");
+await build(out);
 
 async function parse(html: string) {
 	let order = 0;
@@ -43,8 +42,6 @@ async function parse(html: string) {
 	return { policies, scripts, inline };
 }
 
-const page = await parse(readFileSync(join(dist, "index.html"), "utf8"));
-
 const directives = (policy: string) =>
 	Object.fromEntries(
 		policy
@@ -54,27 +51,41 @@ const directives = (policy: string) =>
 			.map(([name = "", ...sources]) => [name.toLowerCase(), sources]),
 	);
 
-test("the built index.html has one CSP in <head> with exactly the reviewed directives", () => {
-	expect(page.policies).toHaveLength(1);
-	expect(directives(page.policies[0]!.content)).toEqual({
-		"default-src": ["'self'"],
-		"connect-src": ["'none'"],
-		"script-src": ["'self'"],
-		"object-src": ["'none'"],
-		"base-uri": ["'none'"],
+for (const { html, outdir } of PAGES) {
+	const dist = join(out, outdir);
+	const built = join(dist, basename(html));
+	const page = await parse(readFileSync(built, "utf8"));
+
+	describe(`${outdir}/${basename(html)}`, () => {
+		test("has one CSP in <head> with exactly the reviewed directives", () => {
+			expect(page.policies).toHaveLength(1);
+			expect(directives(page.policies[0]!.content)).toEqual({
+				"default-src": ["'self'"],
+				"connect-src": ["'none'"],
+				"script-src": ["'self'"],
+				"object-src": ["'none'"],
+				"base-uri": ["'none'"],
+			});
+		});
+
+		test("every script has a src that the build wrote, no inline body, and comes after the CSP", () => {
+			expect(page.scripts.length).toBeGreaterThan(0);
+			for (const script of page.scripts) {
+				expect(script.src).not.toBeNull();
+				expect(existsSync(join(dist, script.src!))).toBe(true);
+				expect(script.text.trim()).toBe("");
+				expect(script.order).toBeGreaterThan(page.policies[0]!.order);
+			}
+		});
+
+		test("has no inline style or inline event handler", () => {
+			expect(page.inline).toEqual([]);
+		});
 	});
-});
+}
 
-test("every script has a src that the build wrote, no inline body, and comes after the CSP", () => {
-	expect(page.scripts.length).toBeGreaterThan(0);
-	for (const script of page.scripts) {
-		expect(script.src).not.toBeNull();
-		expect(existsSync(join(dist, script.src!))).toBe(true);
-		expect(script.text.trim()).toBe("");
-		expect(script.order).toBeGreaterThan(page.policies[0]!.order);
-	}
-});
-
-test("the page has no inline style or inline event handler", () => {
-	expect(page.inline).toEqual([]);
+test("the lab page carries the commit it was built from", () => {
+	const bundle = readFileSync(join(out, "dist-lab", "u1.js"), "utf8");
+	expect(bundle).not.toContain("TAB60KIT_COMMIT");
+	expect(bundle).toContain(JSON.stringify(toolCommit()));
 });
