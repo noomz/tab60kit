@@ -185,6 +185,9 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 
 // R1 "Packet framing": a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
 const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub" } as const;
+check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
+	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),
+);
 check("registry: each row's payload is exactly its address fields", () =>
 	assert.deepEqual(
 		COMMAND_NAMES.filter((name) => {
@@ -277,5 +280,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 7 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

@@ -129,7 +129,8 @@ export const COMMANDS = {
 		modes: ["app", "iap"],
 		effect: "read",
 		reply: "echo",
-		timeoutMs: 500,
+		/** WRITE_LINK_RULE.maxProbeGapMs, so plan check 9 can record and judge an answer slower than 500 ms instead of a timeout. */
+		timeoutMs: 1_000,
 		address: "none",
 		payloadBytes: 0,
 		unlocks: null,

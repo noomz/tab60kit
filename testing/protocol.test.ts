@@ -88,7 +88,7 @@ test("discardPending runs before every send, and a reset is never waited on", as
 	const port = new ScriptedPort([app, new ScriptedLink("iap", iapAttach())]);
 	const session = await connect(ctx(port), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	expect(app.calls).toEqual(["discardPending", "send", "next(500)", "discardPending", "send", "next(500)"]);
+	expect(app.calls).toEqual(["discardPending", "send", "next(1000)", "discardPending", "send", "next(500)"]);
 	await session.enterIap(ctx(port));
 	expect(app.calls.slice(6)).toEqual(["discardPending", "send", "close"]);
 });
@@ -104,9 +104,9 @@ test("a late reply to an earlier request is dropped", async () => {
 test("silence past the command's timeout is a LinkTimeout, measured on the port's clock", async () => {
 	let t = 0;
 	const app = new ScriptedLink("app", [pageReply(2), pageReply(2), pageReply(2)]);
-	const port = new ScriptedPort([app], scriptedClock(() => (t += 600)));
+	const port = new ScriptedPort([app], scriptedClock(() => (t += 1_100)));
 	await expect(connect(ctx(port), { modes: ["app"], reason: "connect" })).rejects.toBeInstanceOf(LinkTimeout);
-	expect(app.calls.filter((call) => call.startsWith("next"))).toEqual(["next(500)"]);
+	expect(app.calls.filter((call) => call.startsWith("next"))).toEqual(["next(1000)"]);
 	expect(app.closed).toBe(1);
 });
 
