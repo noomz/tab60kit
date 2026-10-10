@@ -44,6 +44,8 @@ export interface U1Verdict {
 
 interface Exchange {
 	readonly mode: Mode | null;
+	/** How many links had opened before this exchange, so exchanges on one link share a number. */
+	readonly link: number;
 	readonly t: number;
 	readonly cmd: number;
 	readonly sub: number;
@@ -93,6 +95,7 @@ const modeOf = (productId: number, expected: U1Expected): Mode | null =>
 function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, findings: string[]): Exchange[] {
 	const out: Exchange[] = [];
 	let mode: Mode | null = null;
+	let link = 0;
 	let open: Exchange | null = null;
 	let stale = 0;
 	let losses = 0;
@@ -101,13 +104,14 @@ function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, fi
 	for (const entry of entries) {
 		if (entry.kind === "opened") {
 			mode = modeOf(entry.productId, expected);
+			link++;
 			afterReset = false;
 		}
 		if (entry.kind === "lost" && !afterReset) losses++;
 		if (entry.kind === "out") {
 			if (open !== null) out.push(open);
 			const request = fromHex(entry.hex);
-			open = { mode, t: entry.t, cmd: request[0] ?? 0, sub: request[1] ?? 0, request, reply: null, replyT: null };
+			open = { mode, link, t: entry.t, cmd: request[0] ?? 0, sub: request[1] ?? 0, request, reply: null, replyT: null };
 			afterReset = is(open, RESET_TO_IAP) || is(open, RESET_TO_APP);
 		}
 		if (entry.kind === "in") {
@@ -299,7 +303,7 @@ function checkProbes(all: readonly Exchange[], expected: U1Expected): CheckResul
 	let run: Exchange[] = [];
 	for (const e of all) {
 		const probe = is(e, READ_MODE) && e.mode !== null;
-		if (!probe || (run.length > 0 && run[0]?.mode !== e.mode)) {
+		if (!probe || (run.length > 0 && run[0]?.link !== e.link)) {
 			consider(run);
 			run = [];
 		}

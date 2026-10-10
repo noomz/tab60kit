@@ -390,6 +390,18 @@ test("Try again after a mid-phase timeout opens the device again and finishes th
 	expect(r.hid.openHandles).toBe(0);
 }, 10_000);
 
+test("check 9 judges each link's probes apart, so Connect, a pause, Connect again, and Deep check still pass it", async () => {
+	const r = rig();
+	const first = await u1Run("connect", IDLE, r.ctx());
+	await sleep(1_100);
+	const second = await u1Run("connect", phaseAfterRun(r.entries, first), r.ctx());
+	const end = await u1Run("deep-check", phaseAfterRun(r.entries, second), r.ctx());
+	if (end.kind === "connected") await end.app.close();
+	const expected = { ...U1_EXPECTED, probes: PROBES, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
+	const transcript: Transcript = { format: "tab60kit-transcript/1", recordedAt: "2026-10-10T00:00:00.000Z", environment: { fake: "plain" }, entries: r.entries };
+	expect((await evaluateU1(transcript, { expected, typing: "types" })).checks[8]).toMatchObject({ id: 9, pass: true });
+});
+
 test("the audit refuses junk in bytes 2..63 of the U1 frames", () => {
 	const ctx = (mode: "app" | "iap"): EgressContext => ({ mode, window: null, cursor: null, cleared: (name) => clears(u1Clearance(), name) });
 	const frame = (hex: string) => fromHex(hex.padEnd(128, "0").slice(0, 128));
