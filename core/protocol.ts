@@ -79,19 +79,12 @@ export interface CommandSpec {
 }
 
 const UNREVIEWED = { level: "unreviewed" } as const;
-
-/**
- * The user's G1 lift for plan unit U1 ("Allow U1", design trail decision log, 2026-10-09; design.md open question 2):
- * the seven rows a bootloader round trip and a read-only deep check need. Nine wire commands, because the
- * version-page parts count separately. No erase, write, CRC, or config row.
- */
 const REVIEWED_FOR_U1 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-09" } as const;
 
 /**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
- * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. The seven U1 rows are
- * reviewed; every other row is unreviewed, so G1 forbids it until the user reviews it and a lab session captures
- * it (docs/units.md U7, U10, U11).
+ * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. G1 forbids a row until
+ * the user reviews it and a lab session captures it (docs/units.md U1, U7, U10, U11).
  */
 export const COMMANDS = {
 	readBlInfo: {
@@ -494,18 +487,15 @@ interface Request {
 }
 
 /**
- * Request bytes 2..3. pok3rtool sends 0x0000 (R1 "Packet framing", VERIFIED in its source) and works on sibling
- * CYKB bootloaders, and the app echoes the field and never checks it (R4 "Key concepts"). What the vendor updater
- * sends there is unread, and nobody will read it for U1. Reply bytes 2..3 play no part in matching a reply: the
- * transcript keeps them, and tools/u1-verdict.ts reports a nonzero value as a finding.
+ * The crc16 field, request bytes 2..3 (R1 "Packet framing"). pok3rtool sends 0x0000, VERIFIED in its source, and
+ * works on sibling CYKB bootloaders; the app echoes the field and never checks it (R4 "Key concepts"). What the
+ * vendor updater sends there is unread, and nobody will read it for U1. In a reply the field plays no part in
+ * matching: the transcript keeps it, and tools/u1-verdict.ts reports a nonzero value as a finding.
  */
-const REQUEST_BYTES_2_3 = 0x0000;
+const CRC16_FIELD = 0x0000;
 
-/** The payload starts at byte 4 of a 64-byte report, so it holds at most 60 bytes (R1 "Packet framing"). */
 const PAYLOAD_OFFSET = 4;
 const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
-
-/** The error marker in reply bytes 0..1 (R1, R4): FF AA, with a u16 detail at bytes 4..5. */
 const ERROR_MARKER = [0xff, 0xaa] as const;
 
 const viewOf = (report: Uint8Array) => new DataView(report.buffer, report.byteOffset, report.byteLength);
@@ -535,18 +525,13 @@ function encode(name: CommandName, request: Request): Uint8Array {
 	const view = new DataView(frame.buffer);
 	view.setUint8(0, spec.cmd);
 	view.setUint8(1, sub);
-	view.setUint16(2, REQUEST_BYTES_2_3, true);
+	view.setUint16(2, CRC16_FIELD, true);
 	frame.set(payload, PAYLOAD_OFFSET);
 	return frame;
 }
 
 type ReplyVerdict = { readonly kind: "ack" } | { readonly kind: "refused"; readonly detail: number } | { readonly kind: "stale" };
 
-/**
- * Pairs one incoming report with the frame just sent (R1 "Packet framing", reply). An echo of bytes 0..1 is the
- * answer; FF AA is a refusal with its u16 detail; a WRITE is answered by 1E 02 and the next offset, which must be
- * the cursor the audit predicted. Anything else is a late reply to an earlier request. Bytes 2..3 take no part.
- */
 function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cursor: number | null): ReplyVerdict {
 	const view = viewOf(reply);
 	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) return { kind: "refused", detail: view.getUint16(4, true) };
@@ -558,15 +543,9 @@ function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cur
 	return reply[0] === sent[0] && reply[1] === sent[1] ? { kind: "ack" } : { kind: "stale" };
 }
 
-/** Commands the board answers by resetting instead of replying. Derived from the registry, so the types know which calls return null. */
 type SilentCommand = { [K in CommandName]: (typeof COMMANDS)[K]["reply"] extends "none" ? K : never }[CommandName];
 
-/**
- * The single path from the core to the wire. Encodes, audits, sends, and pairs the reply. G1 refuses with
- * NotCleared and any other audit refusal is a core bug; in both cases nothing was sent. `discardPending` runs before
- * the send so a late reply to a timed-out request cannot pair with this one, and late replies that still arrive are
- * dropped until the command's timeout passes.
- */
+/** The single path from the core to the wire. */
 function transmit(ch: Channel, name: SilentCommand, request: Request): Promise<null>;
 function transmit(ch: Channel, name: Exclude<CommandName, SilentCommand>, request: Request): Promise<InReport>;
 async function transmit(ch: Channel, name: CommandName, request: Request): Promise<InReport | null> {
@@ -604,7 +583,6 @@ async function transmit(ch: Channel, name: CommandName, request: Request): Promi
 	}
 }
 
-/** u32 offset at payload byte 0 and u32 length at byte 4, little-endian (R1 "Commands"). */
 function rangePayload(span: Span): Uint8Array {
 	const payload = new Uint8Array(8);
 	const view = new DataView(payload.buffer);
@@ -622,7 +600,7 @@ async function readModeByte(ch: Channel): Promise<number> {
 	return viewOf(await transmit(ch, "readMode", {})).getUint8(PAYLOAD_OFFSET);
 }
 
-/** READ MODE answered the other mode's byte on a link whose product ID said this one. */
+/** READ MODE answered a byte other than the mode byte of the link that carried it. */
 export class ModeDisagrees extends Error {
 	override readonly name = "ModeDisagrees";
 	constructor(
@@ -652,7 +630,6 @@ async function readVersionPage(ch: Channel): Promise<VersionPageRead> {
 	return { bytes };
 }
 
-/** RESET to app, then the link is done. Safe whatever the board holds: the IAP boots only a version page that carries its magic. */
 async function restartToApp(ch: Channel): Promise<void> {
 	await transmit(ch, "resetToApp", {});
 	await ch.link.close();
@@ -744,9 +721,9 @@ export interface IapSession {
 export type Session = AppSession | IapSession;
 
 /**
- * A board that attach refused, with its link still open so the caller can send it home. Only an update-mode link
- * offers `restartToApp`: RESET to app is safe whatever the board holds, because the IAP boots only a version page
- * that carries its magic, and without it a refused board stays in update mode, where the keyboard cannot type.
+ * A board that attach refused, with its link still open so the caller can send it home. RESET to app does what the
+ * board's next power cycle would do, because the IAP boots the app only over a version page with its magic (R1,
+ * INFERRED), and without it a refused board stays in update mode, where the keyboard cannot type.
  */
 export interface AppRefused {
 	readonly mode: "app";
@@ -758,7 +735,6 @@ export interface AppRefused {
 export interface IapRefused {
 	readonly mode: "iap";
 	readonly refusal: LayoutRefusal;
-	/** Sends RESET to app through the audited path, under the kit's clearance, then closes. */
 	restartToApp(): Promise<void>;
 	close(): Promise<void>;
 }
@@ -793,7 +769,6 @@ class App implements AppSession {
 			await this.close();
 			iapLink = await opening;
 		} catch (error) {
-			// The open is still pending, and nobody will await it now: swallow its rejection so it cannot surface as an unhandled one.
 			opening.catch(() => undefined);
 			throw error;
 		}
@@ -851,11 +826,6 @@ class Iap implements IapSession {
 	}
 }
 
-/**
- * Proves the board is the one this tool knows: READ MODE must agree with the product ID, BL info must match
- * EXPECTED_LAYOUT, and in update mode FW INFO must agree with BL info. A refused board never receives an addressed
- * command, because the window stays null until every check passed.
- */
 async function inspect(ch: Channel): Promise<{ readonly info: BlInfo; readonly window: FlashWindow } | LayoutRefusal> {
 	const { mode } = ch.link;
 	const modeByte = await readModeByte(ch);
@@ -875,7 +845,6 @@ function refused(ch: Channel, refusal: LayoutRefusal): Refused {
 		: { mode: "app", refusal, restartToApp: null, close };
 }
 
-/** A link to a typed session, or a Refused that keeps the link. A link that throws during the checks is closed. */
 function attach(link: Link, ctx: LinkContext, as: "app"): Promise<AppSession | AppRefused>;
 function attach(link: Link, ctx: LinkContext, as: "iap"): Promise<IapSession | IapRefused>;
 function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session | Refused>;
@@ -897,15 +866,14 @@ async function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session |
 	return link.mode === "app" ? new App(ch, seen.info, seen.window) : new Iap(ch, seen.info, seen.window);
 }
 
-/** A want for exactly one mode, so `connect` can promise a session of that mode. */
-interface WantIn<M extends Mode> {
+interface SingleModeWant<M extends Mode> {
 	readonly modes: readonly [M];
 	readonly reason: WantReason;
 }
 
 /** Opens a link for `want`, then proves the board is the one this tool knows before returning a typed session. */
-export function connect(ctx: LinkContext, want: WantIn<"app">): Promise<AppSession | AppRefused>;
-export function connect(ctx: LinkContext, want: WantIn<"iap">): Promise<IapSession | IapRefused>;
+export function connect(ctx: LinkContext, want: SingleModeWant<"app">): Promise<AppSession | AppRefused>;
+export function connect(ctx: LinkContext, want: SingleModeWant<"iap">): Promise<IapSession | IapRefused>;
 export function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | Refused>;
 export async function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | Refused> {
 	const link = await ctx.port.open(want, ctx.signal);

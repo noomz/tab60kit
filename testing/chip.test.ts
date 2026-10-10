@@ -4,12 +4,12 @@ import { CATALOG } from "../core/firmware";
 import type { Activity } from "../core/job";
 import { PickCancelled } from "../core/port";
 import { connect, labClearance } from "../core/protocol";
-import { BL_INFO_HEX, VERSION_PAGE_HEX } from "./fixtures";
+import { BL_INFO_HEX, SYNTHETIC_VERSION_PAGE_HEX } from "./fixtures";
 import { ScriptedLink, ScriptedPort, fromHex, report, toHex } from "./scripted";
 
 const clearance = labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "chip test");
 const entry = CATALOG[0]!;
-const page = fromHex(VERSION_PAGE_HEX);
+const page = fromHex(SYNTHETIC_VERSION_PAGE_HEX);
 const pageReplies = (bytes: Uint8Array) => [0, 1, 2].map((part) => report(`122${part}0000` + toHex(bytes.subarray(part * 60, part * 60 + 60))));
 const sumReply = (sum: number) => report("1d010000" + toHex(fromHex(sum.toString(16).padStart(8, "0")).reverse()));
 const ctx = (port: ScriptedPort, progress: Activity[] = []) => ({

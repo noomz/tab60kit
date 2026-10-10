@@ -43,7 +43,6 @@ export type LayoutRefusal =
 
 declare const windowBrand: unique symbol;
 
-/** The 52 bytes the board fills; READ BL INFO zero-fills the 60-byte payload past them (R4 0x7650). */
 const BL_INFO_BYTES = 52;
 
 /**
@@ -70,7 +69,6 @@ export interface Span {
 	readonly length: number;
 }
 
-/** The one place an absolute flash address is made. */
 function addr(n: number): FlashAddr {
 	if (!Number.isInteger(n) || n < 0 || n > 0x20000) throw new RangeError(`not a flash address: ${n}`);
 	return n as FlashAddr;
@@ -82,8 +80,7 @@ function windowOffset(n: number): WindowOffset {
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-/** The printable ASCII prefix of a fixed field: "KB0282" in ten bytes, the rest 0x00 or 0xFF. */
-function ascii(bytes: Uint8Array): string {
+function printablePrefix(bytes: Uint8Array): string {
 	let out = "";
 	for (const b of bytes) {
 		if (b < 0x20 || b > 0x7e) break;
@@ -102,16 +99,13 @@ export function parseBlInfo(payload: Uint8Array): BlInfo | LayoutRefusal {
 		fwOffset: view.getUint16(0x20, true),
 		fwPages: view.getUint16(0x22, true),
 		pageSize: view.getUint16(0x24, true),
-		model: ascii(payload.subarray(0x26, 0x30)),
+		model: printablePrefix(payload.subarray(0x26, 0x30)),
 		identityHex: hex(payload.subarray(4, 20)),
 		raw: payload.slice(0, BL_INFO_BYTES),
 	};
 }
 
-/**
- * Builds the window, or refuses the board. `fwInfoOffset` is READ FW INFO's u32 in update mode and null in normal
- * mode: the vendor updater takes its write address from FW INFO and pok3rtool from BL info, so both must agree.
- */
+/** Builds the window, or refuses the board. `fwInfoOffset` is READ FW INFO's u32 in update mode and null in normal mode. */
 export function windowFor(info: BlInfo, fwInfoOffset: number | null): FlashWindow | LayoutRefusal {
 	if (info.identityHex !== EXPECTED_LAYOUT.identityHex) return { code: "identity-mismatch", got: info.identityHex };
 	for (const field of ["fwOffset", "pageSize", "fwPages"] as const) {

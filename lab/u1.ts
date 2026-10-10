@@ -1,25 +1,12 @@
-/**
- * Plan unit U1's page: the first output reports tab60kit sends to this board. Not shipped. It lives outside both
- * package entries, and probes/boundaries.ts keeps web/ from importing it or the core internals it uses.
- *
- * Precondition, held by labClearance and by review: the user reviewed the seven rows and a commit moved them to
- * "reviewed". The page then sends exactly these commands, whatever any code path asks for; the egress audit refuses
- * the rest. The transcript this page saves is the capture that moves the rows to "confirmed".
- *
- * ?fake runs the page over the fake board and fake WebHID instead of navigator.hid, so the flow can be clicked
- * through without a board: ?fake=parked makes the open chooser miss the bootloader row, ?fake=cancel closes every
- * chooser, and ?fake=deaf makes the bootloader ignore frames until Try again.
- */
 import { LinkTimeout, PickCancelled } from "../core/port";
 import type { AppSession, Refused } from "../core/protocol";
 import { FakeTab60 } from "../testing/fake-tab60";
 import { FakeHid, FakeLocks } from "../testing/fake-webhid";
 import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
 import { startWebHidLab } from "../web/webhid-port";
-import { U1_EXPECTED, evaluateU1 } from "./u1-checks";
-import { type DeepCheckEnd, type U1Context, U1_PROBES, U1_ROWS, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "./u1-job";
+import { evaluateU1 } from "./u1-checks";
+import { type DeepCheckEnd, type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "./u1-job";
 
-/** Decision 11: what to do when the bootloader answers nothing. One constant, rendered as is. */
 export const NO_ANSWER_RECOVERY = [
 	"No answer in update mode. The bootloader may be ignoring our frames: bytes 2..3 carry 0x0000, pok3rtool's value, and the vendor updater's value is unread.",
 	"Try again reuses the device the chooser already granted.",
@@ -37,7 +24,18 @@ type Phase =
 	| { readonly kind: "no-answer" }
 	| { readonly kind: "failed" };
 
-const fakeMode = new URLSearchParams(location.search).get("fake");
+type FakeMode = "plain" | "parked" | "cancel" | "deaf";
+const FAKE_MODES: readonly string[] = ["plain", "parked", "cancel", "deaf"] satisfies readonly FakeMode[];
+const isFakeMode = (value: string): value is FakeMode => FAKE_MODES.includes(value);
+
+/** null for the real WebHID; "plain" for ?fake with no value; a string outside FakeMode stops the page. */
+function fakeModeOf(search: string): FakeMode | null | string {
+	const value = new URLSearchParams(search).get("fake");
+	if (value === null) return null;
+	if (value === "") return "plain";
+	return value;
+}
+const fakeMode = fakeModeOf(location.search);
 
 function element<T extends HTMLElement>(id: string, type: new () => T): T {
 	const found = document.getElementById(id);
@@ -69,16 +67,20 @@ function log(line: string): void {
 	ui.log.textContent += `${(now() / 1000).toFixed(3)}s ${line}\n`;
 }
 
-function hardware(): { readonly hid: HID; readonly locks: LockManager; readonly board: FakeTab60 | null } {
-	if (fakeMode === null) return { hid: navigator.hid, locks: navigator.locks, board: null };
+function hardware(mode: FakeMode | null): { readonly hid: HID; readonly locks: LockManager; readonly board: FakeTab60 | null } {
+	if (mode === null) return { hid: navigator.hid, locks: navigator.locks, board: null };
 	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 } });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: fakeMode !== "parked" });
-	if (fakeMode === "cancel") hid.chooser = "cancel";
-	if (fakeMode === "deaf") board.ignoreInIap = true;
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: mode !== "parked" });
+	if (mode === "cancel") hid.chooser = "cancel";
+	if (mode === "deaf") board.ignoreInIap = true;
 	return { hid, locks: new FakeLocks(), board };
 }
 
 function start(): void {
+	if (fakeMode !== null && !isFakeMode(fakeMode)) {
+		ui.clearance.textContent = `Unknown ?fake value "${fakeMode}". Use ?fake, ?fake=parked, ?fake=cancel, or ?fake=deaf.`;
+		return;
+	}
 	if (fakeMode === null && !("hid" in navigator)) {
 		ui.clearance.textContent = "Use Chrome or Edge: this browser has no WebHID.";
 		return;
@@ -92,7 +94,7 @@ function start(): void {
 	}
 	ui.clearance.textContent = `Lab clearance: ${U1_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : `Fake board (${fakeMode}).`}`;
 
-	const { hid, locks, board } = hardware();
+	const { hid, locks, board } = hardware(fakeMode);
 	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
 	const { port, chooser } = startWebHidLab(hid, locks, {
@@ -133,7 +135,7 @@ function start(): void {
 
 	const showVerdict = async () => {
 		if (entries.length === 0) return;
-		const verdict = await evaluateU1(transcript(), { boardTypes: ui.typing.value.length > 0 ? true : null });
+		const verdict = await evaluateU1(transcript(), { expected: U1_EXPECTED, typing: ui.typing.value.length > 0 ? "types" : "not-observed" });
 		const item = (text: string) => {
 			const li = document.createElement("li");
 			li.textContent = text;
@@ -169,6 +171,8 @@ function start(): void {
 				phase = failure(error);
 			} finally {
 				clearInterval(ticker);
+				// A run that failed inside enterIap may have left its update-mode open pending; the abort rejects it.
+				controller?.abort(new DOMException("the run ended", "AbortError"));
 				controller = null;
 				render();
 				await showVerdict();

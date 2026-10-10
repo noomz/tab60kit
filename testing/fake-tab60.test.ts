@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
-import { FakeTab60, type Socket, blInfoBlock, bytesSummingTo, versionBlock } from "./fake-tab60";
+import { FakeTab60, type Socket, bytesSummingTo, syntheticVersionBlock } from "./fake-tab60";
 import { BL_INFO_HEX } from "./fixtures";
 import { fromHex, toHex } from "./scripted";
 
 const target = { imageBytes: 34_268, wireSum32: 0xf3d3dbd2 };
 const frame = (hex: string) => fromHex(hex.padEnd(128, "0"));
 
-/** Plugs into the board and collects what comes back, one microtask later. */
 function tap(board: FakeTab60) {
 	const reports: string[] = [];
 	let detached = 0;
@@ -26,10 +25,9 @@ test("normal mode answers the reads R4 lists and echoes bytes 2..3", async () =>
 	const { ask } = tap(board);
 	expect(await ask("1202beef")).toEqual(["1202beef01".padEnd(128, "0")]);
 	expect(await ask("12000000")).toEqual(["12000000" + BL_INFO_HEX]);
-	expect(toHex(blInfoBlock())).toBe(BL_INFO_HEX.slice(0, 104));
 	let page = "";
 	for (const part of [0, 1, 2]) page += (await ask(`122${part}0000`))[0]?.slice(8) ?? "";
-	expect(page).toBe(toHex(versionBlock()));
+	expect(page).toBe(toHex(syntheticVersionBlock()));
 	expect((await ask("12270000"))[0]?.slice(0, 4)).toBe("1227");
 	expect(board.violations).toEqual([]);
 });

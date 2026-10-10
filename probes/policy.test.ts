@@ -126,11 +126,11 @@ check("shipped caps: each blocked line asks for review and a capture", () =>
 	assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")),
 );
 
-// G1 as maturity. A lab clearance built here by cast, so the cases below pick the maturity they test.
+// G1 as maturity.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
 const confirmed: Maturity = { level: "confirmed", by: "user", on: "2026-10-10", capture: "fixtures/u1-macos.json" };
 const unreviewed: Maturity = { level: "unreviewed" };
-const lab = { kind: "lab", only: ["readMode"], purpose: "test" } as unknown as Clearance;
+const lab = labClearance(["readMode"], "test");
 const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] = [
 	[SHIPPED, "readMode", unreviewed, false, "shipped, unreviewed"],
 	[SHIPPED, "readMode", reviewed, false, "shipped sends no merely reviewed row"],

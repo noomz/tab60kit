@@ -83,6 +83,7 @@ export interface Link {
 	discardPending(): void;
 	/** Settles once, when the OS reports the device gone. Pending `send` and `next` calls reject LinkLost at the same moment. */
 	readonly lost: Promise<void>;
+	/** Idempotent, and resolves on a lost link: the core closes links a reset has already killed. */
 	close(): Promise<void>;
 }
 
@@ -120,9 +121,8 @@ interface Waiter {
 }
 
 /**
- * The input half of a Link, shared by every shell so they agree on what `next`, `discardPending`, and a lost link
- * mean: reports queue in arrival order, `next` hands out the oldest or waits up to its timeout, and `end` rejects
- * every waiter, now and later, with the link's LinkLost.
+ * The input half of a Link: reports queue in arrival order, `next` hands out the oldest or waits up to its timeout,
+ * and `end` rejects every waiter, now and later, with the link's LinkLost.
  */
 export class ReportQueue {
 	readonly #queue: InReport[] = [];

@@ -1,9 +1,3 @@
-/**
- * WebHID as the shell sees it, over the fake board: a chooser the test or the lab page scripts, a device per
- * enumeration that comes and goes with the board's product ID, input reports as events, and the activation gate
- * requestDevice enforces. Browser-compatible on purpose (EventTarget, DOMException, nothing from Bun or Node): the
- * lab page runs it under ?fake so the flow can be clicked through without a board.
- */
 import type { Mode } from "../core/port";
 import { FakeTab60, type Plug } from "./fake-tab60";
 
@@ -13,17 +7,12 @@ const PRODUCT_NAME: Readonly<Record<Mode, string>> = { app: "USB-HID Keyboard", 
 
 const REPORT = { reportId: 0, items: [{ reportSize: 8, reportCount: 64 }] } as const;
 
-/** The vendor collection on interface 1: usage page 0xFF00, usage 1, 64-byte input and output reports (R1). */
 export const VENDOR_COLLECTION: HIDCollectionInfo = { usagePage: 0xff00, usage: 0x0001, inputReports: [REPORT], outputReports: [REPORT], featureReports: [] };
 
 export interface FakeHidOptions {
-	/** Whether a chooser that is already open lists the bootloader row when the board re-enumerates (R3 C7). */
 	readonly rowAppearsInOpenChooser: boolean;
-	/** Whether a user activation is live when requestDevice is called. Default: the real navigator's, or true outside a browser. */
 	readonly isActive?: () => boolean;
-	/** How many times device.open() fails with NotAllowedError before it succeeds. Infinity is Linux without the udev rule. */
 	readonly openFailures?: number;
-	/** The collections every device reports. Default: the vendor collection alone. */
 	readonly collections?: readonly HIDCollectionInfo[];
 }
 
@@ -45,8 +34,6 @@ class FakeInputReportEvent extends Event implements HIDInputReportEvent {
 		super("inputreport");
 	}
 }
-
-type Listener = EventListenerOrEventListenerObject | ((event: never) => void) | null;
 
 const defaultIsActive = (): boolean =>
 	typeof navigator !== "undefined" && "userActivation" in navigator ? navigator.userActivation.isActive : true;
@@ -74,20 +61,6 @@ export class FakeHidDevice extends EventTarget implements HIDDevice {
 		this.productName = PRODUCT_NAME[mode];
 		this.collections = options.collections ?? [VENDOR_COLLECTION];
 		this.#openFailuresLeft = options.openFailures ?? 0;
-	}
-
-	// A listener typed for one event narrows the DOM's EventListener, which the implements check rejects; the
-	// overloads give callers the typed form and hand EventTarget the general one.
-	override addEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
-	override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	override addEventListener(type: string, listener: Listener): void {
-		super.addEventListener(type, listener as EventListenerOrEventListenerObject | null);
-	}
-
-	override removeEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
-	override removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	override removeEventListener(type: string, listener: Listener): void {
-		super.removeEventListener(type, listener as EventListenerOrEventListenerObject | null);
 	}
 
 	async open(): Promise<void> {
@@ -118,7 +91,6 @@ export class FakeHidDevice extends EventTarget implements HIDDevice {
 		this.#plug.send(toBytes(data));
 	}
 
-	/** The OS lost the device: the board re-enumerated, or the cable came out. */
 	disconnect(): void {
 		this.connected = false;
 		this.opened = false;
@@ -133,7 +105,6 @@ interface OpenChooser {
 }
 
 export class FakeHid extends EventTarget implements HID {
-	/** The user's answer to each chooser: pick the matching row, or close it. Tests and the lab page flip it between picks. */
 	chooser: "pick" | "cancel" = "pick";
 	readonly #granted = new Set<FakeHidDevice>();
 	readonly #openChoosers: OpenChooser[] = [];
@@ -158,24 +129,10 @@ export class FakeHid extends EventTarget implements HID {
 		});
 	}
 
-	override addEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
-	override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	override addEventListener(type: string, listener: Listener): void {
-		super.addEventListener(type, listener as EventListenerOrEventListenerObject | null);
-	}
-
-	override removeEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
-	override removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	override removeEventListener(type: string, listener: Listener): void {
-		super.removeEventListener(type, listener as EventListenerOrEventListenerObject | null);
-	}
-
-	/** The device the board currently enumerates. */
 	get device(): FakeHidDevice {
 		return this.#device;
 	}
 
-	/** Grants the current device without a chooser, as a pick in an earlier session of the same connection would have. */
 	grant(): void {
 		this.#granted.add(this.#device);
 	}
@@ -215,7 +172,6 @@ export class FakeHid extends EventTarget implements HID {
 	}
 }
 
-/** Web Locks for tests and the fake lab page: one lock per name, `ifAvailable` honored, nothing shared across tabs. */
 export class FakeLocks implements LockManager {
 	readonly #held = new Set<string>();
 

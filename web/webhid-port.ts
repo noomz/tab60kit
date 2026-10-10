@@ -5,8 +5,7 @@
  *
  * The port never leaves this module. `startWebHid` builds it, hands it to a kit, and returns the kit and a Chooser,
  * so UI code holds neither a DevicePort nor a Link. `WebHidLink.send` is the page's only `sendReport` call, and it
- * accepts only frames the core's egress audit passed (OutReport). probes/boundaries.ts holds both rules, and a
- * third: only lab pages may call `startWebHidLab`, which hands the port itself out.
+ * accepts only frames the core's egress audit passed (OutReport). probes/boundaries.ts holds both rules.
  */
 import { type Kit, createKit } from "@tab60kit/core";
 import {
@@ -42,7 +41,6 @@ export interface Chooser {
 	readonly needsClick: DeviceWant | null;
 }
 
-/** One HID collection of an opened device, with its report sizes in bytes. */
 export interface CollectionReport {
 	readonly usagePage: number;
 	readonly usage: number;
@@ -51,7 +49,7 @@ export interface CollectionReport {
 	readonly featureReportBytes: number;
 }
 
-/** What the shell saw, for a lab page's transcript (docs/units.md U1 checks 1 and 2). The shipped page gets none. */
+/** What the shell saw, for a lab page's transcript. The shipped page gets none. */
 export type PortEvent =
 	/** One chooser: opened inside the click's activation, or from a parked pick's click. `productId` null means closed empty. */
 	| { readonly kind: "pick"; readonly reason: WantReason; readonly path: "activation" | "parked"; readonly productId: number | null; readonly waitMs: number }
@@ -73,13 +71,11 @@ export function startWebHid(hid: HID, locks: LockManager, lab?: LabSetup): { rea
 	return { kit: createKit(port, lab?.clearance), chooser: port.chooser() };
 }
 
-/** For lab pages that drive sessions themselves (docs/units.md U1): the port itself, instead of a kit. The page keeps its clearance. */
 export function startWebHidLab(hid: HID, locks: LockManager, setup: Pick<LabSetup, "wrap" | "onEvent">): { readonly port: DevicePort; readonly chooser: Chooser } {
 	const port = new WebHidPort(hid, locks, setup.wrap, setup.onEvent);
 	return { port, chooser: port.chooser() };
 }
 
-/** Which OS refused the device, from the user agent: Linux means the udev rule is missing (R3 O5). */
 export function osOf(userAgent: string): "linux" | "other" {
 	return /\bLinux\b/.test(userAgent) && !/\bAndroid\b/.test(userAgent) ? "linux" : "other";
 }
@@ -94,7 +90,7 @@ interface PendingPick {
 }
 
 const LOCK_NAME = "tab60kit:device";
-/** macOS can refuse the first open right after enumeration; a few retries cover it before the Linux diagnosis applies. */
+/** The U1 brief asks for a bounded retry of an open that fails right after enumeration, before the Linux diagnosis. Not yet seen on this board. */
 const OPEN_ATTEMPTS = 5;
 const OPEN_RETRY_MS = 200;
 const SEND_TIMEOUT_MS = 1_000;
@@ -121,6 +117,8 @@ const browserClock: Clock = {
 };
 
 const isSecurityError = (error: unknown): boolean => error instanceof DOMException && error.name === "SecurityError";
+const isInputReport = (event: Event): event is HIDInputReportEvent => "reportId" in event && "data" in event;
+const isConnectionEvent = (event: Event): event is HIDConnectionEvent => "device" in event;
 const message = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 const reportBytes = (reports: readonly HIDReportInfo[]): number =>
@@ -159,10 +157,7 @@ class WebHidPort implements DevicePort {
 		};
 	}
 
-	/**
-	 * Answers the parked pick from a click. A chooser closed with no device is a cancelled pick; a chooser that cannot
-	 * open at all rejects with the browser's error, so a page cannot loop on a click that never had an activation.
-	 */
+	/** A chooser that cannot open at all rejects with the browser's error, so a page cannot loop on a click that never had an activation. */
 	pick(): void {
 		const pending = this.#pending;
 		if (pending === null) return;
@@ -178,11 +173,9 @@ class WebHidPort implements DevicePort {
 	}
 
 	/**
-	 * A granted, connected device in one of `want.modes` is reused without a chooser; after any reset the new
-	 * connection has no grant (R3 C1, C3), so this finds only the current connection. Otherwise the chooser opens at
-	 * once when the click's activation is still live, and stays open to list the bootloader row when the board
-	 * re-enumerates (R3 C7). A chooser that closes with no device parks a pick instead of failing, because the row
-	 * may not have appeared yet; so does a call with no activation. The UI then shows the device prompt.
+	 * After any reset the new connection has no grant (R3 C1, C3), so `granted` finds only the current connection. A
+	 * chooser opened inside the click's activation stays open and lists the bootloader row when the board
+	 * re-enumerates (R3 C7).
 	 */
 	async open(want: DeviceWant, signal: AbortSignal): Promise<Link> {
 		signal.throwIfAborted();
@@ -246,7 +239,6 @@ class WebHidPort implements DevicePort {
 		});
 	}
 
-	/** Opens the device, a few tries, then requires the vendor collection. The link's mode comes from the product ID. */
 	async openDevice(device: HIDDevice, signal: AbortSignal): Promise<Link> {
 		const { productId } = device;
 		for (let attempt = 1; ; attempt++) {
@@ -270,7 +262,6 @@ class WebHidPort implements DevicePort {
 	}
 }
 
-/** One HIDDevice connection. Input reports with report ID 0 and 64 bytes queue in order; anything else is ignored. */
 class WebHidLink implements Link {
 	readonly #queue = new ReportQueue();
 	#ended: LinkLost | null = null;
@@ -296,14 +287,14 @@ class WebHidLink implements Link {
 		hid.addEventListener("disconnect", this.#onDisconnect);
 	}
 
-	readonly #onInput = (event: HIDInputReportEvent): void => {
-		if (event.reportId !== REPORT_ID || event.data.byteLength !== TAB60.reportBytes) return;
+	readonly #onInput = (event: Event): void => {
+		if (!isInputReport(event) || event.reportId !== REPORT_ID || event.data.byteLength !== TAB60.reportBytes) return;
 		const bytes = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
 		this.#queue.push(asInReport(Uint8Array.from(bytes)));
 	};
 
-	readonly #onDisconnect = (event: HIDConnectionEvent): void => {
-		if (event.device !== this.device) return;
+	readonly #onDisconnect = (event: Event): void => {
+		if (!isConnectionEvent(event) || event.device !== this.device) return;
 		this.#end(new LinkLost("the device disconnected"));
 		this.#settleLost();
 	};
@@ -316,7 +307,7 @@ class WebHidLink implements Link {
 		this.hid.removeEventListener("disconnect", this.#onDisconnect);
 	}
 
-	/** Always all 64 bytes: macOS and Linux pass a short report through short (R3). Raced against a timer, because a stale handle may hang. */
+	/** Raced against a timer, because a stale handle may hang and Chromium adds no HID timeout (R3 E2). */
 	async send(report: OutReport): Promise<void> {
 		if (this.#ended !== null) throw this.#ended;
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -341,7 +332,6 @@ class WebHidLink implements Link {
 		this.#queue.discardPending();
 	}
 
-	/** Idempotent, and resolves on a lost link: closing a gone device is not an error for the caller. */
 	async close(): Promise<void> {
 		const wasOpen = this.#ended === null;
 		this.#end(new LinkLost("the link was closed"));
@@ -349,7 +339,7 @@ class WebHidLink implements Link {
 		try {
 			await this.device.close();
 		} catch {
-			// The OS already dropped the device; there is nothing left to close.
+			// Chromium rejects only while an open or close is in progress or after forget(); the link is finished either way.
 		}
 	}
 }

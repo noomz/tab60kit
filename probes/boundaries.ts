@@ -53,9 +53,9 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 
 // Candidate B's rule: the fake board implements R1 and R4 from the documents with its own byte handling. Its import
 // closure may enter core/ only through the seam it implements, so a host codec bug cannot cancel out in the fake.
-{
-	const start = join(root, "testing/fake-tab60.ts");
-	const allowed = new Set(["core/port.ts", "core/units.ts"]);
+// The U1 verdict reads frames with its own hex parsing for the same reason.
+function independence(rule: string, from: string, allowed: readonly string[]): void {
+	const start = join(root, from);
 	const problems: string[] = [];
 	const seen = new Set<string>();
 	const queue: { readonly file: string; readonly chain: string }[] = [{ file: start, chain: at(start) }];
@@ -66,12 +66,14 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 		for (const { target } of importsOf(file)) {
 			const name = at(target);
 			if (name.startsWith("core/")) {
-				if (!allowed.has(name)) problems.push(`${chain} -> ${name}`);
+				if (!allowed.includes(name)) problems.push(`${chain} -> ${name}`);
 			} else queue.push({ file: target, chain: `${chain} -> ${name}` });
 		}
 	}
-	report("fake-board-independence", problems, "testing/fake-tab60.ts reaches core/ only through port.ts and units.ts");
+	report(rule, problems, `${from} reaches core/ only through ${allowed.map((name) => name.slice("core/".length)).join(", ")}`);
 }
+independence("fake-board-independence", "testing/fake-tab60.ts", ["core/port.ts", "core/units.ts"]);
+independence("u1-checks-independence", "lab/u1-checks.ts", ["core/device.ts", "core/firmware.ts", "core/updater.ts", "core/port.ts", "core/units.ts"]);
 
 // The package exports "." (core/index.ts) and "./port" (core/port.ts). A relative path reaches any file, so web/
 // names the core only by package: UI files import @tab60kit/core, the WebHID shell may add @tab60kit/core/port, and
@@ -105,8 +107,6 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 	report("one-egress", problems, "one cast to OutReport (core/protocol.ts auditEgress); sendReport only in web/webhid-port.ts");
 }
 
-// The lab port: startWebHidLab hands the DevicePort itself out, so only lab pages and test code may name it. The
-// shipped page reaches the board through startWebHid alone, which returns a kit and a chooser.
 {
 	const allowed = (file: string) => file.startsWith("lab/") || file.startsWith("testing/") || file === "web/webhid-port.ts" || file.endsWith(".test.ts");
 	const problems = files.filter((file) => !allowed(at(file)) && /\bstartWebHidLab\b/.test(readFileSync(file, "utf8"))).map(at);

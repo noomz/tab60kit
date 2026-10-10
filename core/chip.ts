@@ -49,11 +49,6 @@ export type Observed =
 	| { readonly mode: "app"; readonly session: AppSession; readonly chip: AppChip }
 	| { readonly mode: "iap"; readonly session: IapSession; readonly chip: IapChip };
 
-/**
- * Reads the chip through an open session: the version page in either mode, plus the image checksum in update mode,
- * one SUM (and CRC once cleared) per distinct catalog image length. With no match, the first length's result is
- * reported as unrecognized.
- */
 export async function observe(session: Session): Promise<Observed> {
 	const page = await classifyPage(await session.readVersionPage());
 	const { info, window } = session;
@@ -75,13 +70,10 @@ async function checkImage(session: IapSession): Promise<ImageCheck> {
 	return first;
 }
 
-/** The version string's byte length at offset 0 may reach offset 0x78, where the fixed words start (R1 "Version page"). */
-const VERSION_TEXT_MAX_BYTES = 0x78 - 4;
+/** The version page (R1): a u32 byte length, the UTF-16LE version string, then fixed words from 0x78. */
+const VERSION_TEXT_OFFSET = 4;
+const FIXED_WORDS_OFFSET = 0x78;
 
-/**
- * Erased when every byte is 0xFF, official when the bytes hash to a catalog version block, unknown otherwise, with
- * the UTF-16LE string at offset 4 when the length word at offset 0 fits before the fixed words.
- */
 export async function classifyPage(page: VersionPageRead): Promise<PageState> {
 	const { bytes } = page;
 	if (bytes.every((b) => b === 0xff)) return { kind: "erased" };
@@ -93,8 +85,8 @@ export async function classifyPage(page: VersionPageRead): Promise<PageState> {
 
 function versionText(bytes: Uint8Array): string | null {
 	const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
-	if (length === 0 || length > VERSION_TEXT_MAX_BYTES) return null;
-	const text = new TextDecoder("utf-16le").decode(bytes.subarray(4, 4 + length));
+	if (length === 0 || length > FIXED_WORDS_OFFSET - VERSION_TEXT_OFFSET) return null;
+	const text = new TextDecoder("utf-16le").decode(bytes.subarray(VERSION_TEXT_OFFSET, VERSION_TEXT_OFFSET + length));
 	const end = text.indexOf("\0");
 	return end === -1 ? text : text.slice(0, end);
 }
@@ -161,10 +153,7 @@ export const deepCheck: Job = async (start, ctx) => {
 	return notImplemented(`deepCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
 };
 
-/**
- * Shared by the deep check and the flash job: restart into normal mode, then offer the optional confirm pick.
- * A cancel or a closed chooser there returns null, and the job still finishes (the UI calls this Skip).
- */
+/** Shared by the deep check and the flash job: restart into normal mode, then offer the optional confirm pick. */
 export async function leaveUpdateMode(iap: IapSession, ctx: JobContext): Promise<AppSession | AppRefused | null> {
 	ctx.progress({ kind: "restarting", into: "app" });
 	await iap.exitToApp();

@@ -224,7 +224,6 @@ export function crc32(wire: Uint8Array): Crc32 {
 	return notImplemented(`crc32(${wire.length})`);
 }
 
-/** WebCrypto, so it runs in the page and in Bun. */
 export async function sha256(bytes: Uint8Array): Promise<Sha256> {
 	const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
 	return sha256Literal(Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join(""));

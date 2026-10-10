@@ -1,12 +1,9 @@
 /**
- * Plan unit U1's verdict from a transcript, pure and browser-safe: the page shows it live after a run, and
- * tools/u1-verdict.ts writes it to the fixture. Each check reads the frames or the shell's events the way a reviewer
- * would, with its own hex parsing and the (cmd, sub) pairs written out, so a codec bug in the core cannot vouch for
- * itself here. Check 8's typing half is a human observation handed in.
+ * Plan unit U1's verdict from a transcript. Its import closure reaches core/ only through device.ts, firmware.ts,
+ * port.ts, and units.ts, never protocol.ts, so a codec bug in the core cannot vouch for itself here
+ * (probes/boundaries.ts rule u1-checks-independence).
  */
-import { EXPECTED_LAYOUT, TAB60 } from "../core/device";
-import { CATALOG, sha256 } from "../core/firmware";
-import { WRITE_LINK_RULE } from "../core/flash";
+import { sha256 } from "../core/firmware";
 import type { Mode } from "../core/units";
 import type { Transcript, TranscriptEntry } from "../testing/transcript";
 
@@ -27,26 +24,8 @@ export interface U1Expected {
 	readonly maxProbeGapMs: number;
 }
 
-const V1_01_13 = CATALOG.find((entry) => entry.version === "V1.01.13");
-if (V1_01_13 === undefined) throw new Error("the catalog lost V1.01.13");
-
-/** What the user's board, flashed with V1.01.13 by the vendor updater, must answer (docs/units.md U1 checks 2 to 7 and 9). */
-export const U1_EXPECTED: U1Expected = {
-	appProductId: TAB60.productId.app,
-	iapProductId: TAB60.productId.iap,
-	usagePage: TAB60.usagePage,
-	usage: TAB60.usage,
-	reportBytes: TAB60.reportBytes,
-	identityHex: EXPECTED_LAYOUT.identityHex,
-	fwOffset: EXPECTED_LAYOUT.fwOffset,
-	pageSize: EXPECTED_LAYOUT.pageSize,
-	fwPages: EXPECTED_LAYOUT.fwPages,
-	versionPageSha256: V1_01_13.versionBlock.sha256,
-	imageBytes: V1_01_13.image.bytes,
-	imageSum32: V1_01_13.image.wireSum32,
-	probes: 30,
-	maxProbeGapMs: WRITE_LINK_RULE.maxProbeGapMs,
-};
+/** Plan check 8's human half: whether the board types after the run. */
+export type TypingObservation = "types" | "does-not-type" | "not-observed";
 
 export interface CheckResult {
 	readonly id: number;
@@ -57,13 +36,10 @@ export interface CheckResult {
 
 export interface U1Verdict {
 	readonly checks: readonly CheckResult[];
-	/** Anything the board did that the model did not predict. Not failures by themselves. */
 	readonly findings: readonly string[];
-	/** Every (cmd, sub) pair sent, as "cmd/sub" hex, in first-seen order. */
 	readonly commands: readonly string[];
 }
 
-/** One request and the reply paired with it, in the mode of the link that carried them. */
 interface Exchange {
 	readonly mode: Mode | null;
 	readonly t: number;
@@ -87,7 +63,6 @@ const RESET_TO_APP = [0x11, 0x01] as const;
 const ERROR_MARKER = [0xff, 0xaa] as const;
 const PAYLOAD = 4;
 
-/** The nine U1 frames by (cmd, sub). */
 export const U1_COMMANDS: readonly string[] = ["12/02", "12/00", "12/01", "12/20", "12/21", "12/22", "1d/01", "11/00", "11/01"];
 
 const pair = (cmd: number, sub: number) => `${cmd.toString(16).padStart(2, "0")}/${sub.toString(16).padStart(2, "0")}`;
@@ -99,7 +74,6 @@ const is = (exchange: Exchange, [cmd, sub]: readonly [number, number]) => exchan
 const modeOf = (productId: number, expected: U1Expected): Mode | null =>
 	productId === expected.appProductId ? "app" : productId === expected.iapProductId ? "iap" : null;
 
-/** Walks the entries once: the link's mode from each opened device, and every request paired with its reply. */
 function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, findings: string[]): Exchange[] {
 	const out: Exchange[] = [];
 	let mode: Mode | null = null;
@@ -231,14 +205,14 @@ function checkSum(all: readonly Exchange[], expected: U1Expected): CheckResult {
 	return { id: 7, title, pass: sums.length > 0 && seen.length === 1 && seen[0] === expected.imageSum32, detail: sums.length === 0 ? "no SUM over the image range answered" : seen.map((n) => hex(n, 8)).join(", ") };
 }
 
-function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, boardTypes: boolean | null): CheckResult {
+function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
 	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} and types`;
 	const opened = entries.filter((entry) => entry.kind === "opened");
 	const last = opened.at(-1);
 	const reset = entries.some((entry) => entry.kind === "out" && entry.hex.startsWith("1101"));
 	const enumerated = reset && last !== undefined && last.kind === "opened" && last.productId === expected.appProductId;
-	const typed = boardTypes === true;
-	const detail = `${reset ? "RESET to app sent" : "no RESET to app sent"}; last opened ${last === undefined || last.kind !== "opened" ? "nothing" : hex(last.productId, 4)}; typing ${boardTypes === null ? "not observed yet" : boardTypes ? "confirmed" : "failed"}`;
+	const typed = typing === "types";
+	const detail = `${reset ? "RESET to app sent" : "no RESET to app sent"}; last opened ${last === undefined || last.kind !== "opened" ? "nothing" : hex(last.productId, 4)}; typing ${typing === "not-observed" ? "not observed yet" : typed ? "confirmed" : "failed"}`;
 	return { id: 8, title, pass: enumerated && typed, detail };
 }
 
@@ -288,13 +262,12 @@ function checkProbes(all: readonly Exchange[], expected: U1Expected): CheckResul
 }
 
 export interface EvaluateOptions {
-	readonly expected?: U1Expected;
-	/** Plan check 8's human half: the board types after the run. null when nobody has looked yet. */
-	readonly boardTypes?: boolean | null;
+	readonly expected: U1Expected;
+	readonly typing: TypingObservation;
 }
 
-export async function evaluateU1(transcript: Transcript, options: EvaluateOptions = {}): Promise<U1Verdict> {
-	const expected = options.expected ?? U1_EXPECTED;
+export async function evaluateU1(transcript: Transcript, options: EvaluateOptions): Promise<U1Verdict> {
+	const { expected } = options;
 	const findings: string[] = [];
 	const all = exchanges(transcript.entries, expected, findings);
 	const checks: CheckResult[] = [
@@ -305,7 +278,7 @@ export async function evaluateU1(transcript: Transcript, options: EvaluateOption
 		checkFwInfo(all, expected),
 		await checkVersionPage(all, expected),
 		checkSum(all, expected),
-		checkBack(transcript.entries, expected, options.boardTypes ?? null),
+		checkBack(transcript.entries, expected, options.typing),
 		checkProbes(all, expected),
 	];
 	return { checks, findings, commands: [...new Set(all.map((e) => pair(e.cmd, e.sub)))] };

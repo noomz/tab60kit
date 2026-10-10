@@ -2,9 +2,9 @@
  * Recorded sessions with a real board: the golden fixtures behind the fake board and the replay tests, and the
  * capture that moves a G1 row from "reviewed" to "confirmed" (protocol.ts Maturity).
  *
- * A transcript never carries firmware. WRITE payloads are stored as their length and SHA-256, by construction in
- * `recording`. Replay compares the hash of what the core sends against the recorded hash, so golden tests stay
- * byte-exact without redistributing vendor bytes.
+ * A transcript never carries firmware. `recording` refuses a WRITE frame until U7 stores write payloads as their
+ * length and SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
+ * tests stay byte-exact without redistributing vendor bytes.
  */
 import type { DevicePort, Link, WantReason } from "../core/port";
 import { type Sha256, notImplemented, sha256Literal } from "../core/units";
@@ -17,7 +17,6 @@ export interface Transcript {
 	readonly entries: readonly TranscriptEntry[];
 }
 
-/** One HID collection of an opened device, as the shell saw it. */
 export interface CollectionEntry {
 	readonly usagePage: number;
 	readonly usage: number;
@@ -27,7 +26,6 @@ export interface CollectionEntry {
 }
 
 export type TranscriptEntry =
-	/** One chooser: opened inside the click's activation, or from a parked pick's click. `productId` null means closed empty. */
 	| {
 			readonly t: number;
 			readonly kind: "pick";
@@ -60,10 +58,6 @@ const WRITE_CMD = 0x1f;
 
 export const hexOf = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
-/**
- * Wraps a link so every report is appended to `sink`, stamped with `now`. A WRITE frame throws before it reaches
- * the link: U1 cannot send one, and U7 adds the payload hashing that keeps vendor bytes out of transcripts.
- */
 export function recording(link: Link, sink: (entry: TranscriptEntry) => void, now: () => number = () => performance.now()): Link {
 	void link.lost.then(() => sink({ t: now(), kind: "lost" }));
 	return {
@@ -170,7 +164,6 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 	}
 }
 
-/** The boundary for a transcript file: JSON in, a typed Transcript out, or a TypeError naming the first problem. */
 export function parseTranscript(json: unknown): Transcript {
 	if (!isRecord(json)) fail("root", "not an object");
 	if (json.format !== "tab60kit-transcript/1") fail("root", `format is ${String(json.format)}`);

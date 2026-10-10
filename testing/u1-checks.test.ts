@@ -3,21 +3,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../core/firmware";
-import { type U1Expected, U1_EXPECTED, evaluateU1 } from "../lab/u1-checks";
+import { type TypingObservation, type U1Expected, evaluateU1 } from "../lab/u1-checks";
+import { U1_EXPECTED } from "../lab/u1-job";
 import { verdictMain } from "../tools/u1-verdict";
-import { versionBlock } from "./fake-tab60";
+import { syntheticVersionBlock } from "./fake-tab60";
 import { VENDOR_COLLECTION } from "./fake-webhid";
 import { type Transcript, type TranscriptEntry } from "./transcript";
 import { TARGET, recordFakeRun } from "./fake-run";
 
-/** The fake's page is V1.01.13-shaped, not the vendor's bytes, so the fake run is judged against its own hash. */
-const fakeExpected: U1Expected = { ...U1_EXPECTED, versionPageSha256: await sha256(versionBlock()) };
+const fakeExpected: U1Expected = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()) };
 const baseline = (await recordFakeRun()).transcript;
 
-const verdict = (transcript: Transcript, boardTypes: boolean | null = true) => evaluateU1(transcript, { expected: fakeExpected, boardTypes });
-const failing = async (transcript: Transcript, boardTypes: boolean | null = true) => (await verdict(transcript, boardTypes)).checks.filter((check) => !check.pass).map((check) => check.id);
+const verdict = (transcript: Transcript, typing: TypingObservation = "types") => evaluateU1(transcript, { expected: fakeExpected, typing });
+const failing = async (transcript: Transcript, typing: TypingObservation = "types") => (await verdict(transcript, typing)).checks.filter((check) => !check.pass).map((check) => check.id);
 
-/** A copy of the transcript with one entry rewritten: the `n`th entry the predicate matches (0-based). */
 function rewrite(transcript: Transcript, matches: (entry: TranscriptEntry) => boolean, n: number, change: (entry: TranscriptEntry) => TranscriptEntry): Transcript {
 	let seen = 0;
 	const entries = transcript.entries.map((entry) => (matches(entry) && seen++ === n ? change(entry) : entry));
@@ -61,7 +60,7 @@ test("check 5 fails when FW INFO disagrees with the layout", async () => {
 });
 
 test("check 6 fails when the version page hashes differently", async () => {
-	const { transcript } = await recordFakeRun({ board: { versionBlock: versionBlock("V9.99.99") } });
+	const { transcript } = await recordFakeRun({ board: { versionBlock: syntheticVersionBlock("V9.99.99") } });
 	expect(await failing(transcript)).toEqual([6]);
 });
 
@@ -71,9 +70,9 @@ test("check 7 fails when the image sums differently", async () => {
 });
 
 test("check 8 fails without the human observation, and names what is missing", async () => {
-	expect(await failing(baseline, false)).toEqual([8]);
-	expect(await failing(baseline, null)).toEqual([8]);
-	expect((await verdict(baseline, null)).checks[7]?.detail).toMatch(/typing not observed yet/);
+	expect(await failing(baseline, "does-not-type")).toEqual([8]);
+	expect(await failing(baseline, "not-observed")).toEqual([8]);
+	expect((await verdict(baseline, "not-observed")).checks[7]?.detail).toMatch(/typing not observed yet/);
 });
 
 test("check 9 fails on a short probe series and on a slow answer", async () => {
@@ -106,7 +105,7 @@ test("the CLI writes the fixture with the transcript inside and exits by the ver
 		expect(await verdictMain([file, "--types", "--out", out])).toBe(1);
 		const fixture = JSON.parse(readFileSync(out, "utf8"));
 		expect(fixture.format).toBe("tab60kit-u1-verdict/1");
-		expect(fixture.boardTypes).toBe(true);
+		expect(fixture.typing).toBe("types");
 		expect(fixture.checks.filter((check: { pass: boolean }) => !check.pass).map((check: { id: number }) => check.id)).toEqual([6]);
 		expect(fixture.transcript.entries).toHaveLength(baseline.entries.length);
 		expect(await verdictMain([file])).toBe(2);

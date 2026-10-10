@@ -9,9 +9,6 @@
  * The facts it checks against (the target image's length and wire sum) come in through FakeOptions from the test.
  *
  * It also records violations: anything a real board might accept that this tool must never send.
- *
- * This is the read-only subset plan unit U1 needs: both modes' reads, SUM over stored bytes, and the two resets.
- * Erase, write, the drop points, and the virtual clock come with U5.
  */
 import type { Clock, DevicePort, InReport, Link, Mode, OutReport } from "../core/port";
 import { LinkLost, ReportQueue, asInReport } from "../core/port";
@@ -26,23 +23,12 @@ export interface FakeOptions {
 	readonly loseLinkAtPacket?: number;
 	/** On that loss, also reset the MCU: SRAM is cleared and the IAP decides from the version page. */
 	readonly resetOnLoss?: boolean;
-	/**
-	 * The order one ERASE command clears its pages in. Nothing documents the IAP's order, so tests default to
-	 * "descending", the order in which an erase that covers the version page clears it last. Unused until U5 adds ERASE.
-	 */
-	readonly eraseOrder?: "ascending" | "descending";
 	/** The board answers this command with the FF AA error marker once. */
 	readonly refuseOnce?: { readonly cmd: number; readonly sub: number };
-	/** The 52 bytes at absolute 0x400. Default: `blInfoBlock()`, the layout docs/units.md U1 expects. */
 	readonly blInfo?: Uint8Array;
-	/** What READ FW INFO answers in update mode. Default 0x200, BL info's fw_offset. */
 	readonly fwInfo?: number;
-	/** The 180-byte version block a starting state with a page holds. Default: `versionBlock()`. */
 	readonly versionBlock?: Uint8Array;
-	/**
-	 * How long after a reset the board enumerates again. A real board takes about a second, long after a chooser
-	 * opened by the same click is on screen; a few milliseconds keep that order without slowing tests.
-	 */
+	/** A delay keeps a chooser opened by the reset's click on screen before the bootloader row appears, as on a real board. */
 	readonly reenumerateAfterMs?: number;
 }
 
@@ -54,7 +40,9 @@ export type Violation =
 	/** An app page changed while the version page still held its magic: a reset right then would boot a damaged image. */
 	| { readonly kind: "app-changed-under-valid-page"; readonly page: number }
 	/** A config command (0x40 and up) sent during a flash job, or any command in a mode that lacks it. */
-	| { readonly kind: "wrong-mode"; readonly cmd: number; readonly sub: number; readonly mode: Mode };
+	| { readonly kind: "wrong-mode"; readonly cmd: number; readonly sub: number; readonly mode: Mode }
+	/** An update-mode command this fake does not model yet (erase, CRC, set-address, write): U5. */
+	| { readonly kind: "not-modeled"; readonly cmd: number; readonly sub: number };
 
 const REPORT_BYTES = 64;
 const PAYLOAD_OFFSET = 4;
@@ -74,7 +62,6 @@ const MAGIC_OFFSET = 0xb0;
 const MAGIC = 0x5aa5;
 const FIXED_WORDS_OFFSET = 0x78;
 
-/** R1 "BL info block" (struct <IIHHHHIIIIHHH10sI) with the TAB 60 values docs/units.md U1 expects, field by field. */
 export function blInfoBlock(fields: { readonly fwOffset?: number; readonly fwPages?: number; readonly pageSize?: number; readonly bootPid?: number } = {}): Uint8Array {
 	const block = new Uint8Array(BL_INFO_BYTES);
 	const view = new DataView(block.buffer);
@@ -96,12 +83,7 @@ export function blInfoBlock(fields: { readonly fwOffset?: number; readonly fwPag
 	return block;
 }
 
-/**
- * R1 "Version page": the string's byte length, the version as UTF-16LE in a 26-byte field, 0xFF up to 0x78, the
- * fixed words, the app VID:PID, and the magic at 0xB0. The vendor's own block is not public, so this one hashes
- * to no catalog entry; it is a V1.01.13-shaped page, not V1.01.13's page.
- */
-export function versionBlock(version = "V1.01.13"): Uint8Array {
+export function syntheticVersionBlock(version = "V1.01.13"): Uint8Array {
 	const block = new Uint8Array(VERSION_BLOCK_BYTES).fill(0xff);
 	const view = new DataView(block.buffer);
 	view.setUint32(0, 0x1a, true);
@@ -119,7 +101,6 @@ export function versionBlock(version = "V1.01.13"): Uint8Array {
 	return block;
 }
 
-/** `length` bytes whose little-endian u32 words sum to `sum`: a stand-in for an image this tool never ships. */
 export function bytesSummingTo(length: number, sum: number): Uint8Array {
 	if (length % 4 !== 0 || length < 4) throw new RangeError(`image length ${length} is not whole words`);
 	const bytes = new Uint8Array(length);
@@ -127,13 +108,11 @@ export function bytesSummingTo(length: number, sum: number): Uint8Array {
 	return bytes;
 }
 
-/** What a shell adapter gets when it plugs into the board: a way to send, and a way to unplug. */
 export interface Plug {
 	send(bytes: Uint8Array): void;
 	unplug(): void;
 }
 
-/** What the board calls back on the adapter: a report arrived, or the board re-enumerated and this plug is dead. */
 export interface Socket {
 	readonly report: (bytes: Uint8Array) => void;
 	readonly detached: () => void;
@@ -169,7 +148,6 @@ export class FakeTab60 {
 	#refuseOnce: { readonly cmd: number; readonly sub: number } | null;
 	#packets = 0;
 	readonly #violations: Violation[] = [];
-	/** A bootloader that ignores our frames (the "no answer in update mode" case): update mode replies to nothing. */
 	ignoreInIap = false;
 
 	constructor(readonly options: FakeOptions) {
@@ -177,7 +155,7 @@ export class FakeTab60 {
 		this.#fwInfo = options.fwInfo ?? FW_OFFSET;
 		this.#refuseOnce = options.refuseOnce ?? null;
 		this.#flash.set(options.blInfo ?? blInfoBlock(), BL_INFO_ADDR);
-		const page = options.versionBlock ?? versionBlock();
+		const page = options.versionBlock ?? syntheticVersionBlock();
 		const official = bytesSummingTo(target.imageBytes, target.wireSum32);
 		const untrusted = bytesSummingTo(target.imageBytes, target.wireSum32 + 1);
 		this.#mode = starting === "official-image" || starting === "untrusted-image" ? "app" : "iap";
@@ -187,7 +165,7 @@ export class FakeTab60 {
 				this.#flash.set(official, PROTOCOL_BASE + FW_OFFSET);
 				break;
 			case "untrusted-image":
-				this.#flash.set(versionBlock("V0.00.00"), PROTOCOL_BASE);
+				this.#flash.set(syntheticVersionBlock("V0.00.00"), PROTOCOL_BASE);
 				this.#flash.set(untrusted, PROTOCOL_BASE + FW_OFFSET);
 				break;
 			case "update-mode-erased":
@@ -217,12 +195,11 @@ export class FakeTab60 {
 		return this.#packets;
 	}
 
-	/** Where the board would go on its next reset, and what its version page holds. U5. */
+	/** Where the board would go on its next reset, and what its version page holds. */
 	bootTarget(): { readonly mode: Mode; readonly versionPageSha256: Sha256 | "erased" } {
 		return notImplemented("bootTarget");
 	}
 
-	/** The USB cable: an adapter plugs into the device the board currently enumerates, sends frames, and gets reports until a reset. */
 	plug(socket: Socket): Plug {
 		this.#sockets.add(socket);
 		return {
@@ -231,13 +208,11 @@ export class FakeTab60 {
 		};
 	}
 
-	/** Called with the new mode each time the board re-enumerates. Returns the unsubscribe function. */
 	onEnumerate(listener: (mode: Mode) => void): () => void {
 		this.#enumerationListeners.add(listener);
 		return () => this.#enumerationListeners.delete(listener);
 	}
 
-	/** Resolves when the board is enumerated in one of `modes`, at once if it already is. */
 	whenIn(modes: readonly Mode[], signal: AbortSignal): Promise<void> {
 		if (modes.includes(this.#mode)) return Promise.resolve();
 		return new Promise<void>((resolve, reject) => {
@@ -255,7 +230,6 @@ export class FakeTab60 {
 		});
 	}
 
-	/** A port that reconnects at once, like a polling Node shell. */
 	port(): DevicePort {
 		return {
 			open: async (want, signal) => {
@@ -330,12 +304,15 @@ export class FakeTab60 {
 				return reply(payload);
 			}
 			if (cmd === 0x11 && sub === 0x01) return this.#reset(this.#bootMode());
+			if ((cmd === 0x1d && sub <= 0x02) || cmd === 0x1e || cmd === 0x1f) {
+				this.#violations.push({ kind: "not-modeled", cmd, sub });
+				return refuse();
+			}
 		}
 		this.#violations.push({ kind: "wrong-mode", cmd, sub, mode });
 		refuse();
 	}
 
-	/** The wrapping sum of little-endian words over stored bytes: what the IAP answers for SUM (R1, candidate B). */
 	#sum(from: number, length: number): number {
 		const view = new DataView(this.#flash.buffer, from, length);
 		let sum = 0;
@@ -343,7 +320,7 @@ export class FakeTab60 {
 		return sum;
 	}
 
-	/** The IAP boots the app only when the version page carries its magic and the words from 0x78 are not 0xFF (R1, INFERRED). */
+	/** The IAP boots the app only over a version page with its magic and a non-0xFF word at 0x78 (R1, INFERRED). */
 	#bootMode(): Mode {
 		const view = new DataView(this.#flash.buffer, PROTOCOL_BASE, PAGE_SIZE);
 		const magic = view.getUint16(MAGIC_OFFSET, true) === MAGIC;

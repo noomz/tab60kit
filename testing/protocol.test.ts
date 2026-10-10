@@ -23,8 +23,6 @@ const U1_ROWS = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum
 const clearance = labClearance(U1_ROWS, "protocol test");
 const IMAGE_BYTES = 34_268;
 
-// The nine U1 frames, written by hand from R1 "Packet framing" and "Commands": cmd, sub, bytes 2..3 zero, then the
-// little-endian payload, zero padded to 64 bytes. Nothing here comes from the encoder.
 const frame = (head: string, payload = "") => (head + "0000" + payload).padEnd(128, "0");
 const GOLDEN = {
 	readMode: frame("1202"),
@@ -206,8 +204,6 @@ test("enterIap propagates a cancelled chooser and leaves the normal-mode link cl
 	expect(app.closed).toBe(1);
 });
 
-// The egress audit under the U1 clearance, on the hand-built frames: each passes only in its modes, every other
-// registry row is not cleared, and unknown pairs are refused before anything else is checked.
 const window = { base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 } as unknown as FlashWindow;
 const audit = (hex: string, requested: CommandName, mode: "app" | "iap"): string => {
 	const context: EgressContext = { mode, window, cursor: 0x200, cleared: (name) => clears(clearance, name) };

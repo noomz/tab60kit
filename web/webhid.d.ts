@@ -45,19 +45,11 @@ interface HIDDevice extends EventTarget {
 	open(): Promise<void>;
 	close(): Promise<void>;
 	sendReport(reportId: number, data: BufferSource): Promise<void>;
-	addEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
-	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	removeEventListener(type: "inputreport", listener: (this: HIDDevice, event: HIDInputReportEvent) => void): void;
-	removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
 }
 
 interface HID extends EventTarget {
 	getDevices(): Promise<HIDDevice[]>;
 	requestDevice(options: { filters: HIDDeviceFilter[] }): Promise<HIDDevice[]>;
-	addEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
-	addEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
-	removeEventListener(type: "connect" | "disconnect", listener: (this: HID, event: HIDConnectionEvent) => void): void;
-	removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null): void;
 }
 
 interface Navigator {

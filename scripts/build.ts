@@ -1,7 +1,6 @@
 import { copyFileSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
-/** Every page the build writes. web/csp.test.ts checks each one's policy. */
 export const PAGES = [
 	{ html: "web/index.html", entry: "web/main.ts", outdir: "dist" },
 	{ html: "lab/u1.html", entry: "lab/u1.ts", outdir: "dist-lab" },
@@ -14,7 +13,6 @@ function git(args: readonly string[]): string | null {
 	return result.exitCode === 0 ? result.stdout.toString().trim() : null;
 }
 
-/** The commit a page records in its transcripts, with a dirty flag so a transcript cannot claim a clean build it did not have. */
 export function toolCommit(): string {
 	const sha = git(["rev-parse", "--short", "HEAD"]) ?? "unknown";
 	const dirty = (git(["status", "--porcelain"]) ?? "") !== "";

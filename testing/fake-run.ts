@@ -1,4 +1,3 @@
-/** Plan unit U1 end to end through the real WebHID port over the fake WebHID and the fake board, as a transcript. */
 import { type ProbeSeries, type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
 import { startWebHidLab } from "../web/webhid-port";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
@@ -7,16 +6,13 @@ import { type Transcript, type TranscriptEntry, recording } from "./transcript";
 
 export const TARGET = { imageBytes: 34_268, wireSum32: 0xf3d3dbd2 };
 
-/** The thirty probes with no spacing: the frames are the same, and the test does not wait 29 seconds per mode. */
 const FAST: ProbeSeries = { probes: 30, everyMs: 1 };
 
 export interface FakeRunOptions {
 	readonly board?: Partial<FakeOptions>;
 	readonly hid?: Partial<FakeHidOptions>;
 	readonly series?: ProbeSeries;
-	/** Runs between Connect and Deep check, e.g. to change the user's chooser answer. */
 	readonly between?: (board: FakeTab60, hid: FakeHid) => void;
-	/** Clicks Pick once a pick parks and the board shows the wanted row, as the page's user would. */
 	readonly autoPick?: boolean;
 }
 
