@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { FAKE_MODES, type FakeMode, fakeHardware } from "../lab/u1-fake";
+import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Run } from "../lab/u1-job";
 import { type Phase, type Run, type RunOutcome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
-import { type TranscriptEntry, recording } from "./transcript";
+import type { TranscriptEntry } from "./transcript";
 
 const PROBES = 6;
 const probes = (n: number) => Array.from({ length: n }, () => "1202");
@@ -25,7 +26,7 @@ async function drive(mode: FakeMode, runs: readonly Run[]) {
 	const fake = fakeHardware(mode, { probes: PROBES, hid: { isActive: () => true } });
 	const entries: TranscriptEntry[] = [];
 	const { port, chooser } = startWebHidLab(fake.hid, fake.locks, {
-		wrap: (link) => recording(link, (entry) => entries.push(entry)),
+		wrap: u1Wrap((entry) => entries.push(entry)),
 		onEvent: (event) => entries.push({ t: performance.now(), ...event }),
 	});
 	const user = setInterval(() => chooser.needsClick?.modes.includes(fake.hid.device.mode) && chooser.pick(), 2);

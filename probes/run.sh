@@ -61,6 +61,7 @@ lint_mutation() {
 lint_mutation "a fake board that imports the host codec" fake-board-independence testing/fake-tab60.ts 'import { xorWords } from "../core/firmware";'
 lint_mutation "a fake board that imports the core by package name" fake-board-independence testing/fake-tab60.ts 'import { createKit } from "@tab60kit/core";'
 lint_mutation "a verdict that borrows the host codec" u1-checks-independence lab/u1-checks.ts 'import { auditEgress } from "../core/protocol"; void auditEgress;'
+lint_mutation "a frame allowlist that borrows the host codec" u1-frames-independence lab/u1-frames.ts 'import { auditEgress } from "../core/protocol"; void auditEgress;'
 lint_mutation "UI code that imports a core internal" web-entries web/screens.ts 'import type { CommandName } from "../core/protocol";'
 lint_mutation "UI code that imports the shell entry" web-entries web/screens.ts 'import type { Link } from "@tab60kit/core/port";'
 lint_mutation "a cast to OutReport outside the audit" one-egress web/webhid-port.ts 'export const forged = new Uint8Array(64) as OutReport;'

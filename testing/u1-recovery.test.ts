@@ -6,6 +6,7 @@ import { sha256 } from "../core/firmware";
 import { type InReport, type Link, LinkLost, LinkTimeout, PickCancelled, asInReport } from "../core/port";
 import { DeviceRefused, type EgressContext, IapAttachFailed, auditEgress, clears, connect } from "../core/protocol";
 import { evaluateU1 } from "../lab/u1-checks";
+import { FrameNotAllowed, u1Wrap } from "../lab/u1-frames";
 import { type U1Context, U1_EXPECTED, u1Clearance, u1Connect, u1DeepCheck, u1Run, u1TryAgain } from "../lab/u1-job";
 import { type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
@@ -14,7 +15,7 @@ import { TARGET, recordFakeRun } from "./fake-run";
 import { type FakeOptions, FakeTab60, syntheticVersionBlock } from "./fake-tab60";
 import { FakeHid, type FakeHidOptions, FakeLocks } from "./fake-webhid";
 import { ScriptedLink, ScriptedPort, fromHex, report, toHex } from "./scripted";
-import { type Transcript, type TranscriptEntry, recording } from "./transcript";
+import type { Transcript, TranscriptEntry } from "./transcript";
 
 const PROBES = 3;
 const probes = (n: number) => Array.from({ length: n }, () => "1202");
@@ -62,8 +63,8 @@ function rig(options: RigOptions = {}) {
 	};
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), {
 		wrap: (link) => {
-			const recorded = recording(link, sink);
-			return options.wrap?.(recorded) ?? recorded;
+			const lab = u1Wrap(sink)(link);
+			return options.wrap?.(lab) ?? lab;
 		},
 		onEvent: (event) => sink({ t: performance.now(), ...event }),
 	});
@@ -228,6 +229,36 @@ test("FF AA to SUM sends RESET to app and closes the link, and the page shows aw
 	expect(phaseAfterRun(r.entries, outcomeOfError(error))).toEqual(AWAY);
 	await sleep(10);
 	expect(r.board.mode).toBe("app");
+});
+
+test("a frame the allowlist refuses on the first update-mode probe ends the Deep check away, with only RESET to app after it", async () => {
+	const forged = `1202${"0".repeat(122)}ff`;
+	let readModes = 0;
+	let sentBefore = -1;
+	const forgeFirstUpdateProbe = (link: Link): Link => ({
+		mode: link.mode,
+		lost: link.lost,
+		send(frame) {
+			if (link.mode === "iap" && frame[0] === 0x12 && frame[1] === 0x02 && ++readModes === 2) {
+				sentBefore = r.pairs().length;
+				frame[63] = 0xff;
+			}
+			return link.send(frame);
+		},
+		next: (timeoutMs) => link.next(timeoutMs),
+		discardPending: () => link.discardPending(),
+		close: () => link.close(),
+	});
+	const r = rig({ wrap: forgeFirstUpdateProbe });
+	const app = await r.connected();
+	const error = await rejection(u1DeepCheck(app, r.ctx()));
+	expect(error).toMatchObject({ name: "FrameNotAllowed", hex: forged });
+	expect(error).toBeInstanceOf(FrameNotAllowed);
+	expect(r.pairs().slice(sentBefore)).toEqual(["1101"]);
+	expect(r.entries.some((entry) => "hex" in entry && entry.hex === forged)).toBe(false);
+	expect(r.log.some((line) => line.includes(forged))).toBe(true);
+	expect(r.hid.openHandles).toBe(0);
+	expect(phaseAfterRun(r.entries, outcomeOfError(error))).toEqual(AWAY);
 });
 
 test("silence after the update-mode observation times out, sends RESET to app, and Try again then finishes the round trip", async () => {

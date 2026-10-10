@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
+import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "../lab/u1-job";
 import { LinkTimeout } from "../core/port";
 import { startWebHidLab } from "../web/webhid-port";
 import { TARGET, recordFakeRun } from "./fake-run";
 import { FakeTab60 } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
-import { type Transcript, type TranscriptEntry, recording } from "./transcript";
+import type { Transcript, TranscriptEntry } from "./transcript";
 
 const pairs = (transcript: Transcript) => transcript.entries.filter((entry) => entry.kind === "out").map((entry) => entry.hex.slice(0, 4));
 const probes = Array.from({ length: 30 }, () => "1202");
@@ -49,7 +50,7 @@ test("a bootloader that answers nothing times out, and Try again resumes from th
 	const board = new FakeTab60({ starting: "official-image", target: TARGET });
 	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true });
 	const entries: TranscriptEntry[] = [];
-	const { port } = startWebHidLab(hid, new FakeLocks(), { wrap: (link) => recording(link, (entry) => entries.push(entry)), onEvent: (event) => entries.push({ t: 0, ...event }) });
+	const { port } = startWebHidLab(hid, new FakeLocks(), { wrap: u1Wrap((entry) => entries.push(entry)), onEvent: (event) => entries.push({ t: 0, ...event }) });
 	const ctx: U1Context = { port, clearance: u1Clearance(), signal: new AbortController().signal, log: () => undefined, series: { probes: 2, everyMs: 1 } };
 	const connected = await u1Connect(ctx);
 	if (connected.kind !== "connected") throw new Error("refused");

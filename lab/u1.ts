@@ -1,9 +1,10 @@
 import { TAB60 } from "../core/device";
 import { type DeviceWant, PickCancelled } from "../core/port";
-import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
+import type { Transcript, TranscriptEntry } from "../testing/transcript";
 import { type PortEvent, startWebHidLab } from "../web/webhid-port";
 import { evaluateU1 } from "./u1-checks";
 import { FAKE_MODES, type FakeMode, fakeHardware, isFakeMode } from "./u1-fake";
+import { u1Wrap } from "./u1-frames";
 import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } from "./u1-job";
 import { AWAY_RECOVERY, type Phase, type Run, type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun, pickHint, pickLabel } from "./u1-state";
 
@@ -88,7 +89,7 @@ function start(): void {
 	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
 	const { port, chooser } = startWebHidLab(fake?.hid ?? navigator.hid, fake?.locks ?? navigator.locks, {
-		wrap: (link) => recording(link, (entry) => entries.push(entry), now),
+		wrap: u1Wrap((entry) => entries.push(entry), now),
 		onEvent: (event) => {
 			entries.push({ t: now(), ...event });
 			if (event.kind === "opened") lastOpened = event.productId;

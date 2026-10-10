@@ -1,8 +1,9 @@
+import { u1Wrap } from "../lab/u1-frames";
 import { type ProbeSeries, type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
 import { startWebHidLab } from "../web/webhid-port";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { FakeHid, type FakeHidOptions, FakeLocks } from "./fake-webhid";
-import { type Transcript, type TranscriptEntry, recording } from "./transcript";
+import type { Transcript, TranscriptEntry } from "./transcript";
 
 export const TARGET = { imageBytes: 34_268, wireSum32: 0xf3d3dbd2 };
 
@@ -22,7 +23,7 @@ export async function recordFakeRun(options: FakeRunOptions = {}): Promise<{ rea
 	const entries: TranscriptEntry[] = [];
 	const now = () => performance.now();
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), {
-		wrap: (link) => recording(link, (entry) => entries.push(entry), now),
+		wrap: u1Wrap((entry) => entries.push(entry), now),
 		onEvent: (event) => entries.push({ t: now(), ...event }),
 	});
 	const clicker = options.autoPick ? setInterval(() => chooser.needsClick?.modes.includes(hid.device.mode) && chooser.pick(), 1) : null;
