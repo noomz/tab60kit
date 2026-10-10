@@ -49,7 +49,6 @@ interface RigOptions {
 	readonly board?: Partial<FakeOptions>;
 	readonly hid?: Partial<FakeHidOptions>;
 	readonly wrap?: (link: Link) => Link;
-	/** Wraps the link inside the recording, so the transcript shows what the page sent and how each send ended. */
 	readonly inner?: (link: Link) => Link;
 	readonly onEntry?: (entry: TranscriptEntry, board: FakeTab60) => void;
 	readonly onLog?: (line: string, board: FakeTab60) => void;
@@ -488,7 +487,6 @@ test("check 8 fails when RESET to app never brought the board back and a later C
 	expect(check8?.detail).toMatch(/no 0x0304 opened for the confirm after the last RESET to app that left/);
 });
 
-/** The board ignores the first RESET to app. The second reaches it, and its send rejects after the board took it. */
 function ignoresFirstResetThenRejects() {
 	let resets = 0;
 	return (link: Link): Link => ({

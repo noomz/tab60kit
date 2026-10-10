@@ -7,11 +7,9 @@ import { U1_EXPECTED } from "../lab/u1-job";
 import { verdictMain } from "../tools/u1-verdict";
 import { parseTranscript } from "./transcript";
 
-/** The first session with the real board, recorded on macOS by the page built from 97452b0. */
 const SESSION = join(import.meta.dir, "fixtures", "tab60kit-u1-2026-10-10T12-16-20-942Z.json");
 const raw: unknown = JSON.parse(readFileSync(SESSION, "utf8"));
 
-/** The verdict the lead's CLI run wrote for this session on 97452b0. */
 const CHECKS = [
 	[1, false, "needed a second click: the activation chooser closed with no device, the parked pick chose 0x1304"],
 	[2, true, "USB-HID IAP: 0xff00/1 in 64 out 64 feature 0"],

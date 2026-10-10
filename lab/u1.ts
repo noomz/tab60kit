@@ -114,7 +114,6 @@ async function start(): Promise<void> {
 		box.type = "checkbox";
 		box.addEventListener("change", () => {
 			const change = preconditionChange(entries, key, box.checked, now());
-			// A locked box records nothing, and render sets it back to what its entries say.
 			if (change === null) render();
 			else record(change);
 		});

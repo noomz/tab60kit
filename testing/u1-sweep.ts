@@ -41,8 +41,7 @@ export interface CancelRecord {
 	readonly by: "scenario" | "harness";
 	/** Whether an update-mode link was open, or the board may have been away, when the Cancel landed. */
 	readonly landed: string;
-	/** The Cancel landed while an update-mode link was open and before its RESET to app, so that frame must follow. */
-	readonly owesReset: boolean;
+	readonly owesResetToApp: boolean;
 	/** The frames recorded after the Cancel, until the run ended. */
 	readonly framesAfter: readonly string[];
 }
@@ -79,8 +78,7 @@ function holds(phase: Phase): number {
 	return phase.kind === "away" && phase.holding !== null ? 1 : 0;
 }
 
-/** True while an update-mode link is open and has not sent RESET to app, the one way home a Cancel there owes. */
-export function owesReset(entries: readonly TranscriptEntry[]): boolean {
+export function owesResetToApp(entries: readonly TranscriptEntry[]): boolean {
 	if (!updateModeLinkOpen(entries)) return false;
 	let owed = false;
 	for (const entry of entries) {
@@ -91,7 +89,7 @@ export function owesReset(entries: readonly TranscriptEntry[]): boolean {
 }
 
 function where(entries: readonly TranscriptEntry[]): string {
-	if (owesReset(entries)) return "with an update-mode link open before its RESET to app";
+	if (owesResetToApp(entries)) return "with an update-mode link open before its RESET to app";
 	if (updateModeLinkOpen(entries)) return "with an update-mode link open after its RESET to app";
 	return awayFromHome(entries) ? "with the board possibly away and no update-mode link" : "with the board home";
 }
@@ -152,7 +150,7 @@ export async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 					: {
 							by: cancelled.by,
 							landed: `in ${what} ${where(entries.slice(0, cancelled.at))}`,
-							owesReset: owesReset(entries.slice(0, cancelled.at)),
+							owesResetToApp: owesResetToApp(entries.slice(0, cancelled.at)),
 							framesAfter: entries.slice(cancelled.at, endedAt).flatMap((entry) => (entry.kind === "out" ? [entry.hex.slice(0, 4)] : [])),
 						},
 			stuck: outcome === "timer",
@@ -208,7 +206,7 @@ export function problems(result: ScenarioResult): string[] {
 		if (run.bringsHome && run.board === "iap") found.push("Restart left the board in update mode");
 		if (run.cancel !== null) {
 			const sent = run.cancel.framesAfter.join(" ") || "nothing";
-			const owed = run.cancel.owesReset ? "1101" : "nothing";
+			const owed = run.cancel.owesResetToApp ? "1101" : "nothing";
 			if (sent !== owed) found.push(`${run.what} sent ${sent} after a Cancel that owed ${owed}`);
 		}
 	}

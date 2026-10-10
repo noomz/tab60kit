@@ -53,7 +53,6 @@ test("a bootloader granted at load counts as away until a normal-mode link opens
 const HOME_LABEL = "Stop and send the board home";
 const keyboard = { productName: "USB-HID Keyboard", collections: [] };
 
-/** The keyboard link's close settles 30 ms late, so the bootloader can open first (fix3rev S3). */
 const keyboardClosesLate = (link: Link): Link => ({
 	mode: link.mode,
 	lost: link.lost,

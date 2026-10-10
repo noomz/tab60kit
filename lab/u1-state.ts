@@ -39,17 +39,11 @@ export function awayFromHome(entries: readonly TranscriptEntry[]): boolean {
 	return away;
 }
 
-/**
- * True from an update-mode link's `opened` entry until its own `closed` or `lost` entry, or another `opened` entry,
- * follows it. A close tagged with normal mode belongs to the keyboard link that enterIap closes while the bootloader
- * link opens, so that close may land after the bootloader's `opened` entry. An untagged close, from an older
- * transcript, ends the link.
- */
 export function updateModeLinkOpen(entries: readonly TranscriptEntry[]): boolean {
 	let open = false;
 	for (const entry of entries) {
 		if (entry.kind === "opened") open = entry.productId === TAB60.productId.iap;
-		if ((entry.kind === "closed" || entry.kind === "lost") && entry.mode !== "app") open = false;
+		if ((entry.kind === "closed" || entry.kind === "lost") && (entry.mode === undefined || entry.mode === "iap")) open = false;
 	}
 	return open;
 }
@@ -150,15 +144,12 @@ export type PreconditionKey = (typeof PRECONDITIONS)[number]["key"];
 
 const PRECONDITION_MET = "yes";
 
-/** The boxes lock when the first frame goes out, so what they say holds for the whole run. */
 export const preconditionsLocked = (entries: readonly TranscriptEntry[]): boolean => entries.some((entry) => entry.kind === "out");
 
-/** The entry a box change records, or null once the boxes are locked and the change does nothing. */
 export function preconditionChange(entries: readonly TranscriptEntry[], key: PreconditionKey, met: boolean, t: number): TranscriptEntry | null {
 	return preconditionsLocked(entries) ? null : { t, kind: "precondition", key, met };
 }
 
-/** The keys whose box is ticked after `entries`. Every box starts unticked. */
 export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<string> {
 	const on = new Set<string>();
 	for (const entry of entries) {
@@ -169,22 +160,18 @@ export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<st
 	return on;
 }
 
-/** The environment keys the page records, each "yes" or "no" as the box entries leave it. */
 export function preconditionEnvironment(entries: readonly TranscriptEntry[]): Record<string, string> {
 	const on = tickedBoxes(entries);
 	return Object.fromEntries(PRECONDITIONS.map(({ key }) => [key, on.has(key) ? PRECONDITION_MET : "no"]));
 }
 
-/**
- * The labels of the preconditions that did not hold for the whole run. The environment must record each as met. A box
- * entry before the first frame must not leave it unticked, and none may follow that frame. A transcript from a page
- * that did not record its boxes has no box entries, so its environment alone decides.
- */
 export function unmetPreconditions({ environment, entries }: { readonly environment: Readonly<Record<string, string>>; readonly entries: readonly TranscriptEntry[] }): string[] {
 	const first = entries.findIndex((entry) => entry.kind === "out");
 	const cut = first === -1 ? entries.length : first;
-	const atFirstFrame = new Map<string, boolean>();
-	for (const entry of entries.slice(0, cut)) if (entry.kind === "precondition") atFirstFrame.set(entry.key, entry.met);
-	const changed = new Set(entries.slice(cut).flatMap((entry) => (entry.kind === "precondition" ? [entry.key] : [])));
-	return PRECONDITIONS.filter(({ key }) => environment[key] !== PRECONDITION_MET || atFirstFrame.get(key) === false || changed.has(key)).map(({ label }) => label);
+	const pageRecordedBoxes = entries.some((entry) => entry.kind === "precondition");
+	const tickedAtFirstFrame = tickedBoxes(entries.slice(0, cut));
+	const changedInRun = new Set(entries.slice(cut).flatMap((entry) => (entry.kind === "precondition" ? [entry.key] : [])));
+	return PRECONDITIONS.filter(
+		({ key }) => environment[key] !== PRECONDITION_MET || (pageRecordedBoxes && !tickedAtFirstFrame.has(key)) || changedInRun.has(key),
+	).map(({ label }) => label);
 }
