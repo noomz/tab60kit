@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { classifyPage, leaveUpdateMode, observe } from "../core/chip";
 import { CATALOG } from "../core/firmware";
 import type { Activity } from "../core/job";
-import { PickCancelled } from "../core/port";
+import { LinkLost, PickCancelled } from "../core/port";
 import { connect, labClearance } from "../core/protocol";
 import { BL_INFO_HEX, SYNTHETIC_VERSION_PAGE_HEX } from "./fixtures";
 import { ScriptedLink, ScriptedPort, fromHex, report, toHex } from "./scripted";
@@ -81,6 +81,47 @@ test("leaveUpdateMode resets into normal mode, then confirms with a normal-mode 
 	expect(iap.sent.map((f) => toHex(f.subarray(0, 2))).at(-1)).toBe("1101");
 	expect(iap.closed).toBe(1);
 	expect(port.opens.at(-1)).toEqual({ modes: ["app"], reason: "confirm-normal-mode" });
+});
+
+const iapAttach = () => [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000")];
+const appAttach = () => [report("1202000001"), report("12000000" + BL_INFO_HEX)];
+const resetFails = (frame: Uint8Array) => (frame[0] === 0x11 ? new LinkLost("sendReport failed") : null);
+
+test("leaveUpdateMode sends a refused board home through its own RESET to app, then confirms", async () => {
+	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000040000")]);
+	const app = new ScriptedLink("app", appAttach());
+	const port = new ScriptedPort([iap, app]);
+	const refused = await connect(ctx(port), { modes: ["iap"], reason: "enter-update-mode" });
+	if (!("refusal" in refused)) throw new Error("attached");
+	const back = await leaveUpdateMode(refused, ctx(port));
+	expect(back?.mode).toBe("app");
+	expect(iap.sent.map((f) => toHex(f.subarray(0, 2)))).toEqual(["1202", "1200", "1201", "1101"]);
+	expect(iap.closed).toBe(1);
+});
+
+test("leaveUpdateMode still confirms when RESET to app's send failed, and returns the normal-mode session", async () => {
+	const iap = new ScriptedLink("iap", iapAttach());
+	iap.sendError = resetFails;
+	const port = new ScriptedPort([iap, new ScriptedLink("app", appAttach())]);
+	const session = await connect(ctx(port), { modes: ["iap"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	const back = await leaveUpdateMode(session, ctx(port));
+	expect(back?.mode).toBe("app");
+	expect(iap.closed).toBe(1);
+	expect(port.opens.at(-1)).toEqual({ modes: ["app"], reason: "confirm-normal-mode" });
+});
+
+test("a failed RESET to app with no board to confirm rethrows the send's error", async () => {
+	const iap = new ScriptedLink("iap", iapAttach());
+	iap.sendError = resetFails;
+	const port = new ScriptedPort([iap]);
+	const session = await connect(ctx(port), { modes: ["iap"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	port.open = async () => {
+		throw new PickCancelled("closed the chooser");
+	};
+	await expect(leaveUpdateMode(session, ctx(port))).rejects.toBeInstanceOf(LinkLost);
+	expect(iap.closed).toBe(1);
 });
 
 test("leaveUpdateMode treats a cancelled confirm pick as Skip", async () => {

@@ -13,7 +13,7 @@ import { CATALOG, type CatalogEntry, sha256 } from "./firmware";
 import type { BlInfo, FlashWindow, RegionName } from "./flashmap";
 import type { Job, JobContext } from "./job";
 import { PickCancelled } from "./port";
-import { type AppRefused, type AppSession, type IapSession, type Session, type VersionPageRead, connect } from "./protocol";
+import { type AppRefused, type AppSession, type IapRefused, type IapSession, type Session, type VersionPageRead, connect } from "./protocol";
 import { type Crc32, type Sha256, type Sum32, notImplemented } from "./units";
 
 export type PageState =
@@ -153,14 +153,25 @@ export const deepCheck: Job = async (start, ctx) => {
 	return notImplemented(`deepCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
 };
 
-/** Shared by the deep check and the flash job: restart into normal mode, then offer the optional confirm pick. */
-export async function leaveUpdateMode(iap: IapSession, ctx: JobContext): Promise<AppSession | AppRefused | null> {
+/**
+ * Shared by the deep check and the flash job. Restarts into normal mode, through the session or a refused board's own
+ * RESET to app, then offers the optional confirm pick. The pick runs even when the restart's send failed, because the
+ * board may have taken the frame. When the pick then finds no device, the restart's error propagates, because nothing
+ * shows where the board is.
+ */
+export async function leaveUpdateMode(iap: IapSession | IapRefused, ctx: JobContext): Promise<AppSession | AppRefused | null> {
 	ctx.progress({ kind: "restarting", into: "app" });
-	await iap.exitToApp();
+	const restart = await ("refusal" in iap ? iap.restartToApp() : iap.exitToApp()).then(
+		() => null,
+		(error: unknown) => ({ error }),
+	);
+	let back: AppSession | AppRefused | null;
 	try {
-		return await connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" });
+		back = await connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" });
 	} catch (error) {
-		if (error instanceof PickCancelled || ctx.signal.aborted) return null;
-		throw error;
+		if (!(error instanceof PickCancelled || ctx.signal.aborted)) throw error;
+		back = null;
 	}
+	if (back === null && restart !== null) throw restart.error;
+	return back;
 }
