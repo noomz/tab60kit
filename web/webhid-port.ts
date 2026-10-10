@@ -328,8 +328,8 @@ class WebHidLink implements Link {
 		return this.#queue.next(timeoutMs);
 	}
 
-	discardPending(): void {
-		this.#queue.discardPending();
+	discardPending(): readonly InReport[] {
+		return this.#queue.discardPending();
 	}
 
 	async close(): Promise<void> {

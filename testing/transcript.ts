@@ -9,11 +9,16 @@
 import type { DevicePort, Link, WantReason } from "../core/port";
 import { type Sha256, notImplemented, sha256Literal } from "../core/units";
 
+/** Tool version and commit, OS, browser, and whether Karabiner-Elements was running. */
+export interface Environment extends Readonly<Record<string, string>> {
+	/** "no" for the real WebHID, otherwise the page's ?fake mode. tools/u1-verdict.ts accepts only "no". */
+	readonly fake: string;
+}
+
 export interface Transcript {
 	readonly format: "tab60kit-transcript/1";
 	readonly recordedAt: string;
-	/** Tool version and commit, OS, browser, and whether Karabiner-Elements was running. */
-	readonly environment: Readonly<Record<string, string>>;
+	readonly environment: Environment;
 	readonly entries: readonly TranscriptEntry[];
 }
 
@@ -51,12 +56,22 @@ export type TranscriptEntry =
 			readonly payloadBytes: number;
 			readonly payloadSha256: Sha256;
 	  }
-	| { readonly t: number; readonly kind: "in"; readonly hex: string }
+	/** `discarded`: a report that discardPending dropped before a send, so the core never read it. */
+	| { readonly t: number; readonly kind: "in" | "discarded"; readonly hex: string }
+	/** Follows the `out` entry of a frame whose send rejected. The board may still have received it. */
+	| { readonly t: number; readonly kind: "send-failed"; readonly hex: string; readonly error: string }
+	/** The shell counted a device.close() that did not settle in time as closed. */
+	| { readonly t: number; readonly kind: "close-timeout"; readonly productId: number }
+	/** The page's visibility, at its start and on each change: a hidden tab slows timers, which check 9 measures. */
+	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
+	/** The typing field changed while a normal-mode link was the last one opened: plan check 8's evidence. */
+	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
 	| { readonly t: number; readonly kind: "lost" | "closed" };
 
 const WRITE_CMD = 0x1f;
 
 export const hexOf = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 export function recording(link: Link, sink: (entry: TranscriptEntry) => void, now: () => number = () => performance.now()): Link {
 	void link.lost.then(() => sink({ t: now(), kind: "lost" }));
@@ -65,15 +80,25 @@ export function recording(link: Link, sink: (entry: TranscriptEntry) => void, no
 		lost: link.lost,
 		async send(report) {
 			if (report[0] === WRITE_CMD) throw new Error("recording: WRITE frames are not recordable before U7 hashes their payloads");
-			sink({ t: now(), kind: "out", hex: hexOf(report) });
-			await link.send(report);
+			const hex = hexOf(report);
+			sink({ t: now(), kind: "out", hex });
+			try {
+				await link.send(report);
+			} catch (error) {
+				sink({ t: now(), kind: "send-failed", hex, error: describe(error) });
+				throw error;
+			}
 		},
 		async next(timeoutMs) {
 			const reply = await link.next(timeoutMs);
 			sink({ t: now(), kind: "in", hex: hexOf(reply) });
 			return reply;
 		},
-		discardPending: () => link.discardPending(),
+		discardPending() {
+			const dropped = link.discardPending();
+			for (const report of dropped) sink({ t: now(), kind: "discarded", hex: hexOf(report) });
+			return dropped;
+		},
 		async close() {
 			await link.close();
 			sink({ t: now(), kind: "closed" });
@@ -100,6 +125,11 @@ function string(entry: Record<string, unknown>, field: string, where: string): s
 	return typeof value === "string" ? value : fail(where, `${field} is not a string`);
 }
 
+function reportHex(entry: Record<string, unknown>, where: string): string {
+	const hex = string(entry, "hex", where);
+	return REPORT_HEX.test(hex) ? hex : fail(where, "hex is not 64 bytes");
+}
+
 function parseCollection(value: unknown, where: string): CollectionEntry {
 	if (!isRecord(value)) fail(where, "collection is not an object");
 	return {
@@ -118,11 +148,20 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 	const kind = string(value, "kind", where);
 	switch (kind) {
 		case "out":
-		case "in": {
-			const hex = string(value, "hex", where);
-			if (!REPORT_HEX.test(hex)) fail(where, "hex is not 64 bytes");
-			return { t, kind, hex };
+		case "in":
+		case "discarded":
+			return { t, kind, hex: reportHex(value, where) };
+		case "send-failed":
+			return { t, kind, hex: reportHex(value, where), error: string(value, "error", where) };
+		case "close-timeout":
+			return { t, kind, productId: number(value, "productId", where) };
+		case "visibility": {
+			const state = string(value, "state", where);
+			if (state !== "visible" && state !== "hidden") fail(where, `unknown visibility ${state}`);
+			return { t, kind, state };
 		}
+		case "typing":
+			return { t, kind, chars: number(value, "chars", where) };
 		case "lost":
 		case "closed":
 			return { t, kind };
@@ -168,13 +207,16 @@ export function parseTranscript(json: unknown): Transcript {
 	if (!isRecord(json)) fail("root", "not an object");
 	if (json.format !== "tab60kit-transcript/1") fail("root", `format is ${String(json.format)}`);
 	const recordedAt = string(json, "recordedAt", "root");
-	const environment = json.environment;
-	if (!isRecord(environment) || !Object.values(environment).every((v) => typeof v === "string")) fail("root", "environment is not a string map");
+	if (!isRecord(json.environment)) fail("root", "environment is not an object");
+	const strings: Record<string, string> = {};
+	for (const [key, value] of Object.entries(json.environment)) strings[key] = typeof value === "string" ? value : fail("root", `environment.${key} is not a string`);
+	const { fake } = strings;
+	if (fake === undefined) fail("root", "environment.fake is missing, so nothing says whether the board was real");
 	if (!Array.isArray(json.entries)) fail("root", "entries is not an array");
 	return {
 		format: "tab60kit-transcript/1",
 		recordedAt,
-		environment: environment as Record<string, string>,
+		environment: { ...strings, fake },
 		entries: json.entries.map(parseEntry),
 	};
 }

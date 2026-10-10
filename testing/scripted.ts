@@ -38,8 +38,9 @@ export class ScriptedLink implements Link {
 		return reply;
 	}
 
-	discardPending(): void {
+	discardPending(): readonly InReport[] {
 		this.calls.push("discardPending");
+		return [];
 	}
 
 	async close(): Promise<void> {

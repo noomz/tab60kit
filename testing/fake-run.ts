@@ -40,7 +40,7 @@ export async function recordFakeRun(options: FakeRunOptions = {}): Promise<{ rea
 		if (clicker !== null) clearInterval(clicker);
 	}
 	return {
-		transcript: { format: "tab60kit-transcript/1", recordedAt: new Date().toISOString(), environment: { tool: "test" }, entries },
+		transcript: { format: "tab60kit-transcript/1", recordedAt: new Date().toISOString(), environment: { tool: "test", fake: "plain" }, entries },
 		log,
 		board,
 	};

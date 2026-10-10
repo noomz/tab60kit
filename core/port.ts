@@ -79,8 +79,11 @@ export interface Link {
 	send(report: OutReport): Promise<void>;
 	/** The next input report, in arrival order. Rejects LinkLost or LinkTimeout. */
 	next(timeoutMs: number): Promise<InReport>;
-	/** Drops queued input reports, so a late reply to a timed-out request cannot pair with the next request. */
-	discardPending(): void;
+	/**
+	 * Drops queued input reports, so a late reply to a timed-out request cannot pair with the next request.
+	 * Returns what it dropped, so a lab transcript can keep reports the core never read.
+	 */
+	discardPending(): readonly InReport[];
 	/** Settles once, when the OS reports the device gone. Pending `send` and `next` calls reject LinkLost at the same moment. */
 	readonly lost: Promise<void>;
 	/** Idempotent, and resolves on a lost link: the core closes links a reset has already killed. */
@@ -159,8 +162,8 @@ export class ReportQueue {
 		});
 	}
 
-	discardPending(): void {
-		this.#queue.length = 0;
+	discardPending(): readonly InReport[] {
+		return this.#queue.splice(0);
 	}
 
 	end(error: LinkLost): void {
