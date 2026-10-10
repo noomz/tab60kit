@@ -22,6 +22,7 @@ import { ScriptedLink, ScriptedPort, fromHex, report, scriptedClock, toHex } fro
 
 const U1_ROWS = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"] as const;
 const clearance = labClearance(U1_ROWS, "protocol test");
+const live = new AbortController().signal;
 const IMAGE_BYTES = 34_268;
 
 const frame = (head: string, payload = "") => (head + "0000" + payload).padEnd(128, "0");
@@ -59,15 +60,15 @@ test("the nine U1 frames leave the sessions byte for byte", async () => {
 	const port = new ScriptedPort([app, iap], scriptedClock(), log);
 	const session = await connect(ctx(port), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	const page = await session.readVersionPage();
+	const page = await session.readVersionPage(live);
 	expect(page.bytes).toHaveLength(180);
 	expect(toHex(page.bytes)).toBe("ab".repeat(180));
-	await session.probe();
+	await session.probe(live);
 	const bootloader = await session.enterIap(ctx(port));
 	if ("refusal" in bootloader) throw new Error(bootloader.refusal.code);
-	const check = await bootloader.checksum(IMAGE_BYTES);
+	const check = await bootloader.checksum(IMAGE_BYTES, live);
 	expect([Number(check.sum), check.crc]).toEqual([0xf3d3dbd2, null]);
-	await bootloader.probe();
+	await bootloader.probe(live);
 	await bootloader.exitToApp();
 	expect(app.sent.map(toHex)).toEqual([
 		GOLDEN.readMode,
@@ -134,7 +135,7 @@ test("a command the clearance does not name sends nothing", async () => {
 	const session = await connect(ctx(new ScriptedPort([iap]), undefined, reads), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
 	const before = iap.sent.length;
-	await expect(session.checksum(IMAGE_BYTES)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.checksum(IMAGE_BYTES, live)).rejects.toBeInstanceOf(NotCleared);
 	expect(iap.sent).toHaveLength(before);
 	expect(iap.calls.filter((call) => call === "discardPending")).toHaveLength(before);
 });
@@ -152,7 +153,7 @@ test("a probe that reads the other mode's byte throws ModeDisagrees", async () =
 	const app = new ScriptedLink("app", [...appAttach(), modeReply("iap")]);
 	const session = await connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	await expect(session.probe()).rejects.toBeInstanceOf(ModeDisagrees);
+	await expect(session.probe(live)).rejects.toBeInstanceOf(ModeDisagrees);
 });
 
 const refusals: readonly [string, "app" | "iap", (InReport | Error)[], Record<string, unknown>][] = [
@@ -270,6 +271,44 @@ test("restartToApp closes the link even when the reset's send fails", async () =
 	await expect(result.restartToApp()).rejects.toBeInstanceOf(LinkLost);
 	expect(pairsOf(iap).at(-1)).toBe("1101");
 	expect(iap.closed).toBe(1);
+});
+
+test("after an abort, probe, readVersionPage, and checksum reject with its reason and send nothing", async () => {
+	const app = new ScriptedLink("app", appAttach());
+	const iap = new ScriptedLink("iap", iapAttach());
+	const port = new ScriptedPort([app, iap]);
+	const controller = new AbortController();
+	const normal = await connect(ctx(port, controller.signal), { modes: ["app"], reason: "connect" });
+	const update = await connect(ctx(port, controller.signal), { modes: ["iap"], reason: "connect" });
+	if ("refusal" in normal || "refusal" in update) throw new Error("refused");
+	const reason = new Error("cancelled from the page");
+	controller.abort(reason);
+	const sent = [app.sent.length, iap.sent.length];
+	await expect(normal.probe(controller.signal)).rejects.toBe(reason);
+	await expect(normal.readVersionPage(controller.signal)).rejects.toBe(reason);
+	await expect(update.probe(controller.signal)).rejects.toBe(reason);
+	await expect(update.readVersionPage(controller.signal)).rejects.toBe(reason);
+	await expect(update.checksum(IMAGE_BYTES, controller.signal)).rejects.toBe(reason);
+	expect([app.sent.length, iap.sent.length]).toEqual(sent);
+});
+
+test("RESET to app still leaves after the job's abort, from a session, a refusal, and a failed attach", async () => {
+	const session = new ScriptedLink("iap", iapAttach());
+	const refusal = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)]);
+	const failedAttach = new ScriptedLink("iap", [modeReply("iap")]);
+	const port = new ScriptedPort([session, refusal, failedAttach]);
+	const controller = new AbortController();
+	const job = ctx(port, controller.signal);
+	const update = await connect(job, { modes: ["iap"], reason: "connect" });
+	const refused = await connect(job, { modes: ["iap"], reason: "enter-update-mode" });
+	const failed = await connect(job, { modes: ["iap"], reason: "enter-update-mode" }).catch((error: unknown) => error);
+	if ("refusal" in update || !("refusal" in refused) || refused.restartToApp === null || !(failed instanceof IapAttachFailed)) throw new Error("unexpected attach");
+	controller.abort(new Error("cancelled from the page"));
+	await update.exitToApp();
+	await refused.restartToApp();
+	await failed.restartToApp();
+	expect([session, refusal, failedAttach].map((link) => toHex(link.sent.at(-1) ?? new Uint8Array(0)))).toEqual([GOLDEN.resetToApp, GOLDEN.resetToApp, GOLDEN.resetToApp]);
+	expect([session.closed, refusal.closed, failedAttach.closed]).toEqual([1, 1, 1]);
 });
 
 const window = { base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 } as unknown as FlashWindow;

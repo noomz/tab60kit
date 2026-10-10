@@ -578,10 +578,14 @@ function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cur
 
 type SilentCommand = { [K in CommandName]: (typeof COMMANDS)[K]["reply"] extends "none" ? K : never }[CommandName];
 
-/** The single path from the core to the wire. */
-function transmit(ch: Channel, name: SilentCommand, request: Request): Promise<null>;
-function transmit(ch: Channel, name: Exclude<CommandName, SilentCommand>, request: Request): Promise<InReport>;
-async function transmit(ch: Channel, name: CommandName, request: Request): Promise<InReport | null> {
+/**
+ * The single path from the core to the wire. `signal` is the job's, passed per call because a session outlives the
+ * job that opened it. Once it is aborted, nothing leaves.
+ */
+function transmit(ch: Channel, name: SilentCommand, request: Request, signal: AbortSignal): Promise<null>;
+function transmit(ch: Channel, name: Exclude<CommandName, SilentCommand>, request: Request, signal: AbortSignal): Promise<InReport>;
+async function transmit(ch: Channel, name: CommandName, request: Request, signal: AbortSignal): Promise<InReport | null> {
+	signal.throwIfAborted();
 	const frame = encode(name, request);
 	const verdict = auditEgress(frame, name, {
 		mode: ch.link.mode,
@@ -629,8 +633,8 @@ const u32Of = (reply: InReport) => viewOf(reply).getUint32(PAYLOAD_OFFSET, true)
 /** READ MODE's payload byte 0 (R1 "Commands"). */
 const MODE_BYTE = { iap: 0, app: 1 } as const satisfies Record<Mode, number>;
 
-async function readModeByte(ch: Channel): Promise<number> {
-	return viewOf(await transmit(ch, "readMode", {})).getUint8(PAYLOAD_OFFSET);
+async function readModeByte(ch: Channel, signal: AbortSignal): Promise<number> {
+	return viewOf(await transmit(ch, "readMode", {}, signal)).getUint8(PAYLOAD_OFFSET);
 }
 
 /** READ MODE answered a byte other than the mode byte of the link that carried it. */
@@ -644,8 +648,8 @@ export class ModeDisagrees extends Error {
 	}
 }
 
-async function probe(ch: Channel): Promise<void> {
-	const byte = await readModeByte(ch);
+async function probe(ch: Channel, signal: AbortSignal): Promise<void> {
+	const byte = await readModeByte(ch, signal);
 	if (byte !== MODE_BYTE[ch.link.mode]) throw new ModeDisagrees(ch.link.mode, byte);
 }
 
@@ -654,18 +658,21 @@ export interface VersionPageRead {
 	readonly bytes: Uint8Array;
 }
 
-async function readVersionPage(ch: Channel): Promise<VersionPageRead> {
+async function readVersionPage(ch: Channel, signal: AbortSignal): Promise<VersionPageRead> {
 	const { count } = COMMANDS.readVersionPage.sub;
 	const bytes = new Uint8Array(count * MAX_PAYLOAD_BYTES);
 	for (let part = 0; part < count; part++) {
-		bytes.set(payloadOf(await transmit(ch, "readVersionPage", { part })), part * MAX_PAYLOAD_BYTES);
+		bytes.set(payloadOf(await transmit(ch, "readVersionPage", { part }, signal)), part * MAX_PAYLOAD_BYTES);
 	}
 	return { bytes };
 }
 
+/** RESET to app is how a cancelled job sends the board home, so it leaves under a signal that never aborts. */
+const NEVER_ABORTED = new AbortController().signal;
+
 async function restartToApp(ch: Channel): Promise<void> {
 	try {
-		await transmit(ch, "resetToApp", {});
+		await transmit(ch, "resetToApp", {}, NEVER_ABORTED);
 	} finally {
 		await ch.link.close();
 	}
@@ -701,36 +708,40 @@ export interface LinkContext {
 /**
  * Normal mode. Reads, the live config channel, and the restart into update mode.
  * Nothing on this type can address flash, and the app firmware has no flash-write code anyway (R4).
+ * A method that takes the job's `signal` rejects with its reason, before its next command leaves, once it is aborted.
  */
 export interface AppSession {
 	readonly mode: "app";
 	readonly info: BlInfo;
 	readonly window: FlashWindow;
-	readVersionPage(): Promise<VersionPageRead>;
+	readVersionPage(signal: AbortSignal): Promise<VersionPageRead>;
 	/** READ MODE as a liveness probe. Resolves when the board answers 1, normal mode. */
-	probe(): Promise<void>;
+	probe(signal: AbortSignal): Promise<void>;
 	/**
 	 * Restarts the board into update mode and returns the bootloader session, or the refusal that attach found
 	 * there. This session is closed afterwards. The update-mode link is requested before the reset frame leaves,
 	 * because a chooser opened inside the click's activation stays open and adds the row when the bootloader
-	 * appears (R3 C7). No reset leaves when that request has already failed. An attach that throws rejects with
-	 * IapAttachFailed, which holds the update-mode link open.
+	 * appears (R3 C7). No reset leaves when that request has already failed or `ctx.signal` is aborted. An attach
+	 * that throws rejects with IapAttachFailed, which holds the update-mode link open.
 	 */
 	enterIap(ctx: LinkContext): Promise<IapSession | IapRefused>;
 	readonly config: ConfigChannel;
 	close(): Promise<void>;
 }
 
-/** Update mode. Every flash operation addresses the window validated at attach; none takes an address. */
+/**
+ * Update mode. Every flash operation addresses the window validated at attach; none takes an address.
+ * A method that takes the job's `signal` rejects with its reason, before its next command leaves, once it is aborted.
+ */
 export interface IapSession {
 	readonly mode: "iap";
 	readonly info: BlInfo;
 	readonly window: FlashWindow;
-	readVersionPage(): Promise<VersionPageRead>;
+	readVersionPage(signal: AbortSignal): Promise<VersionPageRead>;
 	/** READ MODE as a liveness probe for the link gate (flash.ts). Resolves when the board answers 0, update mode. */
-	probe(): Promise<void>;
+	probe(signal: AbortSignal): Promise<void>;
 	/** SUM, plus CRC-32 when cleared, over [imageBase, imageBase + imageBytes). */
-	checksum(imageBytes: number): Promise<{ readonly sum: Sum32; readonly crc: Crc32 | null }>;
+	checksum(imageBytes: number, signal: AbortSignal): Promise<{ readonly sum: Sum32; readonly crc: Crc32 | null }>;
 	/**
 	 * ERASE the version page (`versionPage(window)`), wait for its echo, then ERASE the app region (`appRegion(window)`).
 	 * The page is gone before any app byte changes, whatever order the IAP erases pages within one command, so no
@@ -817,12 +828,12 @@ class App implements AppSession {
 		this.config = configChannel(ch);
 	}
 
-	readVersionPage(): Promise<VersionPageRead> {
-		return readVersionPage(this.ch);
+	readVersionPage(signal: AbortSignal): Promise<VersionPageRead> {
+		return readVersionPage(this.ch, signal);
 	}
 
-	probe(): Promise<void> {
-		return probe(this.ch);
+	probe(signal: AbortSignal): Promise<void> {
+		return probe(this.ch, signal);
 	}
 
 	async enterIap(ctx: LinkContext): Promise<IapSession | IapRefused> {
@@ -836,7 +847,7 @@ class App implements AppSession {
 			throw early.error;
 		}
 		try {
-			await transmit(this.ch, "resetToIap", {});
+			await transmit(this.ch, "resetToIap", {}, ctx.signal);
 		} catch (error) {
 			const boardMayHaveReset = error instanceof LinkLost || error instanceof LinkTimeout;
 			if (!boardMayHaveReset) {
@@ -863,19 +874,19 @@ class Iap implements IapSession {
 		readonly window: FlashWindow,
 	) {}
 
-	readVersionPage(): Promise<VersionPageRead> {
-		return readVersionPage(this.ch);
+	readVersionPage(signal: AbortSignal): Promise<VersionPageRead> {
+		return readVersionPage(this.ch, signal);
 	}
 
-	probe(): Promise<void> {
-		return probe(this.ch);
+	probe(signal: AbortSignal): Promise<void> {
+		return probe(this.ch, signal);
 	}
 
-	async checksum(imageBytes: number): Promise<{ readonly sum: Sum32; readonly crc: Crc32 | null }> {
+	async checksum(imageBytes: number, signal: AbortSignal): Promise<{ readonly sum: Sum32; readonly crc: Crc32 | null }> {
 		const span = imageSpan(this.window, imageBytes);
 		if (span === null) throw new RangeError(`an image of ${imageBytes} bytes does not fit the window`);
-		const sum = sum32Literal(u32Of(await transmit(this.ch, "sum", { payload: rangePayload(span) })));
-		const crc = clears(this.ch.clearance, "crc") ? crc32Literal(u32Of(await transmit(this.ch, "crc", { payload: rangePayload(span) }))) : null;
+		const sum = sum32Literal(u32Of(await transmit(this.ch, "sum", { payload: rangePayload(span) }, signal)));
+		const crc = clears(this.ch.clearance, "crc") ? crc32Literal(u32Of(await transmit(this.ch, "crc", { payload: rangePayload(span) }, signal))) : null;
 		return { sum, crc };
 	}
 
@@ -900,13 +911,13 @@ class Iap implements IapSession {
 	}
 }
 
-async function inspect(ch: Channel): Promise<{ readonly info: BlInfo; readonly window: FlashWindow } | LayoutRefusal> {
+async function inspect(ch: Channel, signal: AbortSignal): Promise<{ readonly info: BlInfo; readonly window: FlashWindow } | LayoutRefusal> {
 	const { mode } = ch.link;
-	const modeByte = await readModeByte(ch);
+	const modeByte = await readModeByte(ch, signal);
 	if (modeByte !== MODE_BYTE[mode]) return { code: "mode-disagrees", productIdSays: mode, readModeSays: modeByte };
-	const info = parseBlInfo(payloadOf(await transmit(ch, "readBlInfo", {})));
+	const info = parseBlInfo(payloadOf(await transmit(ch, "readBlInfo", {}, signal)));
 	if ("code" in info) return info;
-	const fwInfo = mode === "iap" ? u32Of(await transmit(ch, "readFwInfo", {})) : null;
+	const fwInfo = mode === "iap" ? u32Of(await transmit(ch, "readFwInfo", {}, signal)) : null;
 	const window = windowFor(info, fwInfo);
 	if ("code" in window) return window;
 	return { info, window };
@@ -930,7 +941,7 @@ async function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session |
 	const ch: Channel = { link, clock: ctx.port.clock, clearance: ctx.clearance, window: null, cursor: null };
 	let seen: Awaited<ReturnType<typeof inspect>>;
 	try {
-		seen = await inspect(ch);
+		seen = await inspect(ch, ctx.signal);
 	} catch (error) {
 		if (link.mode === "iap") throw new IapAttachFailed(ch, error);
 		await link.close();

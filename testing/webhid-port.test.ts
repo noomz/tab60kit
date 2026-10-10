@@ -192,6 +192,19 @@ test("an open that settles after its timeout is closed again, so nothing holds t
 	expect(device.opened).toBe(false);
 }, 6_000);
 
+test("an abort while device.open() is pending closes the device again and reports no open", async () => {
+	const { port, hid, events } = lab();
+	const device = hid.device;
+	const open = device.open.bind(device);
+	device.open = () => new Promise<void>((resolve, reject) => setTimeout(() => open().then(resolve, reject), 30));
+	const controller = new AbortController();
+	const opening = port.open(APP, controller.signal);
+	setTimeout(() => controller.abort(new Error("cancelled from the page")), 10);
+	await expect(opening).rejects.toThrow("cancelled from the page");
+	expect(events.some((event) => event.kind === "opened")).toBe(false);
+	expect(hid.openHandles).toBe(0);
+});
+
 test("a device this page already holds open is DeviceAlreadyOpen at once, not OsPermissionDenied", async () => {
 	const { port, events } = lab();
 	await port.open(APP, signal());
@@ -287,7 +300,7 @@ test("the whole bootloader round trip over the fake WebHID lands in update mode 
 	if ("refusal" in app) throw new Error(app.refusal.code);
 	const iap = await app.enterIap(ctx);
 	if ("refusal" in iap) throw new Error(iap.refusal.code);
-	expect(Number((await iap.checksum(target.imageBytes)).sum)).toBe(target.wireSum32);
+	expect(Number((await iap.checksum(target.imageBytes, signal())).sum)).toBe(target.wireSum32);
 	await iap.exitToApp();
 	const back = await connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" });
 	expect(back.mode).toBe("app");

@@ -84,8 +84,7 @@ export function describeChip(chip: ChipState): string {
 async function probeSeries(session: AppSession | IapSession, ctx: U1Context): Promise<void> {
 	for (let i = 0; i < ctx.series.probes; i++) {
 		if (i > 0) await ctx.port.clock.sleep(ctx.series.everyMs, ctx.signal);
-		ctx.signal.throwIfAborted();
-		await session.probe();
+		await session.probe(ctx.signal);
 	}
 	ctx.log(`${ctx.series.probes} READ MODE probes answered in ${session.mode === "app" ? "normal" : "update"} mode`);
 }
@@ -106,7 +105,7 @@ export async function u1Connect(ctx: U1Context): Promise<ConnectEnd> {
 	const session = await connect(ctx, { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) return { kind: "refused", refused: session };
 	try {
-		const observed = await observe(session);
+		const observed = await observe(session, ctx.signal);
 		ctx.log(describeChip(observed.chip));
 		await probeSeries(session, ctx);
 		return { kind: "connected", session, observed };
@@ -129,7 +128,7 @@ async function goHome(iap: IapSession | IapRefused, ctx: U1Context): Promise<Bac
 }
 
 async function updateModeChecks(iap: IapSession, ctx: U1Context): Promise<BootTarget> {
-	const observed = await observe(iap);
+	const observed = await observe(iap, ctx.signal);
 	ctx.log(describeChip(observed.chip));
 	const boot = bootTarget(observed.chip);
 	ctx.log(`boot target: ${boot}`);

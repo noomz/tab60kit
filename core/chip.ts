@@ -49,19 +49,20 @@ export type Observed =
 	| { readonly mode: "app"; readonly session: AppSession; readonly chip: AppChip }
 	| { readonly mode: "iap"; readonly session: IapSession; readonly chip: IapChip };
 
-export async function observe(session: Session): Promise<Observed> {
-	const page = await classifyPage(await session.readVersionPage());
+/** Rejects with the signal's reason, before its next command leaves, once `signal` is aborted. */
+export async function observe(session: Session, signal: AbortSignal): Promise<Observed> {
+	const page = await classifyPage(await session.readVersionPage(signal));
 	const { info, window } = session;
 	if (session.mode === "app") return { mode: "app", session, chip: { mode: "app", info, window, page } };
-	const image = await checkImage(session);
+	const image = await checkImage(session, signal);
 	return { mode: "iap", session, chip: { mode: "iap", info, window, page, image } };
 }
 
-async function checkImage(session: IapSession): Promise<ImageCheck> {
+async function checkImage(session: IapSession, signal: AbortSignal): Promise<ImageCheck> {
 	const lengths = [...new Set(CATALOG.map((entry) => entry.image.bytes))];
 	let first: ImageCheck | null = null;
 	for (const bytes of lengths) {
-		const { sum, crc } = await session.checksum(bytes);
+		const { sum, crc } = await session.checksum(bytes, signal);
 		const entry = CATALOG.find((candidate) => candidate.image.bytes === bytes && candidate.image.wireSum32 === sum && (crc === null || candidate.image.wireCrc32 === crc));
 		if (entry !== undefined) return { kind: "official", entry, by: crc === null ? "sum" : "sum-and-crc" };
 		first ??= { kind: "unrecognized", sum, crc };
@@ -145,8 +146,8 @@ export const quickCheck: Job = async (start, ctx) => {
  * Enter update mode, checksum the image, and come back. Read-only, so a lost link restarts it from the top, and no
  * link gate applies.
  * TODO:
- *   obs = observe(start ?? connect(ctx, both modes))
- *   if app: session = obs.session.enterIap(ctx); obs = observe(session)
+ *   obs = observe(start ?? connect(ctx, both modes), ctx.signal)
+ *   if app: session = obs.session.enterIap(ctx); obs = observe(session, ctx.signal)
  *   if bootTarget(obs.chip) is "normal-mode" or "boots-unchecked-image": leaveUpdateMode(session, ctx)
  *   otherwise stay in update mode and finish: the report says a flash is needed before the board can type
  *   connect and enterIap can both reject IapAttachFailed, whose open link must be restarted or closed

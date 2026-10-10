@@ -10,6 +10,7 @@ import { ScriptedLink, ScriptedPort, fromHex, report, toHex } from "./scripted";
 const clearance = labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "chip test");
 const entry = CATALOG[0]!;
 const page = fromHex(SYNTHETIC_VERSION_PAGE_HEX);
+const live = new AbortController().signal;
 const pageReplies = (bytes: Uint8Array) => [0, 1, 2].map((part) => report(`122${part}0000` + toHex(bytes.subarray(part * 60, part * 60 + 60))));
 const sumReply = (sum: number) => report("1d010000" + toHex(fromHex(sum.toString(16).padStart(8, "0")).reverse()));
 const ctx = (port: ScriptedPort, progress: Activity[] = []) => ({
@@ -40,7 +41,7 @@ test("observe in normal mode reads the version page and nothing else", async () 
 	const app = new ScriptedLink("app", [report("1202000001"), report("12000000" + BL_INFO_HEX), ...pageReplies(page)]);
 	const session = await connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	const observed = await observe(session);
+	const observed = await observe(session, live);
 	expect(observed.mode).toBe("app");
 	expect(observed.chip.page).toMatchObject({ kind: "unknown", text: "V1.01.13" });
 	expect(app.sent.map((f) => toHex(f.subarray(0, 2)))).toEqual(["1202", "1200", "1220", "1221", "1222"]);
@@ -50,7 +51,7 @@ test("observe in update mode sums the catalog's image length and recognizes the 
 	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000"), ...pageReplies(page), sumReply(0xf3d3dbd2)]);
 	const session = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	const observed = await observe(session);
+	const observed = await observe(session, live);
 	if (observed.mode !== "iap") throw new Error(observed.mode);
 	expect(observed.chip.image).toEqual({ kind: "official", entry, by: "sum" });
 	expect(iap.sent.map((f) => toHex(f.subarray(0, 2)))).toEqual(["1202", "1200", "1201", "1220", "1221", "1222", "1d01"]);
@@ -61,7 +62,7 @@ test("observe in update mode reports an unrecognized sum", async () => {
 	const iap = new ScriptedLink("iap", [report("1202000000"), report("12000000" + BL_INFO_HEX), report("1201000000020000"), ...pageReplies(page), sumReply(0x12345678)]);
 	const session = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	const observed = await observe(session);
+	const observed = await observe(session, live);
 	if (observed.mode !== "iap") throw new Error(observed.mode);
 	const { image } = observed.chip;
 	if (image.kind !== "unrecognized") throw new Error(image.kind);

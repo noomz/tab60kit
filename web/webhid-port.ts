@@ -300,6 +300,11 @@ class WebHidPort implements DevicePort {
 			this.report({ kind: "open-attempt", productId, attempt, error: null });
 			break;
 		}
+		// device.open() takes no signal, so an abort that landed while it was pending shows only now.
+		if (signal.aborted) {
+			await closeDevice(device, this.report);
+			throw signal.reason;
+		}
 		const mode = modeOf(productId);
 		if (!hasVendorCollection(device) || mode === null) {
 			await closeDevice(device, this.report);

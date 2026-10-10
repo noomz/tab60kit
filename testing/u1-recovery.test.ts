@@ -149,6 +149,44 @@ for (const [name, replace] of probeFailures) {
 	});
 }
 
+/** A rig whose Cancel lands on the first entry that `when` matches, and the frames that left after it. */
+function cancelling(when: (entry: TranscriptEntry, board: FakeTab60) => boolean) {
+	const controller = new AbortController();
+	let sentBefore = 0;
+	const r = rig({
+		onEntry: once(when, () => {
+			sentBefore = r.pairs().length;
+			controller.abort(cancel());
+		}),
+	});
+	return { ...r, signal: controller.signal, framesAfterCancel: () => r.pairs().slice(sentBefore) };
+}
+
+const updateModeAnswer = (prefix: string) => (entry: TranscriptEntry, board: FakeTab60) => board.mode === "iap" && entry.kind === "in" && entry.hex.startsWith(prefix);
+
+for (const [where, prefix] of [
+	["the update-mode attach's READ MODE answer", "1202"],
+	["the first update-mode version page part", "1220"],
+] as const) {
+	test(`a Cancel at ${where} is followed by RESET to app and nothing else`, async () => {
+		const r = cancelling(updateModeAnswer(prefix));
+		const app = await r.connected();
+		const error = await rejection(u1DeepCheck(app, r.ctx(r.signal)));
+		expect(error).toMatchObject({ name: "AbortError" });
+		expect(r.framesAfterCancel()).toEqual(["1101"]);
+		expect(r.hid.openHandles).toBe(0);
+		expect(phaseAfterRun(r.entries, outcomeOfError(error))).toEqual(AWAY);
+	});
+}
+
+test("a Cancel after READ BL INFO in Connect is followed by no frame", async () => {
+	const r = cancelling((entry) => entry.kind === "in" && entry.hex.startsWith("1200"));
+	const error = await rejection(u1Connect(r.ctx(r.signal)));
+	expect(error).toMatchObject({ name: "AbortError" });
+	expect(r.framesAfterCancel()).toEqual([]);
+	expect(r.hid.openHandles).toBe(0);
+});
+
 test("a Cancel during the update-mode probes sends RESET to app and closes the link, and the page shows away", async () => {
 	const controller = new AbortController();
 	let answers = 0;
@@ -257,7 +295,7 @@ test("a Cancel while the Deep check chooser is open sends no frame after the can
 	expect(phaseAfterRun(r.entries, outcomeOfError(error))).toEqual(AWAY);
 });
 
-test("an abort as the Deep check starts settles the run at once and leaves no pick parked", async () => {
+test("an abort as the Deep check starts settles the run at once, sends no RESET to IAP, and leaves no pick parked", async () => {
 	const controller = new AbortController();
 	const r = rig({ hid: { rowAppearsInOpenChooser: [] } });
 	const app = await r.connected();
@@ -267,8 +305,8 @@ test("an abort as the Deep check starts settles the run at once and leaves no pi
 	expect(settled).toMatchObject({ name: "AbortError" });
 	expect(r.chooser.needsClick).toBeNull();
 	expect(r.hid.openHandles).toBe(0);
-	expect(r.pairs()).toEqual([...CONNECT, "1100"]);
-	expect(phaseAfterRun(r.entries, outcomeOfError(settled))).toEqual(AWAY);
+	expect(r.pairs()).toEqual(CONNECT);
+	expect(phaseAfterRun(r.entries, outcomeOfError(settled))).toEqual(IDLE);
 });
 
 test("silence at the end of the update-mode observation sends RESET to app, closes the link, and the page offers Try again", async () => {
