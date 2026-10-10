@@ -19,12 +19,17 @@ export interface FakeOptions {
 	readonly starting: "official-image" | "untrusted-image" | "update-mode-erased" | "update-mode-partial-version-block";
 	/** The image a correct run ends with, from the catalog entry the test flashes. */
 	readonly target: { readonly imageBytes: number; readonly wireSum32: number };
-	/** Lose the link right before the board would receive this output report (counted from 0 across the run). */
+	/**
+	 * Lose the link right before the board would receive this output report (counted from 0 across the run). The
+	 * board then re-enumerates in the same mode, as after a USB glitch.
+	 */
 	readonly loseLinkAtPacket?: number;
 	/** On that loss, also reset the MCU: SRAM is cleared and the IAP decides from the version page. */
 	readonly resetOnLoss?: boolean;
 	/** The board answers this command with the FF AA error marker once. */
 	readonly refuseOnce?: { readonly cmd: number; readonly sub: number };
+	/** The board answers this command in this mode `ms` late, once, after answering `skip` (default 0) earlier ones on time. */
+	readonly slowOnce?: { readonly cmd: number; readonly sub: number; readonly mode: Mode; readonly ms: number; readonly skip?: number };
 	readonly blInfo?: Uint8Array;
 	readonly fwInfo?: number;
 	readonly versionBlock?: Uint8Array;
@@ -146,6 +151,8 @@ export class FakeTab60 {
 	readonly #arrivals: { readonly modes: readonly Mode[]; readonly resolve: () => void }[] = [];
 	readonly #enumerationListeners = new Set<(mode: Mode) => void>();
 	#refuseOnce: { readonly cmd: number; readonly sub: number } | null;
+	#slowOnce: NonNullable<FakeOptions["slowOnce"]> | null;
+	#slowSkip: number;
 	#packets = 0;
 	readonly #violations: Violation[] = [];
 	ignoreInIap = false;
@@ -154,6 +161,8 @@ export class FakeTab60 {
 		const { starting, target } = options;
 		this.#fwInfo = options.fwInfo ?? FW_OFFSET;
 		this.#refuseOnce = options.refuseOnce ?? null;
+		this.#slowOnce = options.slowOnce ?? null;
+		this.#slowSkip = options.slowOnce?.skip ?? 0;
 		this.#flash.set(options.blInfo ?? blInfoBlock(), BL_INFO_ADDR);
 		const page = options.versionBlock ?? syntheticVersionBlock();
 		const official = bytesSummingTo(target.imageBytes, target.wireSum32);
@@ -244,8 +253,7 @@ export class FakeTab60 {
 	#receive(socket: Socket, bytes: Uint8Array): void {
 		const index = this.#packets++;
 		if (this.options.loseLinkAtPacket === index) {
-			this.#detachAll();
-			if (this.options.resetOnLoss) this.#reset(this.#bootMode());
+			this.#reset(this.options.resetOnLoss ? this.#bootMode() : this.#mode);
 			return;
 		}
 		queueMicrotask(() => this.#handle(socket, bytes));
@@ -255,6 +263,15 @@ export class FakeTab60 {
 		if (!this.#sockets.has(socket)) return;
 		const cmd = bytes[0] ?? 0;
 		const sub = bytes[1] ?? 0;
+		const slow = this.#slowOnce;
+		if (slow !== null && slow.cmd === cmd && slow.sub === sub && slow.mode === this.#mode) {
+			if (this.#slowSkip > 0) this.#slowSkip--;
+			else {
+				this.#slowOnce = null;
+				setTimeout(() => this.#handle(socket, bytes), slow.ms);
+				return;
+			}
+		}
 		const echo = bytes.subarray(2, 4);
 		const reply = (payload: Uint8Array) => {
 			const out = new Uint8Array(REPORT_BYTES);

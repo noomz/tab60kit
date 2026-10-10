@@ -47,7 +47,7 @@ test("every request but the two resets is answered, and the replies echo bytes 2
 
 test("a bootloader that answers nothing times out, and Try again resumes from the granted device", async () => {
 	const board = new FakeTab60({ starting: "official-image", target: TARGET });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: true, isActive: () => true });
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true });
 	const entries: TranscriptEntry[] = [];
 	const { port } = startWebHidLab(hid, new FakeLocks(), { wrap: (link) => recording(link, (entry) => entries.push(entry)), onEvent: (event) => entries.push({ t: 0, ...event }) });
 	const ctx: U1Context = { port, clearance: u1Clearance(), signal: new AbortController().signal, log: () => undefined, series: { probes: 2, everyMs: 1 } };

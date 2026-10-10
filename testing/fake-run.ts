@@ -18,7 +18,7 @@ export interface FakeRunOptions {
 
 export async function recordFakeRun(options: FakeRunOptions = {}): Promise<{ readonly transcript: Transcript; readonly log: string[]; readonly board: FakeTab60 }> {
 	const board = new FakeTab60({ starting: "official-image", target: TARGET, ...options.board });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: true, isActive: () => true, ...options.hid });
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true, ...options.hid });
 	const entries: TranscriptEntry[] = [];
 	const now = () => performance.now();
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), {

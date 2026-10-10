@@ -34,7 +34,7 @@ test("the default fake run passes every check, with no findings, over the nine c
 });
 
 test("check 1 fails when the Deep check chooser closed empty and a parked pick was needed", async () => {
-	const { transcript } = await recordFakeRun({ hid: { rowAppearsInOpenChooser: false }, autoPick: true });
+	const { transcript } = await recordFakeRun({ hid: { rowAppearsInOpenChooser: [] }, autoPick: true });
 	expect(await failing(transcript)).toEqual([1]);
 	expect((await verdict(transcript)).checks[0]?.detail).toMatch(/needed a second click/);
 });

@@ -89,7 +89,7 @@ function describeEvent(event: PortEvent): string {
 function hardware(mode: FakeMode | null): { readonly hid: HID; readonly locks: LockManager; readonly board: FakeTab60 | null } {
 	if (mode === null) return { hid: navigator.hid, locks: navigator.locks, board: null };
 	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 } });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: mode !== "parked" });
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: mode === "parked" ? [] : ["app", "iap"] });
 	if (mode === "cancel") hid.chooser = "cancel";
 	if (mode === "deaf") board.ignoreInIap = true;
 	return { hid, locks: new FakeLocks(), board };

@@ -14,7 +14,7 @@ const IAP = { modes: ["iap"], reason: "enter-update-mode" } as const;
 
 function lab(options: Partial<FakeHidOptions> & { readonly starting?: FakeTab60["options"]["starting"] } = {}) {
 	const board = new FakeTab60({ starting: options.starting ?? "official-image", target });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: true, isActive: () => true, ...options });
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true, ...options });
 	const events: PortEvent[] = [];
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), { wrap: (link) => link, onEvent: (event) => events.push(event) });
 	const resetBoard = () => board.plug({ report: () => undefined, detached: () => undefined }).send(fromHex("1100".padEnd(128, "0")));
@@ -64,7 +64,7 @@ test("a chooser that stays open lists the bootloader row when the board re-enume
 });
 
 test("a chooser that closes empty parks a pick instead of failing, and the click then finds the row", async () => {
-	const { port, events, chooser, resetBoard } = lab({ rowAppearsInOpenChooser: false });
+	const { port, events, chooser, resetBoard } = lab({ rowAppearsInOpenChooser: [] });
 	const opening = port.open(IAP, signal());
 	await new Promise((resolve) => setTimeout(resolve, 0));
 	expect(chooser.needsClick).toEqual(IAP);
@@ -73,6 +73,30 @@ test("a chooser that closes empty parks a pick instead of failing, and the click
 	chooser.pick();
 	expect((await opening).mode).toBe("iap");
 	expect(picks(events)).toEqual(["activation:none", "parked:1304"]);
+});
+
+test("an open chooser for a mode the fake lists waits for its row, and closes empty when none comes", async () => {
+	const { port, events, chooser } = lab({ starting: "update-mode-erased", rowAppearsInOpenChooser: ["app"], emptyChooserClosesAfterMs: 20 });
+	const opening = port.open(APP, signal());
+	opening.catch(() => undefined);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	expect(picks(events)).toEqual([]);
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	expect(picks(events)).toEqual(["activation:none"]);
+	expect(chooser.needsClick).toEqual(APP);
+});
+
+test("openHandles counts the open devices across re-enumerations", async () => {
+	const { port, hid, resetBoard } = lab();
+	const link = await port.open(APP, signal());
+	expect(hid.openHandles).toBe(1);
+	resetBoard();
+	await link.lost;
+	expect(hid.openHandles).toBe(0);
+	const iap = await port.open(IAP, signal());
+	expect(hid.openHandles).toBe(1);
+	await iap.close();
+	expect(hid.openHandles).toBe(0);
 });
 
 test("only a cancelled parked pick is PickCancelled", async () => {
@@ -136,7 +160,7 @@ test("a chooser that closes empty after the abort rejects at once instead of par
 		controller.abort(new Error("cancelled from the page"));
 		return true;
 	};
-	const { port, chooser } = lab({ rowAppearsInOpenChooser: false, isActive: cancelWhileOpen });
+	const { port, chooser } = lab({ rowAppearsInOpenChooser: [], isActive: cancelWhileOpen });
 	await expect(port.open(IAP, controller.signal)).rejects.toThrow("cancelled from the page");
 	expect(chooser.needsClick).toBeNull();
 });

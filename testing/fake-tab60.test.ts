@@ -93,6 +93,29 @@ test("refuseOnce answers FF AA once, and a deaf bootloader answers nothing", asy
 	expect(await ask("12020000")).toEqual([]);
 });
 
+test("slowOnce answers one matching command late, after answering its skip count on time", async () => {
+	const board = new FakeTab60({ starting: "update-mode-erased", target, slowOnce: { cmd: 0x12, sub: 0x02, mode: "iap", ms: 30, skip: 1 } });
+	const { ask, reports } = tap(board);
+	expect(await ask("12020000")).toHaveLength(1);
+	expect(await ask("12020000")).toEqual([]);
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	expect(reports.at(-1)?.slice(0, 10)).toBe("1202000000");
+	expect(await ask("12020000")).toHaveLength(1);
+});
+
+test("a lost link re-enumerates in the same mode, or where the IAP boots when the MCU also resets", async () => {
+	for (const [resetOnLoss, after] of [[false, "iap"], [true, "app"]] as const) {
+		const board = new FakeTab60({ starting: "official-image", target, loseLinkAtPacket: 1, resetOnLoss });
+		const modes: string[] = [];
+		board.onEnumerate((mode) => modes.push(mode));
+		await tap(board).ask("11000000");
+		const { ask, detached } = tap(board);
+		expect(await ask("12020000")).toEqual([]);
+		expect(detached()).toBe(1);
+		expect(modes).toEqual(["iap", after]);
+	}
+});
+
 test("the synthetic image sums to the target and the untrusted one does not", () => {
 	const view = (bytes: Uint8Array) => new DataView(bytes.buffer);
 	let sum = 0;

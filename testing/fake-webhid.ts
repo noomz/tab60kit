@@ -10,7 +10,10 @@ const REPORT = { reportId: 0, items: [{ reportSize: 8, reportCount: 64 }] } as c
 export const VENDOR_COLLECTION: HIDCollectionInfo = { usagePage: 0xff00, usage: 0x0001, inputReports: [REPORT], outputReports: [REPORT], featureReports: [] };
 
 export interface FakeHidOptions {
-	readonly rowAppearsInOpenChooser: boolean;
+	/** The modes whose row shows up in a chooser that is already open. A chooser for any other mode closes empty at once. */
+	readonly rowAppearsInOpenChooser: readonly Mode[];
+	/** A user closes an open chooser that still shows no row after this long (default 3 s), so no fake flow waits forever. */
+	readonly emptyChooserClosesAfterMs?: number;
 	readonly isActive?: () => boolean;
 	readonly openFailures?: number;
 	readonly collections?: readonly HIDCollectionInfo[];
@@ -104,10 +107,13 @@ interface OpenChooser {
 	readonly resolve: (devices: HIDDevice[]) => void;
 }
 
+const EMPTY_CHOOSER_CLOSES_AFTER_MS = 3_000;
+
 export class FakeHid extends EventTarget implements HID {
 	chooser: "pick" | "cancel" = "pick";
 	readonly #granted = new Set<FakeHidDevice>();
 	readonly #openChoosers: OpenChooser[] = [];
+	readonly #devices: FakeHidDevice[] = [];
 	#device: FakeHidDevice;
 
 	constructor(
@@ -115,12 +121,12 @@ export class FakeHid extends EventTarget implements HID {
 		private readonly options: FakeHidOptions,
 	) {
 		super();
-		this.#device = new FakeHidDevice(board, board.mode, options);
+		this.#device = this.#create(board.mode);
 		board.onEnumerate((mode) => {
 			const old = this.#device;
 			old.disconnect();
 			this.dispatchEvent(new FakeConnectionEvent("disconnect", old));
-			this.#device = new FakeHidDevice(board, mode, options);
+			this.#device = this.#create(mode);
 			this.dispatchEvent(new FakeConnectionEvent("connect", this.#device));
 			for (const open of this.#openChoosers.splice(0)) {
 				if (this.#matches(this.#device, open.filters)) open.resolve(this.#answer(this.#device));
@@ -131,6 +137,17 @@ export class FakeHid extends EventTarget implements HID {
 
 	get device(): FakeHidDevice {
 		return this.#device;
+	}
+
+	/** Devices this fake made that are open now, across every enumeration. A run that ends holding none leaks none. */
+	get openHandles(): number {
+		return this.#devices.filter((device) => device.opened).length;
+	}
+
+	#create(mode: Mode): FakeHidDevice {
+		const device = new FakeHidDevice(this.board, mode, this.options);
+		this.#devices.push(device);
+		return device;
 	}
 
 	grant(): void {
@@ -147,8 +164,22 @@ export class FakeHid extends EventTarget implements HID {
 		}
 		const { filters } = options;
 		if (this.#matches(this.#device, filters)) return this.#answer(this.#device);
-		if (!this.options.rowAppearsInOpenChooser) return [];
-		return new Promise<HIDDevice[]>((resolve) => this.#openChoosers.push({ filters, resolve }));
+		const waits = filters.some((filter) => this.options.rowAppearsInOpenChooser.some((mode) => (filter.productId ?? PRODUCT_ID[mode]) === PRODUCT_ID[mode]));
+		if (!waits) return [];
+		return new Promise<HIDDevice[]>((resolve) => {
+			const giveUp = setTimeout(() => {
+				this.#openChoosers.splice(this.#openChoosers.indexOf(open), 1);
+				resolve([]);
+			}, this.options.emptyChooserClosesAfterMs ?? EMPTY_CHOOSER_CLOSES_AFTER_MS);
+			const open: OpenChooser = {
+				filters,
+				resolve: (devices) => {
+					clearTimeout(giveUp);
+					resolve(devices);
+				},
+			};
+			this.#openChoosers.push(open);
+		});
 	}
 
 	#answer(device: FakeHidDevice): HIDDevice[] {
