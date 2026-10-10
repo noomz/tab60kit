@@ -5,7 +5,8 @@
  * Every byte the tool sends leaves through `transmit`, which encodes a request and then audits the exact 64 bytes
  * before the link sees them. The audit does not trust the encoder. It decodes the frame the way the board will and
  * checks it against four things, each owned in one place:
- *   - The registry. COMMANDS lists every (cmd, sub) the tool may send. Any other pair is refused.
+ *   - The registry. COMMANDS lists every (cmd, sub) the tool may send. Any other pair is refused, and so is a frame
+ *     whose crc16 field is not the request value or that carries a nonzero byte past the payload its row declares.
  *   - G1, per command. A shipped kit sends only rows whose evidence maturity is "confirmed". A lab kit sends exactly
  *     the commands its clearance names, each at least "reviewed".
  *   - Mode. A command the current firmware does not implement is refused. The session types also make the wrong call
@@ -72,6 +73,12 @@ export interface CommandSpec {
 	readonly reply: "echo" | "write-ack" | "none";
 	readonly timeoutMs: number;
 	readonly address: Addressing;
+	/**
+	 * How many bytes from byte 4 the frame carries: 0 unaddressed, 8 for a range, 4 for set-cursor, and "sub" for WRITE,
+	 * whose sub byte is its length. The audit refuses any nonzero byte past them. The config rows stay at 0 until U10 and
+	 * U11 settle their formats, so no config payload can pass before then.
+	 */
+	readonly payloadBytes: number | "sub";
 	/** The editor capability this command is part of. keymap.ts derives its locks from this field. */
 	readonly unlocks: "keymap-read" | "keymap-write" | "os-mode" | null;
 	readonly evidence: Evidence;
@@ -96,6 +103,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
 		maturity: REVIEWED_FOR_U1,
@@ -109,6 +117,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x4051B2 takes the write address from FW info" },
 		maturity: REVIEWED_FOR_U1,
@@ -122,6 +131,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:132-135; R4 app handler 0x767A" },
 		maturity: REVIEWED_FOR_U1,
@@ -136,6 +146,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
 		maturity: REVIEWED_FOR_U1,
@@ -149,6 +160,7 @@ export const COMMANDS = {
 		reply: "none",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
 		maturity: REVIEWED_FOR_U1,
@@ -162,6 +174,7 @@ export const COMMANDS = {
 		reply: "none",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
 		maturity: REVIEWED_FOR_U1,
@@ -175,6 +188,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 15_000,
 		address: "range",
+		payloadBytes: 8,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
 		maturity: UNREVIEWED,
@@ -188,6 +202,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 2_000,
 		address: "range",
+		payloadBytes: 8,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
 		maturity: REVIEWED_FOR_U1,
@@ -201,6 +216,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 2_000,
 		address: "range",
+		payloadBytes: 8,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:237-250 (the vendor updater checks the sum only)" },
 		maturity: UNREVIEWED,
@@ -214,6 +230,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "set-cursor",
+		payloadBytes: 4,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
 		maturity: UNREVIEWED,
@@ -227,6 +244,7 @@ export const COMMANDS = {
 		reply: "write-ack",
 		timeoutMs: 500,
 		address: "at-cursor",
+		payloadBytes: "sub",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
 		maturity: UNREVIEWED,
@@ -240,6 +258,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: "keymap-read",
 		evidence: { source: "app-disassembly", at: "R4 sub_7B90 case 0x51 at 0x7EB2; format INFERRED" },
 		maturity: UNREVIEWED,
@@ -253,6 +272,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "R4 0x7EB2, index < 4; format INFERRED" },
 		maturity: UNREVIEWED,
@@ -266,6 +286,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "R4 0x7EB2, per-layer per-key entry at 0x20000750; format INFERRED" },
 		maturity: UNREVIEWED,
@@ -279,6 +300,7 @@ export const COMMANDS = {
 		reply: "echo",
 		timeoutMs: 500,
 		address: "none",
+		payloadBytes: 0,
 		unlocks: "os-mode",
 		evidence: { source: "app-disassembly", at: "R4 0x7EF2 cmp r7,#5 then strb to 0x2000000F" },
 		maturity: UNREVIEWED,
@@ -372,6 +394,9 @@ export type EgressRefusal =
 	| { readonly code: "not-requested"; readonly decoded: CommandName; readonly requested: CommandName }
 	| { readonly code: "not-cleared"; readonly command: CommandName }
 	| { readonly code: "wrong-mode"; readonly command: CommandName; readonly mode: Mode }
+	| { readonly code: "crc16-field"; readonly got: number }
+	/** `at` is the first nonzero byte past the payload the command's row declares. */
+	| { readonly code: "payload-overrun"; readonly at: number }
 	| { readonly code: "no-window"; readonly command: CommandName }
 	| { readonly code: "outside-window"; readonly command: CommandName; readonly offset: number; readonly length: number }
 	| { readonly code: "unaligned-erase"; readonly offset: number; readonly length: number }
@@ -404,6 +429,17 @@ export type EgressVerdict =
 	  }
 	| { readonly ok: false; readonly refusal: EgressRefusal };
 
+/**
+ * The crc16 field, request bytes 2..3 (R1 "Packet framing"). pok3rtool sends 0x0000, VERIFIED in its source, and
+ * works on sibling CYKB bootloaders; the app echoes the field and never checks it (R4 "Key concepts"). What the
+ * vendor updater sends there is unread, and nobody will read it for U1. In a reply the field plays no part in
+ * matching: the transcript keeps it, and tools/u1-verdict.ts reports a nonzero value as a finding.
+ */
+const CRC16_FIELD = 0x0000;
+
+const PAYLOAD_OFFSET = 4;
+const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
+
 function matchesSub(spec: CommandSpec, sub: number): boolean {
 	if (spec.sub === "length") return sub >= 1 && sub <= EXPECTED_LAYOUT.writeChunkBytes;
 	if (typeof spec.sub === "number") return spec.sub === sub;
@@ -417,7 +453,8 @@ export function decodeCommand(cmd: number, sub: number): CommandName | null {
 
 /**
  * The egress audit (candidate A, merged into the one write path). Pure. Decodes the exact bytes about to leave, with
- * no help from the encoder, and checks them against the registry, the clearance, the mode, and the window.
+ * no help from the encoder, and checks them against the registry, the clearance, the mode, every byte the row does not
+ * declare, and the window.
  * The only place in the tree that makes an OutReport. Default deny: a pair the registry does not list is refused.
  */
 export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: EgressContext): EgressVerdict {
@@ -432,6 +469,11 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 	if (!ctx.cleared(command)) return refuse({ code: "not-cleared", command });
 	const spec: CommandSpec = COMMANDS[command];
 	if (!spec.modes.includes(ctx.mode)) return refuse({ code: "wrong-mode", command, mode: ctx.mode });
+	const field = view.getUint16(2, true);
+	if (field !== CRC16_FIELD) return refuse({ code: "crc16-field", got: field });
+	const payloadEnd = PAYLOAD_OFFSET + (spec.payloadBytes === "sub" ? sub : spec.payloadBytes);
+	const overrun = frame.findIndex((byte, at) => at >= payloadEnd && byte !== 0);
+	if (overrun !== -1) return refuse({ code: "payload-overrun", at: overrun });
 
 	let cursor = ctx.cursor;
 	if (spec.address !== "none") {
@@ -486,16 +528,6 @@ interface Request {
 	readonly payload?: Uint8Array;
 }
 
-/**
- * The crc16 field, request bytes 2..3 (R1 "Packet framing"). pok3rtool sends 0x0000, VERIFIED in its source, and
- * works on sibling CYKB bootloaders; the app echoes the field and never checks it (R4 "Key concepts"). What the
- * vendor updater sends there is unread, and nobody will read it for U1. In a reply the field plays no part in
- * matching: the transcript keeps it, and tools/u1-verdict.ts reports a nonzero value as a finding.
- */
-const CRC16_FIELD = 0x0000;
-
-const PAYLOAD_OFFSET = 4;
-const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
 const ERROR_MARKER = [0xff, 0xaa] as const;
 
 const viewOf = (report: Uint8Array) => new DataView(report.buffer, report.byteOffset, report.byteLength);

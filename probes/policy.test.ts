@@ -183,6 +183,18 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
 );
 
+// R1 "Packet framing": a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
+const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub" } as const;
+check("registry: each row's payload is exactly its address fields", () =>
+	assert.deepEqual(
+		COMMAND_NAMES.filter((name) => {
+			const spec: CommandSpec = COMMANDS[name];
+			return spec.payloadBytes !== PAYLOAD_OF_ADDRESSING[spec.address];
+		}),
+		[],
+	),
+);
+
 // The egress audit, on frames built by hand from R1 "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
 const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
 	const out = new Uint8Array(bytes);
@@ -195,7 +207,13 @@ const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
 	}
 	return out;
 };
+const poke = (bytes: Uint8Array, at: number, value: number) => {
+	const out = Uint8Array.from(bytes);
+	out[at] = value;
+	return out;
+};
 const iap: EgressContext = { mode: "iap", window, cursor: null, cleared: () => true };
+const app: EgressContext = { ...iap, mode: "app" };
 const audited = (bytes: Uint8Array, requested: CommandName, ctx: EgressContext = iap) => {
 	const verdict = auditEgress(bytes, requested, ctx);
 	return verdict.ok ? { ok: verdict.command, cursor: verdict.cursor } : { refused: verdict.refusal.code };
@@ -220,8 +238,19 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["WRITE 52 bytes at the image start", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x234 }],
 	["WRITE past the window end", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x1ce00 - 10 }), { refused: "outside-window" }],
 	["a 63-byte frame", audited(frame(0x12, 0x02, 0, 0, 63), "readMode"), { refused: "bad-length" }],
+	["READ MODE with 0xBEEF in the crc16 field", audited(poke(poke(frame(0x12, 0x02), 2, 0xef), 3, 0xbe), "readMode", app), { refused: "crc16-field" }],
+	["RESET to IAP carrying a payload byte", audited(poke(frame(0x11, 0x00), 4, 0xde), "resetToIap", app), { refused: "payload-overrun" }],
+	["READ VERSION PAGE with junk in its last byte", audited(poke(frame(0x12, 0x20), 63, 0x01), "readVersionPage", app), { refused: "payload-overrun" }],
+	["SUM with a byte past its range", audited(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), "sum"), { refused: "payload-overrun" }],
+	["set the write address with a byte past its offset", audited(poke(frame(0x1e, 0x01, 0x200), 8, 0x01), "setWriteAddress"), { refused: "payload-overrun" }],
+	["WRITE 20 bytes with its last payload byte set", audited(poke(frame(0x1f, 20), 23, 0xff), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x214 }],
+	["WRITE 20 bytes with a byte past them", audited(poke(frame(0x1f, 20), 24, 0xff), "write", { ...iap, cursor: 0x200 }), { refused: "payload-overrun" }],
 ];
 for (const [why, actual, want] of egress) check(`egress: ${why}`, () => assert.deepEqual(actual, want));
+check("egress: a payload overrun names the first stray byte", () => {
+	const verdict = auditEgress(poke(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), 40, 0x01), "sum", iap);
+	assert.deepEqual(verdict.ok ? null : verdict.refusal, { code: "payload-overrun", at: 12 });
+});
 
 // The link gate, on timestamps alone: 15 s of answered probes, at most 1 s apart, and no timeout or loss in them.
 const probes = (from: number, to: number, every = 500, skip: (t: number) => boolean = () => false): LinkEvent[] => {
@@ -248,5 +277,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 7 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );
