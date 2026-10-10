@@ -16,7 +16,7 @@ bun run check
 `bun run check` runs the same steps as CI (`.github/workflows/ci.yml`), in this order:
 
 1. `bun run typecheck` runs `tsc` on `tsconfig.json`. It runs again on `tsconfig.browser.json`, which checks the code that ships to the page without Node or Bun types.
-2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases and one run per `?fake` mode. The CSP test builds every page into a temp dir.
+2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir.
 3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The script ends with `failures: 0` when every check passes.
 4. `bun run reconcile` runs the flash-loop model in `testing/reconcile-model.ts`. It throws if the synthesized loop has a problem run.
 
@@ -68,6 +68,8 @@ Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json
 | `?fake=reloaded` | The board starts in update mode, and the browser still grants USB-HID IAP, as after a reload past the warning. The page starts in the away state | Try again or Restart into normal mode |
 
 The drop mode counts frames from page load, so click Connect once before the Deep check. A fake run's download name ends in `-fake-<mode>`.
+
+`bun run sweep` runs the full U1 sweep in `testing/u1-sweep.ts` over the fake board and the fake WebHID. Each scenario is one page session: Connect, Deep check, and a recovery click where the session needs one. The sweep loses the link at every packet, with and without an MCU reset, cancels after every transcript entry, and cancels at every point inside Restart and Try again. A scenario fails on a frame off the golden list, a second RESET to IAP, a board violation, a run that a Cancel cannot end, a board left in update mode without the away state, a leaked link, a Restart that leaves the board in update mode, or any frame other than one RESET to app after a Cancel. The script exits 1 on any failure. It runs 153 scenarios in about 10 s on an Apple M4 Max. `bun test` runs a reduced set of 26 scenarios from `testing/u1-sweep.test.ts`.
 
 ## Package entries
 

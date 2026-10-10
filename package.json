@@ -12,6 +12,7 @@
 		"typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
 		"probes": "TSC=node_modules/.bin/tsc probes/run.sh",
 		"reconcile": "bun testing/reconcile-model.ts",
+		"sweep": "bun testing/u1-sweep.ts",
 		"check": "bun run typecheck && bun test && bun run probes && bun run reconcile"
 	},
 	"devDependencies": {
