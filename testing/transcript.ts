@@ -6,7 +6,7 @@
  * length and SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
  * tests stay byte-exact without redistributing vendor bytes.
  */
-import type { DevicePort, Link, WantReason } from "../core/port";
+import type { DevicePort, Link, Mode, WantReason } from "../core/port";
 import { type Sha256, notImplemented, sha256Literal } from "../core/units";
 
 /**
@@ -72,7 +72,11 @@ export type TranscriptEntry =
 	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
 	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
 	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
-	| { readonly t: number; readonly kind: "lost" | "closed" };
+	/**
+	 * `mode` names the link the entry belongs to, because two links of one mode are never open at once. The keyboard
+	 * link's close can still settle after the bootloader link opens. Older transcripts leave `mode` out.
+	 */
+	| { readonly t: number; readonly kind: "lost" | "closed"; readonly mode?: Mode };
 
 const WRITE_CMD = 0x1f;
 
@@ -80,7 +84,7 @@ export const hexOf = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.t
 const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 export function recording(link: Link, sink: (entry: TranscriptEntry) => void, now: () => number = () => performance.now()): Link {
-	void link.lost.then(() => sink({ t: now(), kind: "lost" }));
+	void link.lost.then(() => sink({ t: now(), kind: "lost", mode: link.mode }));
 	return {
 		mode: link.mode,
 		lost: link.lost,
@@ -107,7 +111,7 @@ export function recording(link: Link, sink: (entry: TranscriptEntry) => void, no
 		},
 		async close() {
 			await link.close();
-			sink({ t: now(), kind: "closed" });
+			sink({ t: now(), kind: "closed", mode: link.mode });
 		},
 	};
 }
@@ -175,8 +179,12 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 		case "typing":
 			return { t, kind, chars: number(value, "chars", where) };
 		case "lost":
-		case "closed":
-			return { t, kind };
+		case "closed": {
+			if (value.mode === undefined) return { t, kind };
+			const mode = string(value, "mode", where);
+			if (mode !== "app" && mode !== "iap") fail(where, `unknown mode ${mode}`);
+			return { t, kind, mode };
+		}
 		case "opened": {
 			const collections = value.collections;
 			if (!Array.isArray(collections)) fail(where, "collections is not an array");

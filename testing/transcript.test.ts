@@ -3,7 +3,7 @@ import { type Link, LinkLost, asInReport } from "../core/port";
 import { type Transcript, type TranscriptEntry, parseTranscript, recording } from "./transcript";
 import { ScriptedLink, report } from "./scripted";
 
-test("recording stamps every report, close, and loss, and never records a WRITE", async () => {
+test("recording stamps every report, close, and loss, tags each close and loss with the link's mode, and never records a WRITE", async () => {
 	let t = 0;
 	const inner = new ScriptedLink("iap", [report("1202000000")]);
 	let lose = () => undefined as void;
@@ -22,8 +22,8 @@ test("recording stamps every report, close, and loss, and never records a WRITE"
 	expect(entries).toEqual([
 		{ t: 1, kind: "out", hex: "1202".padEnd(128, "0") },
 		{ t: 2, kind: "in", hex: "1202000000".padEnd(128, "0") },
-		{ t: 3, kind: "closed" },
-		{ t: 4, kind: "lost" },
+		{ t: 3, kind: "closed", mode: "iap" },
+		{ t: 4, kind: "lost", mode: "iap" },
 	]);
 	const write = asInReport(new Uint8Array(64));
 	write[0] = 0x1f;
@@ -73,8 +73,9 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 			{ t: 2, kind: "opened", reason: "connect", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
 			{ t: 3, kind: "out", hex: "1202".padEnd(128, "0") },
 			{ t: 4, kind: "in", hex: "1202000001".padEnd(128, "0") },
-			{ t: 5, kind: "closed" },
-			{ t: 6, kind: "lost" },
+			{ t: 5, kind: "closed", mode: "iap" },
+			{ t: 6, kind: "lost", mode: "app" },
+			{ t: 6, kind: "closed" },
 			{ t: 7, kind: "discarded", hex: "1220".padEnd(128, "0") },
 			{ t: 8, kind: "send-failed", hex: "1101".padEnd(128, "0"), error: "LinkLost: unplugged" },
 			{ t: 9, kind: "close-timeout", productId: 0x1304 },
@@ -93,5 +94,6 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 	const { reason: _reason, ...noReason } = transcript.entries[2] as Extract<TranscriptEntry, { kind: "opened" }>;
 	expect(() => parseTranscript({ ...transcript, entries: [noReason] })).toThrow(/entry 0: reason is not a string/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: "0", kind: "closed" }] })).toThrow(/t is not a number/);
+	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "lost", mode: "boot" }] })).toThrow(/entry 0: unknown mode boot/);
 	expect(LinkLost.name).toBe("LinkLost");
 });

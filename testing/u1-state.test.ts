@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { DeviceWant } from "../core/port";
+import type { DeviceWant, Link } from "../core/port";
 import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
 import { type Phase, atLoad, awayFromHome, cancelLabel, showsRecovery, updateModeLinkOpen } from "../lab/u1-state";
@@ -40,28 +40,53 @@ test("a bootloader granted at load counts as away until a normal-mode link opens
 const HOME_LABEL = "Stop and send the board home";
 const keyboard = { productName: "USB-HID Keyboard", collections: [] };
 
-test("Cancel offers to send the board home from the update-mode open until that link closes after RESET to app", async () => {
-	const { entries } = (await recordFakeRun({ series: { probes: 3, everyMs: 1 } })).transcript;
-	const sendsHome = entries.map((_, i) => cancelLabel(entries.slice(0, i + 1)) === HOME_LABEL);
-	const first = sendsHome.indexOf(true);
-	const last = sendsHome.lastIndexOf(true);
-	expect(entries[first]).toMatchObject({ kind: "opened", productId: 0x1304 });
-	expect(entries[last]).toMatchObject({ kind: "out", hex: expect.stringMatching(/^1101/) });
-	expect(entries[last + 1]).toMatchObject({ kind: "closed" });
-	expect(sendsHome.filter(Boolean)).toHaveLength(last - first + 1);
-	const resetToIap = entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1100"));
-	expect(cancelLabel(entries.slice(0, resetToIap + 1))).toBe("Stop");
+/** The keyboard link's close settles 30 ms late, so the bootloader can open first (fix3rev S3). */
+const keyboardClosesLate = (link: Link): Link => ({
+	mode: link.mode,
+	lost: link.lost,
+	send: (frame) => link.send(frame),
+	next: (timeoutMs) => link.next(timeoutMs),
+	discardPending: () => link.discardPending(),
+	close: async () => {
+		await link.close();
+		if (link.mode === "app") await new Promise((resolve) => setTimeout(resolve, 30));
+	},
 });
 
-test("an update-mode link counts as open until a close, a loss, or another open", () => {
+for (const [order, closesLate, inner] of [
+	["before", false, {}],
+	["after", true, { inner: keyboardClosesLate }],
+] as const) {
+	test(`Cancel offers to send the board home from the update-mode open until that link closes after RESET to app, when the keyboard link closes ${order} the bootloader opens`, async () => {
+		const { entries } = (await recordFakeRun({ series: { probes: 3, everyMs: 1 }, ...inner })).transcript;
+		const bootloader = entries.findIndex((entry) => entry.kind === "opened" && entry.productId === 0x1304);
+		const keyboardClosed = entries.findIndex((entry) => entry.kind === "closed");
+		expect(entries[keyboardClosed]).toMatchObject({ kind: "closed", mode: "app" });
+		expect(keyboardClosed > bootloader).toBe(closesLate);
+		const sendsHome = entries.map((_, i) => cancelLabel(entries.slice(0, i + 1)) === HOME_LABEL);
+		const first = sendsHome.indexOf(true);
+		const last = sendsHome.lastIndexOf(true);
+		expect(first).toBe(bootloader);
+		expect(entries[last]).toMatchObject({ kind: "out", hex: expect.stringMatching(/^1101/) });
+		expect(entries[last + 1]).toMatchObject({ kind: "closed", mode: "iap" });
+		expect(sendsHome.filter(Boolean)).toHaveLength(last - first + 1);
+		const resetToIap = entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1100"));
+		expect(cancelLabel(entries.slice(0, resetToIap + 1))).toBe("Stop");
+	});
+}
+
+test("an update-mode link counts as open until its own close or loss, or another open, and an untagged close ends it", () => {
 	const bootloader: TranscriptEntry = { t: 0, kind: "opened", reason: "enter-update-mode", productId: 0x1304, ...keyboard };
 	const app: TranscriptEntry = { t: 1, kind: "opened", reason: "confirm-normal-mode", productId: 0x0304, ...keyboard };
 	expect([
 		updateModeLinkOpen([bootloader]),
+		updateModeLinkOpen([bootloader, { t: 1, kind: "closed", mode: "iap" }]),
+		updateModeLinkOpen([bootloader, { t: 1, kind: "lost", mode: "iap" }]),
+		updateModeLinkOpen([bootloader, { t: 1, kind: "closed", mode: "app" }]),
+		updateModeLinkOpen([bootloader, { t: 1, kind: "lost", mode: "app" }]),
 		updateModeLinkOpen([bootloader, { t: 1, kind: "closed" }]),
-		updateModeLinkOpen([bootloader, { t: 1, kind: "lost" }]),
 		updateModeLinkOpen([bootloader, app]),
-	]).toEqual([true, false, false, false]);
+	]).toEqual([true, false, false, true, true, false, false]);
 });
 
 test("the recovery text shows while a Deep check waits on a parked confirm pick", async () => {

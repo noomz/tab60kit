@@ -1,3 +1,4 @@
+import type { Link } from "../core/port";
 import { u1Wrap } from "../lab/u1-frames";
 import { type ProbeSeries, type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
 import { startWebHidLab } from "../web/webhid-port";
@@ -15,6 +16,8 @@ export interface FakeRunOptions {
 	readonly series?: ProbeSeries;
 	readonly between?: (board: FakeTab60, hid: FakeHid) => void;
 	readonly autoPick?: boolean;
+	/** Wraps each link inside the recording, so the transcript shows what the wrap changed. */
+	readonly inner?: (link: Link) => Link;
 }
 
 export async function recordFakeRun(options: FakeRunOptions = {}): Promise<{ readonly transcript: Transcript; readonly log: string[]; readonly board: FakeTab60 }> {
@@ -22,8 +25,9 @@ export async function recordFakeRun(options: FakeRunOptions = {}): Promise<{ rea
 	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true, ...options.hid });
 	const entries: TranscriptEntry[] = [];
 	const now = () => performance.now();
+	const wrap = u1Wrap((entry) => entries.push(entry), now);
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), {
-		wrap: u1Wrap((entry) => entries.push(entry), now),
+		wrap: (link) => wrap(options.inner?.(link) ?? link),
 		onEvent: (event) => entries.push({ t: now(), ...event }),
 	});
 	const clicker = options.autoPick ? setInterval(() => chooser.needsClick?.modes.includes(hid.device.mode) && chooser.pick(), 1) : null;

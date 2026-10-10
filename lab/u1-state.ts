@@ -39,12 +39,17 @@ export function awayFromHome(entries: readonly TranscriptEntry[]): boolean {
 	return away;
 }
 
-/** True from an update-mode link's `opened` entry until a `closed`, `lost`, or other `opened` entry follows it. */
+/**
+ * True from an update-mode link's `opened` entry until its own `closed` or `lost` entry, or another `opened` entry,
+ * follows it. A close tagged with normal mode belongs to the keyboard link that enterIap closes while the bootloader
+ * link opens, so that close may land after the bootloader's `opened` entry. An untagged close, from an older
+ * transcript, ends the link.
+ */
 export function updateModeLinkOpen(entries: readonly TranscriptEntry[]): boolean {
 	let open = false;
 	for (const entry of entries) {
 		if (entry.kind === "opened") open = entry.productId === TAB60.productId.iap;
-		if (entry.kind === "closed" || entry.kind === "lost") open = false;
+		if ((entry.kind === "closed" || entry.kind === "lost") && entry.mode !== "app") open = false;
 	}
 	return open;
 }
