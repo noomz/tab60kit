@@ -105,10 +105,15 @@ async function withHome<T>(ctx: U1Context, work: () => Promise<T>): Promise<T> {
 export async function u1Connect(ctx: U1Context): Promise<ConnectEnd> {
 	const session = await connect(ctx, { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) return { kind: "refused", refused: session };
-	const observed = await observe(session);
-	ctx.log(describeChip(observed.chip));
-	await probeSeries(session, ctx);
-	return { kind: "connected", session, observed };
+	try {
+		const observed = await observe(session);
+		ctx.log(describeChip(observed.chip));
+		await probeSeries(session, ctx);
+		return { kind: "connected", session, observed };
+	} catch (error) {
+		await session.close();
+		throw error;
+	}
 }
 
 const jobContext = (ctx: U1Context): JobContext => ({

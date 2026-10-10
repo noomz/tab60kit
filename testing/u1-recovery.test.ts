@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256 } from "../core/firmware";
-import { type Link, LinkLost, LinkTimeout, PickCancelled } from "../core/port";
+import { type InReport, type Link, LinkLost, LinkTimeout, PickCancelled, asInReport } from "../core/port";
 import { DeviceRefused, type EgressContext, IapAttachFailed, auditEgress, clears, connect } from "../core/protocol";
 import { evaluateU1 } from "../lab/u1-checks";
-import { type U1Context, U1_EXPECTED, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "../lab/u1-job";
-import { awayFromHome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
+import { type U1Context, U1_EXPECTED, u1Clearance, u1Connect, u1DeepCheck, u1Run, u1TryAgain } from "../lab/u1-job";
+import { type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
 import { verdictMain } from "../tools/u1-verdict";
 import { TARGET, recordFakeRun } from "./fake-run";
@@ -24,6 +24,7 @@ const UPDATE_OBSERVE = ["1220", "1221", "1222", "1d01"];
 const CONFIRM = ["1202", "1200"];
 const ROUND_TRIP = [...CONNECT, "1100", ...UPDATE_ATTACH, ...UPDATE_OBSERVE, ...probes(PROBES), "1101", ...CONFIRM];
 const AWAY = { kind: "away", holding: null } as const;
+const IDLE = { kind: "idle" } as const;
 const cancel = () => new DOMException("cancelled from the page", "AbortError");
 const once = <A extends unknown[]>(when: (...args: A) => boolean, act: (...args: A) => void) => {
 	let done = false;
@@ -34,6 +35,7 @@ const once = <A extends unknown[]>(when: (...args: A) => boolean, act: (...args:
 	};
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const settle = (run: Promise<RunOutcome>) => run.catch((error: unknown) => outcomeOfError(error));
 const rejection = (work: Promise<unknown>) =>
 	work.then(
 		() => {
@@ -83,6 +85,68 @@ function rig(options: RigOptions = {}) {
 		return end.session;
 	};
 	return { board, hid, entries, chooser, ctx, pairs, log, connected };
+}
+
+test("a Cancel at any entry of a Connect run leaves no link open, and the next Connect connects", async () => {
+	const clean = rig();
+	const connected = await u1Run("connect", IDLE, clean.ctx());
+	if (connected.kind !== "connected") throw new Error("the clean Connect did not connect");
+	const entries = clean.entries.length;
+	await connected.app.close();
+	let cancelled = 0;
+	for (let at = 1; at <= entries; at++) {
+		const controller = new AbortController();
+		let seen = 0;
+		const r = rig({ onEntry: () => ++seen === at && controller.abort(cancel()) });
+		const outcome = await settle(u1Run("connect", IDLE, r.ctx(controller.signal)));
+		if (outcome.kind === "cancelled") cancelled++;
+		const phase = phaseAfterRun(r.entries, outcome);
+		expect({ at, phase: phase.kind, openHandles: r.hid.openHandles }).toEqual(
+			outcome.kind === "cancelled" ? { at, phase: "idle", openHandles: 0 } : { at, phase: "connected", openHandles: 1 },
+		);
+		const again = await u1Run("connect", phase, r.ctx());
+		expect({ at, again: again.kind, openHandles: r.hid.openHandles }).toEqual({ at, again: "connected", openHandles: 1 });
+		if (again.kind === "connected") await again.app.close();
+	}
+	expect(cancelled).toBe(entries - 2);
+});
+
+/** Replaces the third READ MODE answer, the second Connect probe's, once across every link the rig opens. */
+function onThirdReadMode(replace: (reply: InReport) => InReport) {
+	let readModes = 0;
+	return (link: Link): Link => ({
+		mode: link.mode,
+		lost: link.lost,
+		send: (frame) => link.send(frame),
+		next: async (timeoutMs) => {
+			const reply = await link.next(timeoutMs);
+			return reply[0] === 0x12 && reply[1] === 0x02 && ++readModes === 3 ? replace(reply) : reply;
+		},
+		discardPending: () => link.discardPending(),
+		close: () => link.close(),
+	});
+}
+
+const probeFailures: readonly [string, (reply: InReport) => InReport][] = [
+	[
+		"LinkTimeout",
+		() => {
+			throw new LinkTimeout("no input report within 1000 ms");
+		},
+	],
+	["ModeDisagrees", (reply) => asInReport(Uint8Array.from(reply, (byte, at) => (at === 4 ? 0 : byte)))],
+];
+for (const [name, replace] of probeFailures) {
+	test(`a ${name} during the Connect probes closes the link, and the next Connect connects`, async () => {
+		const r = rig({ wrap: onThirdReadMode(replace) });
+		const error = await rejection(u1Run("connect", IDLE, r.ctx()));
+		expect(error).toMatchObject({ name });
+		const phase = phaseAfterRun(r.entries, outcomeOfError(error));
+		expect({ phase: phase.kind, openHandles: r.hid.openHandles }).toEqual({ phase: "failed", openHandles: 0 });
+		const again = await u1Run("connect", phase, r.ctx());
+		expect({ again: again.kind, openHandles: r.hid.openHandles }).toEqual({ again: "connected", openHandles: 1 });
+		if (again.kind === "connected") await again.app.close();
+	});
 }
 
 test("a Cancel during the update-mode probes sends RESET to app and closes the link, and the page shows away", async () => {
