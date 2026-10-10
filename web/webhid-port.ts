@@ -56,7 +56,8 @@ export type PortEvent =
 	/** One chooser: opened inside the click's activation, or from a parked pick's click. `productId` null means closed empty. */
 	| { readonly kind: "pick"; readonly reason: WantReason; readonly path: "activation" | "parked"; readonly productId: number | null; readonly waitMs: number }
 	| { readonly kind: "open-attempt"; readonly productId: number; readonly attempt: number; readonly error: string | null }
-	| { readonly kind: "opened"; readonly productId: number; readonly productName: string; readonly collections: readonly CollectionReport[] }
+	/** `reason` is the want the open answered, so a transcript can tell a confirm open from a Connect open. */
+	| { readonly kind: "opened"; readonly reason: WantReason; readonly productId: number; readonly productName: string; readonly collections: readonly CollectionReport[] }
 	/** device.close() did not settle in time, and the shell counted the device as closed. */
 	| { readonly kind: "close-timeout"; readonly productId: number };
 
@@ -210,7 +211,7 @@ class WebHidPort implements DevicePort {
 	async open(want: DeviceWant, signal: AbortSignal): Promise<Link> {
 		signal.throwIfAborted();
 		const device = (await this.granted(want)) ?? (await this.chosen(want, signal));
-		return this.wrap(await this.openDevice(device, signal));
+		return this.wrap(await this.openDevice(device, want, signal));
 	}
 
 	/**
@@ -275,7 +276,7 @@ class WebHidPort implements DevicePort {
 		});
 	}
 
-	async openDevice(device: HIDDevice, signal: AbortSignal): Promise<Link> {
+	async openDevice(device: HIDDevice, want: DeviceWant, signal: AbortSignal): Promise<Link> {
 		const { productId } = device;
 		for (let attempt = 1; ; attempt++) {
 			signal.throwIfAborted();
@@ -304,7 +305,7 @@ class WebHidPort implements DevicePort {
 			await closeDevice(device, this.report);
 			throw new Error(`${device.productName} (0x${productId.toString(16)}) has no vendor collection on usage page 0x${TAB60.usagePage.toString(16)}`);
 		}
-		this.report({ kind: "opened", productId, productName: device.productName, collections: collectionsOf(device) });
+		this.report({ kind: "opened", reason: want.reason, productId, productName: device.productName, collections: collectionsOf(device) });
 		return new WebHidLink(device, mode, this.hid, this.report);
 	}
 }

@@ -70,7 +70,7 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 		entries: [
 			{ t: 0, kind: "pick", reason: "connect", path: "activation", productId: 0x0304, waitMs: 12 },
 			{ t: 1, kind: "open-attempt", productId: 0x0304, attempt: 1, error: null },
-			{ t: 2, kind: "opened", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
+			{ t: 2, kind: "opened", reason: "connect", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
 			{ t: 3, kind: "out", hex: "1202".padEnd(128, "0") },
 			{ t: 4, kind: "in", hex: "1202000001".padEnd(128, "0") },
 			{ t: 5, kind: "closed" },
@@ -89,6 +89,8 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 	expect(() => parseTranscript({ ...transcript, format: "tab60kit-transcript/2" })).toThrow(/format/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "out", hex: "12" }] })).toThrow(/entry 0: hex/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "pick", reason: "nope", path: "parked", productId: null, waitMs: 1 }] })).toThrow(/reason/);
+	const { reason: _reason, ...noReason } = transcript.entries[2] as Extract<TranscriptEntry, { kind: "opened" }>;
+	expect(() => parseTranscript({ ...transcript, entries: [noReason] })).toThrow(/entry 0: reason is not a string/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: "0", kind: "closed" }] })).toThrow(/t is not a number/);
 	expect(LinkLost.name).toBe("LinkLost");
 });

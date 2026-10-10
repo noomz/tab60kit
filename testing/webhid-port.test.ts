@@ -33,6 +33,7 @@ test("a live activation opens the chooser at once, and the opened device is repo
 	expect(events.filter((event) => event.kind === "open-attempt")).toEqual([{ kind: "open-attempt", productId: 0x0304, attempt: 1, error: null }]);
 	expect(events.at(-1)).toEqual({
 		kind: "opened",
+		reason: "connect",
 		productId: 0x0304,
 		productName: "USB-HID Keyboard",
 		collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }],

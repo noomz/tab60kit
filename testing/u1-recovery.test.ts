@@ -328,7 +328,7 @@ test("check 8 fails when RESET to app never brought the board back and a later C
 		...transcript.entries.slice(0, at + 1),
 		{ t: t + 1, kind: "pick", reason: "confirm-normal-mode", path: "parked", productId: null, waitMs: 5000 },
 		{ t: t + 60_000, kind: "pick", reason: "connect", path: "activation", productId: 0x0304, waitMs: 2000 },
-		{ t: t + 60_001, kind: "opened", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
+		{ t: t + 60_001, kind: "opened", reason: "connect", productId: 0x0304, productName: "USB-HID Keyboard", collections: [{ usagePage: 0xff00, usage: 1, inputReportBytes: 64, outputReportBytes: 64, featureReportBytes: 0 }] },
 		{ t: t + 60_002, kind: "typing", chars: 5 },
 	];
 	const own = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };

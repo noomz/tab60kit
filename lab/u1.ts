@@ -51,7 +51,7 @@ function describeEvent(event: PortEvent): string {
 		case "pick":
 			return `pick (${event.path}, ${event.reason}): ${event.productId === null ? "no device" : pid(event.productId)} after ${Math.round(event.waitMs)} ms`;
 		case "opened":
-			return `opened ${event.productName} ${pid(event.productId)}, ${event.collections.length} collection(s)`;
+			return `opened ${event.productName} ${pid(event.productId)} for ${event.reason}, ${event.collections.length} collection(s)`;
 		case "open-attempt":
 			return `open attempt ${event.attempt} on ${pid(event.productId)}: ${event.error ?? "ok"}`;
 		case "close-timeout":

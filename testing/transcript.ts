@@ -43,6 +43,7 @@ export type TranscriptEntry =
 	| {
 			readonly t: number;
 			readonly kind: "opened";
+			readonly reason: WantReason;
 			readonly productId: number;
 			readonly productName: string;
 			readonly collections: readonly CollectionEntry[];
@@ -125,6 +126,11 @@ function string(entry: Record<string, unknown>, field: string, where: string): s
 	return typeof value === "string" ? value : fail(where, `${field} is not a string`);
 }
 
+function wantReason(entry: Record<string, unknown>, where: string): WantReason {
+	const reason = string(entry, "reason", where);
+	return isWantReason(reason) ? reason : fail(where, `unknown reason ${reason}`);
+}
+
 function reportHex(entry: Record<string, unknown>, where: string): string {
 	const hex = string(entry, "hex", where);
 	return REPORT_HEX.test(hex) ? hex : fail(where, "hex is not 64 bytes");
@@ -171,6 +177,7 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 			return {
 				t,
 				kind,
+				reason: wantReason(value, where),
 				productId: number(value, "productId", where),
 				productName: string(value, "productName", where),
 				collections: collections.map((collection) => parseCollection(collection, where)),
@@ -182,13 +189,11 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 			return { t, kind, productId: number(value, "productId", where), attempt: number(value, "attempt", where), error };
 		}
 		case "pick": {
-			const reason = string(value, "reason", where);
 			const path = string(value, "path", where);
 			const productId = value.productId;
-			if (!isWantReason(reason)) fail(where, `unknown reason ${reason}`);
 			if (path !== "activation" && path !== "parked") fail(where, `unknown path ${path}`);
 			if (productId !== null && typeof productId !== "number") fail(where, "productId is neither null nor a number");
-			return { t, kind, reason, path, productId, waitMs: number(value, "waitMs", where) };
+			return { t, kind, reason: wantReason(value, where), path, productId, waitMs: number(value, "waitMs", where) };
 		}
 		case "out-write":
 			return {
