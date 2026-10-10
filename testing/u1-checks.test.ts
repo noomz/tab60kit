@@ -230,6 +230,32 @@ test("a frame off the golden list fails the run with all nine checks green, and 
 	}
 });
 
+test("the CLI exits 2 with one line naming the file, and writes nothing, for a transcript it cannot read", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "u1-verdict-"));
+	const errors = spyOn(console, "error").mockImplementation(() => undefined);
+	try {
+		const cases: readonly [string, string | null][] = [
+			["empty-object.json", "{}"],
+			["not-json.json", "not json"],
+			["missing.json", null],
+		];
+		for (const [name, contents] of cases) {
+			const file = join(dir, name);
+			if (contents !== null) writeFileSync(file, contents);
+			const out = join(dir, `${name}-fixture.json`);
+			errors.mockClear();
+			const code = await verdictMain([file, "--types", "--out", out]);
+			const lines = errors.mock.calls.map((args) => args.join(" "));
+			expect({ name, code, written: existsSync(out), lines: lines.length }).toEqual({ name, code: 2, written: false, lines: 1 });
+			expect(lines[0]).toStartWith(`${file}: `);
+			expect(lines[0]).not.toContain("\n");
+		}
+	} finally {
+		errors.mockRestore();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("the CLI refuses a fake, dirty, unknown, or unnamed build with exit 2 and writes nothing", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "u1-verdict-"));
 	try {

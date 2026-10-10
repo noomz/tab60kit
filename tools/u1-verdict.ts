@@ -54,7 +54,13 @@ export async function verdictMain(argv: readonly string[]): Promise<number> {
 		console.error(`${args}\nusage: bun tools/u1-verdict.ts <transcript.json> --types|--no-types [--out fixtures/u1-macos.json]`);
 		return 2;
 	}
-	const transcript = parseTranscript(JSON.parse(readFileSync(args.transcriptFile, "utf8")));
+	let transcript: Transcript;
+	try {
+		transcript = parseTranscript(JSON.parse(readFileSync(args.transcriptFile, "utf8")));
+	} catch (error) {
+		console.error(`${args.transcriptFile}: ${error instanceof Error ? error.message : String(error)}`);
+		return 2;
+	}
 	const refusal = notEvidence(transcript.environment);
 	if (refusal !== null) {
 		console.error(`${refusal}. Wrote nothing.`);
