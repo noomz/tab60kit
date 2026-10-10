@@ -153,27 +153,27 @@ function sendFailed(entries: readonly TranscriptEntry[], index: number): boolean
 
 const isResetToApp = (entry: TranscriptEntry | undefined) => entry?.kind === "out" && entry.hex.startsWith("1101");
 
-/** RESET to app sends that failed, after which the board still came back before the next RESET to app. */
-function returnsAfterFailedResets(entries: readonly TranscriptEntry[], expected: U1Expected): number {
-	let returns = 0;
-	for (let i = 0; i < entries.length; i++) {
-		if (!isResetToApp(entries[i]) || !sendFailed(entries, i)) continue;
-		for (let j = i + 1; j < entries.length && !isResetToApp(entries[j]); j++) {
-			const entry = entries[j];
-			if (entry?.kind === "opened" && entry.productId === expected.appProductId) {
-				returns++;
-				break;
-			}
-		}
-	}
-	return returns;
+interface ResetToApp {
+	/** Its send rejected, so the board may or may not have taken it. */
+	readonly failed: boolean;
+	/** The entries after it, up to the next RESET to app. Only an open in here can be this reset's return. */
+	readonly after: readonly TranscriptEntry[];
 }
+
+function resetsToApp(entries: readonly TranscriptEntry[]): ResetToApp[] {
+	const at = entries.flatMap((entry, index) => (isResetToApp(entry) ? [index] : []));
+	return at.map((index, i) => ({ failed: sendFailed(entries, index), after: entries.slice(index + 1, at[i + 1]) }));
+}
+
+/** RESET to app sends that failed, after which the board still came back before the next RESET to app. */
+const returnsAfterFailedResets = (resets: readonly ResetToApp[], expected: U1Expected): number =>
+	resets.filter((reset) => reset.failed && reset.after.some((entry) => entry.kind === "opened" && entry.productId === expected.appProductId)).length;
 
 function entryFindings(entries: readonly TranscriptEntry[], expected: U1Expected): string[] {
 	const findings: string[] = [];
 	const failed = entries.flatMap((entry) => (entry.kind === "send-failed" ? [entry.hex.slice(0, 4)] : []));
 	if (failed.length > 0) findings.push(`${failed.length} sends rejected, so the board may or may not have taken them: ${[...new Set(failed)].join(", ")}`);
-	const returns = returnsAfterFailedResets(entries, expected);
+	const returns = returnsAfterFailedResets(resetsToApp(entries), expected);
 	if (returns > 0) findings.push(`${returns} times ${hex(expected.appProductId, 4)} opened after a RESET to app whose send failed, so that return does not show the reset worked`);
 	const slowCloses = entries.flatMap((entry) => (entry.kind === "close-timeout" ? [hex(entry.productId, 4)] : []));
 	if (slowCloses.length > 0) findings.push(`${slowCloses.length} closes did not settle in time and were counted as closed: ${slowCloses.join(", ")}`);
@@ -275,22 +275,25 @@ function checkSum(all: readonly Exchange[], expected: U1Expected): CheckResult {
 
 /**
  * A board brought back by a cold boot and a Connect click must not pass as RESET to app working (F7), and neither
- * may a return after a RESET to app whose send failed.
+ * may a return after a RESET to app whose send failed (R3). The last reset that left is judged by the entries
+ * before the next reset, so a return after a later reset whose send failed cannot pass for it.
  */
 function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
 	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} for the confirm and types`;
 	const result = (pass: boolean, detail: string): CheckResult => ({ id: 8, title, pass, detail });
-	const resets = entries.flatMap((entry, index) => (isResetToApp(entry) ? [index] : []));
+	const resets = resetsToApp(entries);
 	if (resets.length === 0) return result(false, "no RESET to app sent");
-	const reset = resets.filter((index) => !sendFailed(entries, index)).at(-1);
+	const reset = resets.filter((each) => !each.failed).at(-1);
 	if (reset === undefined) return result(false, `the only RESET to app sends (${resets.length}) failed, so nothing shows the board took one`);
-	const after = entries.slice(reset + 1);
+	const { after } = reset;
 	const open = after.findIndex((entry) => entry.kind === "opened" && entry.productId === expected.appProductId && entry.reason === "confirm-normal-mode");
-	if (open === -1) return result(false, `no ${hex(expected.appProductId, 4)} opened for the confirm after the last RESET to app that left`);
+	if (open === -1) return result(false, `no ${hex(expected.appProductId, 4)} opened for the confirm after the last RESET to app that left${reset === resets.at(-1) ? "" : " and before the next one"}`);
 	const pick = after.slice(0, open).flatMap((entry) => (entry.kind === "pick" && entry.reason === "confirm-normal-mode" ? [entry] : [])).at(-1);
 	const how = pick === undefined ? "the confirm, through a granted device and no chooser," : `the confirm pick (${pick.path})`;
 	const typed = after.slice(open + 1).some((entry) => entry.kind === "typing" && entry.chars > 0);
 	const back = `RESET to app sent; ${how} opened ${hex(expected.appProductId, 4)}`;
+	const returns = returnsAfterFailedResets(resets, expected);
+	if (returns > 0) return result(false, `${back}, but ${returns} times ${hex(expected.appProductId, 4)} opened after a RESET to app whose send failed`);
 	if (!typed) return result(false, `${back}; no typing entry after that open`);
 	if (typing !== "types") return result(false, `${back}; ${typing === "not-observed" ? "typing not observed yet" : "the human says the board does not type"}`);
 	return result(true, `${back}; typing confirmed`);

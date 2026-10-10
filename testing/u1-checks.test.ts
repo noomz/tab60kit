@@ -119,6 +119,29 @@ test("check 8 counts only a RESET to app whose send did not fail, and a return a
 	expect((await verdict(failedReset)).findings).toContain("1 times 0x0304 opened after a RESET to app whose send failed, so that return does not show the reset worked");
 });
 
+test("check 8 fails on a return after a RESET to app whose send failed, even when an earlier reset came back on its own", async () => {
+	const opened = (reason: string) => {
+		const entry = baseline.entries.find((each) => each.kind === "opened" && each.reason === reason);
+		if (entry?.kind !== "opened") throw new Error(`no ${reason} open in the baseline`);
+		return entry;
+	};
+	const t = (baseline.entries.at(-1)?.t ?? 0) + 1;
+	const reset = "1101".padEnd(128, "0");
+	const failedAgain = appended(
+		baseline,
+		{ ...opened("enter-update-mode"), t },
+		{ t: t + 1, kind: "out", hex: reset },
+		{ t: t + 2, kind: "send-failed", hex: reset, error: "LinkLost: the board reset before the write settled" },
+		{ t: t + 3, kind: "closed" },
+		{ ...opened("confirm-normal-mode"), t: t + 4 },
+		{ t: t + 5, kind: "typing", chars: 3 },
+	);
+	expect(await failing(failedAgain)).toEqual([8]);
+	expect(await detail(failedAgain, 8)).toBe(
+		"RESET to app sent; the confirm pick (activation) opened 0x0304, but 1 times 0x0304 opened after a RESET to app whose send failed",
+	);
+});
+
 test("check 8 accepts a parked confirm pick", async () => {
 	const parked = rewrite(baseline, (entry) => entry.kind === "pick" && entry.reason === "confirm-normal-mode", 0, (entry) => (entry.kind === "pick" ? { ...entry, path: "parked" } : entry));
 	expect(await failing(parked)).toEqual([]);

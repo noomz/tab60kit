@@ -49,6 +49,8 @@ interface RigOptions {
 	readonly board?: Partial<FakeOptions>;
 	readonly hid?: Partial<FakeHidOptions>;
 	readonly wrap?: (link: Link) => Link;
+	/** Wraps the link inside the recording, so the transcript shows what the page sent and how each send ended. */
+	readonly inner?: (link: Link) => Link;
 	readonly onEntry?: (entry: TranscriptEntry, board: FakeTab60) => void;
 	readonly onLog?: (line: string, board: FakeTab60) => void;
 }
@@ -63,7 +65,7 @@ function rig(options: RigOptions = {}) {
 	};
 	const { port, chooser } = startWebHidLab(hid, new FakeLocks(), {
 		wrap: (link) => {
-			const lab = u1Wrap(sink)(link);
+			const lab = u1Wrap(sink)(options.inner?.(link) ?? link);
 			return options.wrap?.(lab) ?? lab;
 		},
 		onEvent: (event) => sink({ t: performance.now(), ...event }),
@@ -484,4 +486,47 @@ test("check 8 fails when RESET to app never brought the board back and a later C
 	const check8 = (await evaluateU1({ ...transcript, entries }, { expected: own, typing: "types" })).checks[7];
 	expect(check8?.pass).toBe(false);
 	expect(check8?.detail).toMatch(/no 0x0304 opened for the confirm after the last RESET to app that left/);
+});
+
+/** The board ignores the first RESET to app. The second reaches it, and its send rejects after the board took it. */
+function ignoresFirstResetThenRejects() {
+	let resets = 0;
+	return (link: Link): Link => ({
+		mode: link.mode,
+		lost: link.lost,
+		async send(frame) {
+			const reset = frame[0] === 0x11 && frame[1] === 0x01;
+			if (reset && ++resets === 1) return;
+			await link.send(frame);
+			if (reset) throw new LinkLost("sendReport failed: the board reset before the write settled");
+		},
+		next: (timeoutMs) => link.next(timeoutMs),
+		discardPending: () => link.discardPending(),
+		close: () => link.close(),
+	});
+}
+
+test("check 8 fails when the last RESET to app that left brought nothing back, though the board came back after a later one whose send failed", async () => {
+	const r = rig({ hid: { emptyChooserClosesAfterMs: 30 }, inner: ignoresFirstResetThenRejects() });
+	const user = setInterval(() => r.chooser.needsClick !== null && r.chooser.pick(), 2);
+	try {
+		const connect = await settle(u1Run("connect", IDLE, r.ctx()));
+		const deep = phaseAfterRun(r.entries, await settle(u1Run("deep-check", phaseAfterRun(r.entries, connect), r.ctx())));
+		const tryAgain = await settle(u1Run("try-again", deep, r.ctx()));
+		expect([connect.kind, deep.kind, tryAgain.kind, r.board.mode]).toEqual(["connected", "away", "connected", "app"]);
+		if (tryAgain.kind === "connected") await tryAgain.app.close();
+	} finally {
+		clearInterval(user);
+	}
+	expect(
+		r.entries.flatMap((entry) =>
+			entry.kind === "opened" ? [`opened ${entry.productId.toString(16)} ${entry.reason}`] : (entry.kind === "out" || entry.kind === "send-failed") && entry.hex.startsWith("1101") ? [`${entry.kind} 1101`] : [],
+		),
+	).toEqual(["opened 304 connect", "opened 1304 enter-update-mode", "out 1101", "opened 1304 enter-update-mode", "out 1101", "send-failed 1101", "opened 304 confirm-normal-mode"]);
+	r.entries.push({ t: performance.now(), kind: "typing", chars: 5 });
+	const expected = { ...U1_EXPECTED, probes: PROBES, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
+	const transcript: Transcript = { format: "tab60kit-transcript/1", recordedAt: "2026-10-10T00:00:00.000Z", environment: { fake: "plain" }, entries: r.entries };
+	const verdict = await evaluateU1(transcript, { expected, typing: "types" });
+	expect(verdict.checks[7]).toMatchObject({ id: 8, pass: false, detail: "no 0x0304 opened for the confirm after the last RESET to app that left and before the next one" });
+	expect(verdict.findings).toContain("1 times 0x0304 opened after a RESET to app whose send failed, so that return does not show the reset worked");
 });
