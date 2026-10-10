@@ -7,7 +7,6 @@ import { FAKE_MODES, type FakeMode, fakeHardware, isFakeMode } from "./u1-fake";
 import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } from "./u1-job";
 import { AWAY_RECOVERY, type Phase, type Run, type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun, pickHint, pickLabel } from "./u1-state";
 
-/** null for the real WebHID; "plain" for ?fake with no value; a string outside FAKE_MODES stops the page. */
 function fakeModeOf(search: string): string | null {
 	const value = new URLSearchParams(search).get("fake");
 	if (value === null) return null;

@@ -1,7 +1,4 @@
-/**
- * What the U1 page shows, derived from the transcript and from what a run returned. DOM-free, so the recovery tests
- * reach the same derivation the page renders.
- */
+/** DOM-free, so the recovery tests reach the same derivation the page renders. */
 import { TAB60 } from "../core/device";
 import { type DeviceWant, type Mode, PickCancelled, type WantReason } from "../core/port";
 import type { AppRefused, AppSession, IapRefused, Refused } from "../core/protocol";

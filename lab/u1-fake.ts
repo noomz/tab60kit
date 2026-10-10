@@ -1,7 +1,4 @@
-/**
- * The page's ?fake modes. Each sets up the fake board and the fake WebHID for one recovery path, and flips them when a
- * run starts. DOM-free, so testing/u1-fake-modes.test.ts drives every mode through the page's own run logic.
- */
+/** DOM-free, so testing/u1-fake-modes.test.ts drives every mode through the page's own run logic. */
 import type { Mode } from "../core/units";
 import { type FakeOptions, FakeTab60 } from "../testing/fake-tab60";
 import { FakeHid, type FakeHidOptions, FakeLocks } from "../testing/fake-webhid";
@@ -21,11 +18,25 @@ interface ModeSpec {
 	readonly board?: (probes: number) => Partial<FakeOptions>;
 	readonly rows?: readonly Mode[];
 	readonly setup?: (fakes: Fakes) => void;
-	/** What the mode flips on the fakes when a run starts. */
 	readonly adjust?: (what: Run, fakes: Fakes) => void;
 }
 
 const recovers = (what: Run) => what === "try-again" || what === "restart";
+
+const READ_MODE = { cmd: 0x12, sub: 0x02 } as const;
+const SUM = { cmd: 0x1d, sub: 0x01 } as const;
+/** Past the page's 500 ms spacing and inside READ MODE's 1 s timeout, so check 9 judges the answer instead of a timeout. */
+const SLOW_ANSWER_MS = 700;
+const ATTACH_READ_MODES = 1;
+const PROBE_TO_SLOW = 5;
+const PROBE_TO_DROP = 5;
+
+/** Output reports from page load, with one Connect first, up to the nth update-mode probe. */
+function packetsBeforeUpdateProbe(probes: number, nth: number): number {
+	const connect = { attach: 2, versionPage: 3, probes };
+	const update = { reset: 1, attach: 3, versionPage: 3, sum: 1 };
+	return connect.attach + connect.versionPage + connect.probes + update.reset + update.attach + update.versionPage + update.sum + (nth - 1);
+}
 
 const MODES: Readonly<Record<FakeMode, ModeSpec>> = {
 	plain: {},
@@ -39,20 +50,16 @@ const MODES: Readonly<Record<FakeMode, ModeSpec>> = {
 			if (recovers(what)) board.ignoreInIap = false;
 		},
 	},
-	/** From the Deep check click until Try again or Restart, every chooser closes with no device. */
 	cancelled: {
 		adjust: (what, { hid }) => {
 			if (what === "deep-check") hid.chooser = "cancel";
 			if (recovers(what)) hid.chooser = "pick";
 		},
 	},
-	/** FW INFO disagrees with BL info, so the update-mode attach refuses and the page holds the refusal. */
-	refused: { board: () => ({ fwInfo: 0x400 }) },
-	"sum-refused": { board: () => ({ refuseOnce: { cmd: 0x1d, sub: 0x01 } }) },
-	/** After one Connect: its 5 frames and probes, RESET to IAP, attach and observe's 7, then four probes. */
-	drop: { board: (probes) => ({ loseLinkAtPacket: 5 + probes + 1 + 7 + 4 }) },
-	/** The fifth update-mode probe (attach's READ MODE comes first) answers after 700 ms, inside READ MODE's 1 s. */
-	slow: { board: () => ({ slowOnce: { cmd: 0x12, sub: 0x02, mode: "iap", ms: 700, skip: 5 } }) },
+	refused: { board: () => ({ fwInfo: 2 * U1_EXPECTED.fwOffset }) },
+	"sum-refused": { board: () => ({ refuseOnce: SUM }) },
+	drop: { board: (probes) => ({ loseLinkAtPacket: packetsBeforeUpdateProbe(probes, PROBE_TO_DROP) }) },
+	slow: { board: () => ({ slowOnce: { ...READ_MODE, mode: "iap", ms: SLOW_ANSWER_MS, skip: ATTACH_READ_MODES + PROBE_TO_SLOW - 1 } }) },
 };
 
 export interface FakeHardware extends Fakes {

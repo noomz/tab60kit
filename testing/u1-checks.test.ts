@@ -13,7 +13,6 @@ import type { Transcript, TranscriptEntry } from "./transcript";
 
 const fakeExpected: U1Expected = { ...U1_EXPECTED, versionPageSha256: await sha256(syntheticVersionBlock()), probeSpacingMs: 0 };
 
-/** The page records a typing entry when the field changes after the confirm pick's open. */
 const typed = (transcript: Transcript, chars = 4): Transcript => ({
 	...transcript,
 	entries: [...transcript.entries, { t: (transcript.entries.at(-1)?.t ?? 0) + 1, kind: "typing", chars }],

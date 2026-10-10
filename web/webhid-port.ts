@@ -145,7 +145,7 @@ const hasVendorCollection = (device: HIDDevice): boolean =>
 
 const TIMED_OUT = Symbol("timed out");
 
-/** `work`, or TIMED_OUT once `ms` pass first. Chromium adds no timeout to HID calls (R3 C12). */
+/** Chromium adds no timeout to HID calls (R3 C12). */
 async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const late = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -158,7 +158,6 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED
 	}
 }
 
-/** A close that does not settle in time counts as closed, and the shell reports it. Never rejects. */
 async function closeDevice(device: HIDDevice, report: (event: PortEvent) => void): Promise<void> {
 	try {
 		if ((await within(device.close(), CLOSE_TIMEOUT_MS)) === TIMED_OUT) report({ kind: "close-timeout", productId: device.productId });
@@ -242,10 +241,7 @@ class WebHidPort implements DevicePort {
 		);
 	}
 
-	/**
-	 * The page cannot close a chooser, so an abort that lands while one is open takes effect when it closes. Then a
-	 * device picked after the abort reaches openDevice, which checks the signal before it opens anything.
-	 */
+	/** The page cannot close an open chooser (requestDevice takes no signal), so an abort lands when it closes. */
 	async chosen(want: DeviceWant, signal: AbortSignal): Promise<HIDDevice> {
 		signal.throwIfAborted();
 		const startedAt = this.clock.now();
@@ -295,7 +291,6 @@ class WebHidPort implements DevicePort {
 				continue;
 			}
 			if (outcome === TIMED_OUT) {
-				// An open that settles after its timeout would hold the device with no link to close it.
 				void opening.then(() => closeDevice(device, this.report), () => undefined);
 				const error = new OpenTimedOut(`device.open() did not settle within ${OPEN_TIMEOUT_MS} ms`);
 				this.report({ kind: "open-attempt", productId, attempt, error: message(error) });

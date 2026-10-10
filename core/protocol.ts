@@ -5,8 +5,8 @@
  * Every byte the tool sends leaves through `transmit`, which encodes a request and then audits the exact 64 bytes
  * before the link sees them. The audit does not trust the encoder. It decodes the frame the way the board will and
  * checks it against four things, each owned in one place:
- *   - The registry. COMMANDS lists every (cmd, sub) the tool may send. Any other pair is refused, and so is a frame
- *     whose crc16 field is not the request value or that carries a nonzero byte past the payload its row declares.
+ *   - The registry. COMMANDS lists every (cmd, sub) the tool may send and the payload each carries. Any other pair,
+ *     or any other byte, is refused.
  *   - G1, per command. A shipped kit sends only rows whose evidence maturity is "confirmed". A lab kit sends exactly
  *     the commands its clearance names, each at least "reviewed".
  *   - Mode. A command the current firmware does not implement is refused. The session types also make the wrong call
@@ -75,8 +75,8 @@ export interface CommandSpec {
 	readonly address: Addressing;
 	/**
 	 * How many bytes from byte 4 the frame carries: 0 unaddressed, 8 for a range, 4 for set-cursor, and "sub" for WRITE,
-	 * whose sub byte is its length. The audit refuses any nonzero byte past them. The config rows stay at 0 until U10 and
-	 * U11 settle their formats, so no config payload can pass before then.
+	 * whose sub byte is its length. The config rows stay at 0 until U10 and U11 settle their formats, so no config payload
+	 * can pass before then.
 	 */
 	readonly payloadBytes: number | "sub";
 	/** The editor capability this command is part of. keymap.ts derives its locks from this field. */
@@ -129,7 +129,7 @@ export const COMMANDS = {
 		modes: ["app", "iap"],
 		effect: "read",
 		reply: "echo",
-		/** WRITE_LINK_RULE.maxProbeGapMs, so plan check 9 can record and judge an answer slower than 500 ms instead of a timeout. */
+		/** At least WRITE_LINK_RULE.maxProbeGapMs (flash.ts), so a slow answer is judged by the link gate and check 9 instead of thrown. */
 		timeoutMs: 1_000,
 		address: "none",
 		payloadBytes: 0,
@@ -663,7 +663,6 @@ async function readVersionPage(ch: Channel): Promise<VersionPageRead> {
 	return { bytes };
 }
 
-/** RESET to app, then close. The close runs even when the send fails, so the device is free to open again. */
 async function restartToApp(ch: Channel): Promise<void> {
 	try {
 		await transmit(ch, "resetToApp", {});
@@ -780,10 +779,9 @@ export interface IapRefused {
 export type Refused = AppRefused | IapRefused;
 
 /**
- * An update-mode attach that threw. A normal-mode attach closes its link, but this one keeps it open, because the
- * board is in update mode, where the keyboard cannot type, and this link is the way to send it home. The core never
- * restarts on its own, because the caller decides when a reset is safe (U7's flash job reads the board first). Every
- * caller must call restartToApp or close. `cause` is the error the attach threw.
+ * An update-mode attach that threw. Its link stays open, because it is the way to send a board that cannot type home,
+ * and the core never restarts on its own, because the caller decides when a reset is safe (U7 reads the board first).
+ * Every caller must call restartToApp or close. `cause` is the error the attach threw.
  */
 export class IapAttachFailed extends Error {
 	override readonly name = "IapAttachFailed";
@@ -840,8 +838,8 @@ class App implements AppSession {
 		try {
 			await transmit(this.ch, "resetToIap", {});
 		} catch (error) {
-			// A failed send of a no-reply command is an unknown outcome. The board may have reset, so the open decides.
-			if (!(error instanceof LinkLost || error instanceof LinkTimeout)) {
+			const boardMayHaveReset = error instanceof LinkLost || error instanceof LinkTimeout;
+			if (!boardMayHaveReset) {
 				opening.catch(() => undefined);
 				await this.close();
 				throw error;

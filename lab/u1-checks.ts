@@ -53,7 +53,6 @@ interface Exchange {
 }
 
 type Answered = Exchange & { readonly reply: Uint8Array; readonly replyT: number };
-/** A reply that repeats the request's bytes 0..1. An FF AA reply never counts as an answer. */
 const echoed = (exchange: Exchange): exchange is Answered =>
 	exchange.reply !== null && exchange.replyT !== null && exchange.reply[0] === exchange.cmd && exchange.reply[1] === exchange.sub;
 
@@ -80,7 +79,6 @@ export const U1_FRAMES: readonly string[] = [
 	"11010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 ];
 
-/** Check 9 accepts a probe gap down to this share of the page's spacing (450 ms of 500). */
 const SPACING_TOLERANCE = 0.9;
 
 const pair = (cmd: number, sub: number) => `${cmd.toString(16).padStart(2, "0")}/${sub.toString(16).padStart(2, "0")}`;
@@ -135,7 +133,6 @@ function exchanges(entries: readonly TranscriptEntry[], expected: U1Expected, fi
 	return out;
 }
 
-/** What the transcript records besides the exchanges: frames off the golden list, failed sends, slow closes, dropped reports, a hidden tab. */
 function entryFindings(entries: readonly TranscriptEntry[]): string[] {
 	const findings: string[] = [];
 	const off = [...new Set(entries.flatMap((entry) => (entry.kind === "out" && !U1_FRAMES.includes(entry.hex) ? [entry.hex] : [])))];
@@ -245,10 +242,7 @@ function lastIndex<T>(items: readonly T[], matches: (item: T) => boolean): numbe
 	return -1;
 }
 
-/**
- * The 0x0304 open must follow the last RESET to app through the confirm-normal-mode pick, with no Connect pick between
- * them, so a board brought back by a cold boot and Connect cannot pass (F7). Typing must follow that open.
- */
+/** A board brought back by a cold boot and a Connect click must not pass as RESET to app working (F7). */
 function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
 	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} through the confirm pick and types`;
 	const result = (pass: boolean, detail: string): CheckResult => ({ id: 8, title, pass, detail });

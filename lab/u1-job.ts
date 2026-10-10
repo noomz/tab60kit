@@ -90,24 +90,14 @@ async function probeSeries(session: AppSession | IapSession, ctx: U1Context): Pr
 	ctx.log(`${ctx.series.probes} READ MODE probes answered in ${session.mode === "app" ? "normal" : "update"} mode`);
 }
 
-/**
- * An update-mode attach that threw still holds its link (IapAttachFailed). Send RESET to app on it, best effort,
- * close it even when that fails, and report the attach's own error, so the board goes home and the device can open
- * again for Try again.
- */
 async function withHome<T>(ctx: U1Context, work: () => Promise<T>): Promise<T> {
 	try {
 		return await work();
 	} catch (error) {
 		if (!(error instanceof IapAttachFailed)) throw error;
 		ctx.log(`update-mode attach failed (${describe(error.cause)}), sending RESET to app`);
-		try {
-			await error.restartToApp();
-		} catch {
-			// Best effort. The attach's error is the one the page reports, and the link closes below either way.
-		} finally {
-			await error.close();
-		}
+		await error.restartToApp().catch(() => undefined);
+		await error.close();
 		throw error.cause;
 	}
 }
