@@ -6,6 +6,7 @@ import type { JobContext } from "../core/job";
 import {
 	type AppRefused,
 	type AppSession,
+	IapAttachFailed,
 	type IapRefused,
 	type IapSession,
 	type LinkContext,
@@ -59,6 +60,7 @@ export type DeepCheckEnd =
 	| { readonly kind: "refused"; readonly refused: IapRefused };
 
 const hex = (n: number, digits: number) => `0x${n.toString(16).padStart(digits, "0")}`;
+const describe = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 export function describeChip(chip: ChipState): string {
 	const page =
@@ -84,6 +86,28 @@ async function probeSeries(session: AppSession | IapSession, ctx: U1Context): Pr
 	ctx.log(`${ctx.series.probes} READ MODE probes answered in ${session.mode === "app" ? "normal" : "update"} mode`);
 }
 
+/**
+ * An update-mode attach that threw still holds its link (IapAttachFailed). Send RESET to app on it, best effort,
+ * close it even when that fails, and report the attach's own error, so the board goes home and the device can open
+ * again for Try again.
+ */
+async function withHome<T>(ctx: U1Context, work: () => Promise<T>): Promise<T> {
+	try {
+		return await work();
+	} catch (error) {
+		if (!(error instanceof IapAttachFailed)) throw error;
+		ctx.log(`update-mode attach failed (${describe(error.cause)}), sending RESET to app`);
+		try {
+			await error.restartToApp();
+		} catch {
+			// Best effort. The attach's error is the one the page reports, and the link closes below either way.
+		} finally {
+			await error.close();
+		}
+		throw error.cause;
+	}
+}
+
 export async function u1Connect(ctx: U1Context): Promise<ConnectEnd> {
 	const session = await connect(ctx, { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) return { kind: "refused", refused: session };
@@ -107,13 +131,13 @@ export async function u1UpdateModePhase(iap: IapSession, ctx: U1Context): Promis
 }
 
 export async function u1DeepCheck(app: AppSession, ctx: U1Context): Promise<DeepCheckEnd> {
-	const iap = await app.enterIap(ctx);
+	const iap = await withHome(ctx, () => app.enterIap(ctx));
 	if ("refusal" in iap) return { kind: "refused", refused: iap };
 	return u1UpdateModePhase(iap, ctx);
 }
 
 export async function u1TryAgain(ctx: U1Context): Promise<DeepCheckEnd> {
-	const iap = await connect(ctx, { modes: ["iap"], reason: "enter-update-mode" });
+	const iap = await withHome(ctx, () => connect(ctx, { modes: ["iap"], reason: "enter-update-mode" }));
 	if ("refusal" in iap) return { kind: "refused", refused: iap };
 	return u1UpdateModePhase(iap, ctx);
 }

@@ -19,7 +19,7 @@ import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import type { FlashableImage } from "./firmware";
 import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, imageSpan, inWindow, parseBlInfo, windowFor } from "./flashmap";
 import type { KeyId, KeyWrite, Layer, OsMode, Usage } from "./keymap";
-import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkTimeout, type OutReport, type WantReason } from "./port";
+import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
 
 /** What a command does to the board. The gate and the UI read this, never the opcode. */
@@ -663,9 +663,13 @@ async function readVersionPage(ch: Channel): Promise<VersionPageRead> {
 	return { bytes };
 }
 
+/** RESET to app, then close. The close runs even when the send fails, so the device is free to open again. */
 async function restartToApp(ch: Channel): Promise<void> {
-	await transmit(ch, "resetToApp", {});
-	await ch.link.close();
+	try {
+		await transmit(ch, "resetToApp", {});
+	} finally {
+		await ch.link.close();
+	}
 }
 
 /** The live config channel (app mode). Every method throws NotCleared until U10 and U11 lift G1 for it. */
@@ -710,7 +714,8 @@ export interface AppSession {
 	 * Restarts the board into update mode and returns the bootloader session, or the refusal that attach found
 	 * there. This session is closed afterwards. The update-mode link is requested before the reset frame leaves,
 	 * because a chooser opened inside the click's activation stays open and adds the row when the bootloader
-	 * appears (R3 C7).
+	 * appears (R3 C7). No reset leaves when that request has already failed. An attach that throws rejects with
+	 * IapAttachFailed, which holds the update-mode link open.
 	 */
 	enterIap(ctx: LinkContext): Promise<IapSession | IapRefused>;
 	readonly config: ConfigChannel;
@@ -774,6 +779,34 @@ export interface IapRefused {
 
 export type Refused = AppRefused | IapRefused;
 
+/**
+ * An update-mode attach that threw. A normal-mode attach closes its link, but this one keeps it open, because the
+ * board is in update mode, where the keyboard cannot type, and this link is the way to send it home. The core never
+ * restarts on its own: the caller decides when a reset is safe (U7's flash job reads the board first). Every caller
+ * must call restartToApp or close. `cause` is the error the attach threw.
+ */
+export class IapAttachFailed extends Error {
+	override readonly name = "IapAttachFailed";
+	readonly #ch: Channel;
+
+	constructor(
+		ch: Channel,
+		override readonly cause: unknown,
+	) {
+		super(`attach in update mode failed: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
+		this.#ch = ch;
+	}
+
+	/** RESET to app through transmit and the audit, then close, even when the send fails. */
+	restartToApp(): Promise<void> {
+		return restartToApp(this.#ch);
+	}
+
+	close(): Promise<void> {
+		return this.#ch.link.close();
+	}
+}
+
 class App implements AppSession {
 	readonly mode = "app";
 	readonly config: ConfigChannel;
@@ -796,16 +829,26 @@ class App implements AppSession {
 
 	async enterIap(ctx: LinkContext): Promise<IapSession | IapRefused> {
 		const opening = ctx.port.open({ modes: ["iap"], reason: "enter-update-mode" }, ctx.signal);
-		let iapLink: Link;
+		const early = await Promise.race([opening, Promise.resolve(null)]).then(
+			() => null,
+			(error: unknown) => ({ error }),
+		);
+		if (early !== null) {
+			await this.close();
+			throw early.error;
+		}
 		try {
 			await transmit(this.ch, "resetToIap", {});
-			await this.close();
-			iapLink = await opening;
 		} catch (error) {
-			opening.catch(() => undefined);
-			throw error;
+			// A failed send of a no-reply command is an unknown outcome. The board may have reset, so the open decides.
+			if (!(error instanceof LinkLost || error instanceof LinkTimeout)) {
+				opening.catch(() => undefined);
+				await this.close();
+				throw error;
+			}
 		}
-		return attach(iapLink, ctx, "iap");
+		await this.close();
+		return attach(await opening, ctx, "iap");
 	}
 
 	close(): Promise<void> {
@@ -891,6 +934,7 @@ async function attach(link: Link, ctx: LinkContext, as: Mode): Promise<Session |
 	try {
 		seen = await inspect(ch);
 	} catch (error) {
+		if (link.mode === "iap") throw new IapAttachFailed(ch, error);
 		await link.close();
 		throw error;
 	}
@@ -904,7 +948,11 @@ interface SingleModeWant<M extends Mode> {
 	readonly reason: WantReason;
 }
 
-/** Opens a link for `want`, then proves the board is the one this tool knows before returning a typed session. */
+/**
+ * Opens a link for `want`, then proves the board is the one this tool knows before returning a typed session. When
+ * that proof throws, a normal-mode link is closed and the error propagates, and an update-mode link stays open inside
+ * an IapAttachFailed.
+ */
 export function connect(ctx: LinkContext, want: SingleModeWant<"app">): Promise<AppSession | AppRefused>;
 export function connect(ctx: LinkContext, want: SingleModeWant<"iap">): Promise<IapSession | IapRefused>;
 export function connect(ctx: LinkContext, want: DeviceWant): Promise<Session | Refused>;

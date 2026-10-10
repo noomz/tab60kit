@@ -14,6 +14,8 @@ export class ScriptedLink implements Link {
 	readonly calls: string[] = [];
 	readonly replies: (InReport | Error)[] = [];
 	closed = 0;
+	/** Rejects a send after recording it, as a link whose sendReport fails once the board took the frame. */
+	sendError: ((frame: Uint8Array) => Error | null) | null = null;
 	readonly lost = new Promise<void>(() => undefined);
 
 	constructor(
@@ -28,6 +30,8 @@ export class ScriptedLink implements Link {
 		this.sent.push(Uint8Array.from(frame));
 		this.calls.push("send");
 		this.log.push(`send ${toHex(frame.subarray(0, 2))}`);
+		const error = this.sendError?.(frame) ?? null;
+		if (error !== null) throw error;
 	}
 
 	async next(timeoutMs: number): Promise<InReport> {

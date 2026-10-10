@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { FlashWindow } from "../core/flashmap";
-import { type InReport, LinkTimeout, PickCancelled } from "../core/port";
+import { type InReport, LinkLost, LinkTimeout, PickCancelled } from "../core/port";
 import {
 	COMMANDS,
 	COMMAND_NAMES,
@@ -9,6 +9,7 @@ import {
 	type CommandSpec,
 	DeviceRefused,
 	type EgressContext,
+	IapAttachFailed,
 	ModeDisagrees,
 	NotCleared,
 	auditEgress,
@@ -190,18 +191,85 @@ test("a refused update-mode board never receives an addressed command", async ()
 	expect(iap.sent.map((f) => toHex(f.subarray(0, 1)))).toEqual(["12", "12", "12"]);
 });
 
-test("enterIap propagates a cancelled chooser and leaves the normal-mode link closed", async () => {
+const pairsOf = (link: ScriptedLink) => link.sent.map((f) => toHex(f.subarray(0, 2)));
+
+test("enterIap sends no reset when its update-mode open has already failed", async () => {
 	const app = new ScriptedLink("app", appAttach());
 	const port = new ScriptedPort([app]);
-	port.open = async (want) => {
-		if (want.modes.includes("iap")) throw new PickCancelled("test");
-		return app;
-	};
 	const session = await connect(ctx(port), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
+	port.open = async () => {
+		throw new PickCancelled("test");
+	};
 	await expect(session.enterIap(ctx(port))).rejects.toBeInstanceOf(PickCancelled);
-	expect(app.sent.map((f) => toHex(f.subarray(0, 2)))).toContain("1100");
+	expect(pairsOf(app)).toEqual(["1202", "1200"]);
 	expect(app.closed).toBe(1);
+});
+
+test("a chooser cancelled after the reset propagates, and the normal-mode link is closed", async () => {
+	const app = new ScriptedLink("app", appAttach());
+	const port = new ScriptedPort([app]);
+	const session = await connect(ctx(port), { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	port.open = () => new Promise((_, reject) => setTimeout(() => reject(new PickCancelled("test")), 1));
+	await expect(session.enterIap(ctx(port))).rejects.toBeInstanceOf(PickCancelled);
+	expect(pairsOf(app)).toEqual(["1202", "1200", "1100"]);
+	expect(app.closed).toBe(1);
+});
+
+test("a reset whose send fails keeps waiting for the update-mode open and attaches", async () => {
+	const app = new ScriptedLink("app", appAttach());
+	app.sendError = (frame) => (frame[0] === 0x11 ? new LinkLost("sendReport failed: the device reset") : null);
+	const iap = new ScriptedLink("iap", iapAttach());
+	const port = new ScriptedPort([app, iap]);
+	const session = await connect(ctx(port), { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	const bootloader = await session.enterIap(ctx(port));
+	expect(bootloader.mode).toBe("iap");
+	expect("refusal" in bootloader).toBe(false);
+	expect(pairsOf(app).at(-1)).toBe("1100");
+	expect(app.closed).toBe(1);
+	expect(iap.closed).toBe(0);
+});
+
+test("a reset the clearance does not name leaves nothing on the wire and closes the session", async () => {
+	const noReset = labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToApp"], "no reset");
+	const app = new ScriptedLink("app", appAttach());
+	const port = new ScriptedPort([app, new ScriptedLink("iap", iapAttach())]);
+	const session = await connect(ctx(port, undefined, noReset), { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	await expect(session.enterIap(ctx(port, undefined, noReset))).rejects.toBeInstanceOf(NotCleared);
+	expect(pairsOf(app)).toEqual(["1202", "1200"]);
+	expect(app.closed).toBe(1);
+});
+
+test("an update-mode attach that throws keeps its link open inside IapAttachFailed", async () => {
+	const iap = new ScriptedLink("iap", [modeReply("iap")]);
+	const failure = connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "enter-update-mode" });
+	await expect(failure).rejects.toBeInstanceOf(IapAttachFailed);
+	const error = await failure.catch((caught: unknown) => caught);
+	if (!(error instanceof IapAttachFailed)) throw new Error("not IapAttachFailed");
+	expect(error.cause).toBeInstanceOf(LinkTimeout);
+	expect(iap.closed).toBe(0);
+	await error.close();
+	expect(iap.closed).toBe(1);
+	expect(pairsOf(iap)).toEqual(["1202", "1200"]);
+});
+
+test("a normal-mode attach that throws closes its link and rethrows the error itself", async () => {
+	const app = new ScriptedLink("app", [modeReply("app")]);
+	await expect(connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" })).rejects.toBeInstanceOf(LinkTimeout);
+	expect(app.closed).toBe(1);
+});
+
+test("restartToApp closes the link even when the reset's send fails", async () => {
+	const iap = new ScriptedLink("iap", [modeReply("iap"), blInfoReply(), fwInfoReply(0x400)]);
+	iap.sendError = (frame) => (frame[0] === 0x11 ? new LinkLost("unplugged") : null);
+	const result = await connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "enter-update-mode" });
+	if (!("refusal" in result) || result.restartToApp === null) throw new Error("not an update-mode refusal");
+	await expect(result.restartToApp()).rejects.toBeInstanceOf(LinkLost);
+	expect(pairsOf(iap).at(-1)).toBe("1101");
+	expect(iap.closed).toBe(1);
 });
 
 const window = { base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 } as unknown as FlashWindow;
