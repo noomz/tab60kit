@@ -9,10 +9,11 @@
  *   rest of the app region          not checked. The key alignment of a checksum that starts past the image is unknown.
  *   option bytes [0x1FE00, 0x20000) not checkable.
  */
-import { CATALOG, type CatalogEntry } from "./firmware";
+import { CATALOG, type CatalogEntry, sha256 } from "./firmware";
 import type { BlInfo, FlashWindow, RegionName } from "./flashmap";
 import type { Job, JobContext } from "./job";
-import type { AppSession, IapSession, Session, VersionPageRead } from "./protocol";
+import { PickCancelled } from "./port";
+import { type AppRefused, type AppSession, type IapSession, type Session, type VersionPageRead, connect } from "./protocol";
 import { type Crc32, type Sha256, type Sum32, notImplemented } from "./units";
 
 export type PageState =
@@ -49,26 +50,53 @@ export type Observed =
 	| { readonly mode: "iap"; readonly session: IapSession; readonly chip: IapChip };
 
 /**
- * Reads the chip through an open session.
- * TODO:
- *   page = classifyPage(await session.readVersionPage())
- *   app: return { mode, session, chip: { mode, info, window, page } }
- *   (readVersionPage sends parts 0, 1, and 2 of READ VERSION PAGE: sub 0x20, 0x21, 0x22)
- *   iap: for each distinct catalog image length L:
- *          { sum, crc } = await session.checksum(L)
- *          match = CATALOG entry with length L and wireSum32 == sum and (crc == null or wireCrc32 == crc)
- *        image = match ? official(match, crc ? "sum-and-crc" : "sum") : unrecognized(sum of the target length, crc)
+ * Reads the chip through an open session: the version page in either mode, plus the image checksum in update mode,
+ * one SUM (and CRC once cleared) per distinct catalog image length. With no match, the first length's result is
+ * reported as unrecognized.
  */
 export async function observe(session: Session): Promise<Observed> {
-	return notImplemented(`observe(${session.mode}) against ${CATALOG.length} catalog entries`);
+	const page = await classifyPage(await session.readVersionPage());
+	const { info, window } = session;
+	if (session.mode === "app") return { mode: "app", session, chip: { mode: "app", info, window, page } };
+	const image = await checkImage(session);
+	return { mode: "iap", session, chip: { mode: "iap", info, window, page, image } };
 }
 
+async function checkImage(session: IapSession): Promise<ImageCheck> {
+	const lengths = [...new Set(CATALOG.map((entry) => entry.image.bytes))];
+	let first: ImageCheck | null = null;
+	for (const bytes of lengths) {
+		const { sum, crc } = await session.checksum(bytes);
+		const entry = CATALOG.find((candidate) => candidate.image.bytes === bytes && candidate.image.wireSum32 === sum && (crc === null || candidate.image.wireCrc32 === crc));
+		if (entry !== undefined) return { kind: "official", entry, by: crc === null ? "sum" : "sum-and-crc" };
+		first ??= { kind: "unrecognized", sum, crc };
+	}
+	if (first === null) throw new Error("the catalog is empty");
+	return first;
+}
+
+/** The version string's byte length at offset 0 may reach offset 0x78, where the fixed words start (R1 "Version page"). */
+const VERSION_TEXT_MAX_BYTES = 0x78 - 4;
+
 /**
- * TODO: all 0xFF -> erased. sha256(bytes) equals a CATALOG versionBlock.sha256 -> official. Otherwise unknown,
- * with the UTF-16LE string at offset 4 when the length word at offset 0 is at most 116.
+ * Erased when every byte is 0xFF, official when the bytes hash to a catalog version block, unknown otherwise, with
+ * the UTF-16LE string at offset 4 when the length word at offset 0 fits before the fixed words.
  */
 export async function classifyPage(page: VersionPageRead): Promise<PageState> {
-	return notImplemented(`classifyPage(${page.bytes.length})`);
+	const { bytes } = page;
+	if (bytes.every((b) => b === 0xff)) return { kind: "erased" };
+	const digest = await sha256(bytes);
+	const entry = CATALOG.find((candidate) => candidate.versionBlock.sha256 === digest);
+	if (entry !== undefined) return { kind: "official", entry };
+	return { kind: "unknown", text: versionText(bytes), sha256: digest };
+}
+
+function versionText(bytes: Uint8Array): string | null {
+	const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+	if (length === 0 || length > VERSION_TEXT_MAX_BYTES) return null;
+	const text = new TextDecoder("utf-16le").decode(bytes.subarray(4, 4 + length));
+	const end = text.indexOf("\0");
+	return end === -1 ? text : text.slice(0, end);
 }
 
 /**
@@ -135,10 +163,15 @@ export const deepCheck: Job = async (start, ctx) => {
 
 /**
  * Shared by the deep check and the flash job: restart into normal mode, then offer the optional confirm pick.
- * TODO: progress(restarting app); await iap.exitToApp();
- *   try connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" }) -> the app session
- *   a cancel or PickCancelled here -> null (the job still finishes; the UI calls this Skip)
+ * A cancel or a closed chooser there returns null, and the job still finishes (the UI calls this Skip).
  */
-export async function leaveUpdateMode(iap: IapSession, ctx: JobContext): Promise<AppSession | null> {
-	return notImplemented(`leaveUpdateMode(${iap.mode}, aborted=${ctx.signal.aborted})`);
+export async function leaveUpdateMode(iap: IapSession, ctx: JobContext): Promise<AppSession | AppRefused | null> {
+	ctx.progress({ kind: "restarting", into: "app" });
+	await iap.exitToApp();
+	try {
+		return await connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" });
+	} catch (error) {
+		if (error instanceof PickCancelled || ctx.signal.aborted) return null;
+		throw error;
+	}
 }
