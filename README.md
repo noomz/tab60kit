@@ -16,7 +16,7 @@ bun run check
 `bun run check` runs the same steps as CI (`.github/workflows/ci.yml`), in this order:
 
 1. `bun run typecheck` runs `tsc` on `tsconfig.json`. It runs again on `tsconfig.browser.json`, which checks the code that ships to the page without Node or Bun types.
-2. `bun test` runs the unit tests: the policy checks in `probes/policy.test.ts`, the package-exports test, the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`, and the CSP test, which builds every page into a temp dir.
+2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases and one run per `?fake` mode. The CSP test builds every page into a temp dir.
 3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The script ends with `failures: 0` when every check passes.
 4. `bun run reconcile` runs the flash-loop model in `testing/reconcile-model.ts`. It throws if the synthesized loop has a problem run.
 
@@ -37,9 +37,30 @@ bun run build
 python3 -m http.server --bind 127.0.0.1 --directory dist-lab 8000
 ```
 
-Open `http://127.0.0.1:8000/u1.html`. Connect picks "USB-HID Keyboard", observes, and probes READ MODE thirty times. Deep check restarts into update mode, picks "USB-HID IAP", observes (version page and SUM), probes again, and comes back to normal mode. Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json> --types` writes `fixtures/u1-macos.json` with plan U1's nine checks; `--no-types` records that the board did not type afterwards.
+Build from a clean tree. The page prints the commit it was built from, and the verdict refuses a transcript from a build marked `-dirty`.
 
-`http://127.0.0.1:8000/u1.html?fake` runs the same page over the fake board and the fake WebHID, with no hardware. `?fake=parked` makes the open chooser miss the bootloader row, `?fake=cancel` closes every chooser, and `?fake=deaf` makes the bootloader ignore frames until Try again.
+Open `http://127.0.0.1:8000/u1.html` and keep the tab visible while a run is going. Connect picks "USB-HID Keyboard", observes, and probes READ MODE thirty times. Deep check restarts into update mode, picks "USB-HID IAP", observes (version page and SUM), probes again, and comes back to normal mode.
+
+The Deep check takes about 15 s in update mode. Chrome's click activation lasts 5 s, so the last pick, which confirms the board is back in normal mode, usually waits for a click. The Pick button then names the device it waits for, and the line next to it says what to choose. After the run, type in the typing field. That records that the TAB 60 types, which plan check 8 needs.
+
+From RESET to IAP until a normal-mode link opens, the board may be in update mode, where it cannot type. During that time Cancel reads "Stop and send the board home", and closing the tab asks first. When a run ends in that state, the page shows the recovery text with Try again, which repeats the update-mode checks and then sends the board home, and Restart into normal mode, which sends RESET to app and then asks you to confirm the keyboard. Connect is there too, for a board that already types again.
+
+Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json> --types` writes `fixtures/u1-macos.json` with plan U1's nine checks and the environment, and it exits 0 only when all nine pass. `--no-types` records that the board did not type afterwards. The verdict writes nothing and exits 2 for a transcript from a fake board or from a build that is not a clean commit.
+
+`http://127.0.0.1:8000/u1.html?fake` runs the same page over the fake board and the fake WebHID, with no hardware. Each other mode sends the run down one failure path:
+
+| URL | What the fake does | The way back |
+|---|---|---|
+| `?fake` | Answers every command | none needed |
+| `?fake=parked` | The update-mode chooser misses its row, so that pick waits for a click | Pick |
+| `?fake=deaf` | The bootloader ignores every frame | Try again or Restart into normal mode |
+| `?fake=cancelled` | Every chooser from the Deep check click on closes with no device | Try again or Restart into normal mode |
+| `?fake=refused` | FW INFO disagrees with BL info, so the update-mode attach refuses | Restart into normal mode |
+| `?fake=sum-refused` | SUM answers FF AA once, and the page sends the board home | Connect |
+| `?fake=drop` | The link drops on the fifth update-mode probe, and the board comes back in update mode | Try again |
+| `?fake=slow` | The fifth update-mode probe answers after 700 ms, and check 9 judges it | none needed |
+
+The drop mode counts frames from page load, so click Connect once before the Deep check. A fake run's download name ends in `-fake-<mode>`.
 
 ## Package entries
 

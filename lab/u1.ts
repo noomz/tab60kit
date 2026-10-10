@@ -1,39 +1,17 @@
-import { LinkTimeout, PickCancelled } from "../core/port";
-import type { AppSession, Refused } from "../core/protocol";
-import { FakeTab60 } from "../testing/fake-tab60";
-import { FakeHid, FakeLocks } from "../testing/fake-webhid";
+import { TAB60 } from "../core/device";
+import { type DeviceWant, PickCancelled } from "../core/port";
 import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
 import { type PortEvent, startWebHidLab } from "../web/webhid-port";
 import { evaluateU1 } from "./u1-checks";
-import { type DeepCheckEnd, type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Connect, u1DeepCheck, u1TryAgain } from "./u1-job";
+import { FAKE_MODES, type FakeMode, fakeHardware, isFakeMode } from "./u1-fake";
+import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } from "./u1-job";
+import { AWAY_RECOVERY, type Phase, type Run, type RunOutcome, awayFromHome, outcomeOfError, phaseAfterRun, pickHint, pickLabel } from "./u1-state";
 
-export const NO_ANSWER_RECOVERY = [
-	"No answer in update mode. The bootloader may be ignoring our frames: bytes 2..3 carry 0x0000, pok3rtool's value, and the vendor updater's value is unread.",
-	"Try again reuses the device the chooser already granted.",
-	"If it still answers nothing: unplug the cable, take the batteries out for 10 seconds, and put them back. A cold boot clears the SRAM magic that RESET to IAP set.",
-	"Or run the vendor updater with -force on MaruStation.",
-].join("\n");
-
-type Run = "connect" | "deep-check" | "try-again" | "restart";
-
-type Phase =
-	| { readonly kind: "idle" }
-	| { readonly kind: "running"; readonly what: Run }
-	| { readonly kind: "connected"; readonly app: AppSession }
-	| { readonly kind: "refused"; readonly refused: Refused }
-	| { readonly kind: "no-answer" }
-	| { readonly kind: "failed" };
-
-type FakeMode = "plain" | "parked" | "cancel" | "deaf";
-const FAKE_MODES: readonly string[] = ["plain", "parked", "cancel", "deaf"] satisfies readonly FakeMode[];
-const isFakeMode = (value: string): value is FakeMode => FAKE_MODES.includes(value);
-
-/** null for the real WebHID; "plain" for ?fake with no value; a string outside FakeMode stops the page. */
-function fakeModeOf(search: string): FakeMode | null | string {
+/** null for the real WebHID; "plain" for ?fake with no value; a string outside FAKE_MODES stops the page. */
+function fakeModeOf(search: string): string | null {
 	const value = new URLSearchParams(search).get("fake");
 	if (value === null) return null;
-	if (value === "") return "plain";
-	return value;
+	return value === "" ? "plain" : value;
 }
 const fakeMode = fakeModeOf(location.search);
 
@@ -48,6 +26,7 @@ const ui = {
 	connect: element("connect", HTMLButtonElement),
 	deepCheck: element("deepcheck", HTMLButtonElement),
 	pick: element("pick", HTMLButtonElement),
+	pickHint: element("pickhint", HTMLParagraphElement),
 	cancel: element("cancel", HTMLButtonElement),
 	restart: element("restart", HTMLButtonElement),
 	tryAgain: element("tryagain", HTMLButtonElement),
@@ -62,12 +41,11 @@ const ui = {
 const started = new Date();
 const now = () => performance.now();
 const describe = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
+const pid = (productId: number) => `0x${productId.toString(16)}`;
 
 function log(line: string): void {
 	ui.log.textContent += `${(now() / 1000).toFixed(3)}s ${line}\n`;
 }
-
-const pid = (productId: number) => `0x${productId.toString(16)}`;
 
 function describeEvent(event: PortEvent): string {
 	switch (event.kind) {
@@ -78,7 +56,7 @@ function describeEvent(event: PortEvent): string {
 		case "open-attempt":
 			return `open attempt ${event.attempt} on ${pid(event.productId)}: ${event.error ?? "ok"}`;
 		case "close-timeout":
-			return `close of ${pid(event.productId)} did not settle in time; counted as closed`;
+			return `close of ${pid(event.productId)} did not settle in time, counted as closed`;
 		default: {
 			const exhaustive: never = event;
 			return exhaustive;
@@ -86,18 +64,11 @@ function describeEvent(event: PortEvent): string {
 	}
 }
 
-function hardware(mode: FakeMode | null): { readonly hid: HID; readonly locks: LockManager; readonly board: FakeTab60 | null } {
-	if (mode === null) return { hid: navigator.hid, locks: navigator.locks, board: null };
-	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 } });
-	const hid = new FakeHid(board, { rowAppearsInOpenChooser: mode === "parked" ? [] : ["app", "iap"] });
-	if (mode === "cancel") hid.chooser = "cancel";
-	if (mode === "deaf") board.ignoreInIap = true;
-	return { hid, locks: new FakeLocks(), board };
-}
+const fakeLink = (mode: FakeMode) => (mode === "plain" ? "?fake" : `?fake=${mode}`);
 
 function start(): void {
 	if (fakeMode !== null && !isFakeMode(fakeMode)) {
-		ui.clearance.textContent = `Unknown ?fake value "${fakeMode}". Use ?fake, ?fake=parked, ?fake=cancel, or ?fake=deaf.`;
+		ui.clearance.textContent = `Unknown ?fake value "${fakeMode}". Use ${FAKE_MODES.map(fakeLink).join(", ")}.`;
 		return;
 	}
 	if (fakeMode === null && !("hid" in navigator)) {
@@ -113,10 +84,10 @@ function start(): void {
 	}
 	ui.clearance.textContent = `Lab clearance: ${U1_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : `Fake board (${fakeMode}).`}`;
 
-	const { hid, locks, board } = hardware(fakeMode);
+	const fake = fakeMode === null ? null : fakeHardware(fakeMode, { probes: U1_PROBES.probes });
 	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
-	const { port, chooser } = startWebHidLab(hid, locks, {
+	const { port, chooser } = startWebHidLab(fake?.hid ?? navigator.hid, fake?.locks ?? navigator.locks, {
 		wrap: (link) => recording(link, (entry) => entries.push(entry), now),
 		onEvent: (event) => {
 			entries.push({ t: now(), ...event });
@@ -136,24 +107,39 @@ function start(): void {
 		},
 		entries: [...entries],
 	});
+	const recordVisibility = () => entries.push({ t: now(), kind: "visibility", state: document.visibilityState === "hidden" ? "hidden" : "visible" });
+	recordVisibility();
+	document.addEventListener("visibilitychange", recordVisibility);
+	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing");
 
 	let phase: Phase = { kind: "idle" };
 	let controller: AbortController | null = null;
+	let parked: DeviceWant | null = null;
 
 	const render = () => {
-		ui.connect.disabled = phase.kind === "running";
+		const want = chooser.needsClick;
+		if (want !== null && want !== parked) log(`pick parked (${want.reason}): click "${pickLabel(want)}"`);
+		parked = want;
+		const away = phase.kind === "away";
+		const canConnect = phase.kind === "idle" || phase.kind === "connected" || phase.kind === "failed" || phase.kind === "refused" || (phase.kind === "away" && phase.holding === null);
+		ui.connect.disabled = !canConnect;
 		ui.deepCheck.disabled = phase.kind !== "connected";
-		ui.pick.hidden = chooser.needsClick === null;
+		ui.pick.hidden = want === null;
+		ui.pick.textContent = pickLabel(want);
+		const hint = pickHint(want);
+		ui.pickHint.hidden = hint === null;
+		ui.pickHint.textContent = hint ?? "";
 		ui.cancel.hidden = phase.kind !== "running";
-		ui.restart.hidden = !(phase.kind === "refused" && phase.refused.restartToApp !== null);
-		ui.tryAgain.hidden = phase.kind !== "no-answer";
-		ui.recovery.hidden = phase.kind !== "no-answer";
-		ui.recovery.textContent = NO_ANSWER_RECOVERY;
-		ui.download.disabled = entries.length === 0;
+		ui.cancel.textContent = awayFromHome(entries) ? "Stop and send the board home" : "Cancel";
+		ui.tryAgain.hidden = !away;
+		ui.restart.hidden = !away;
+		ui.recovery.hidden = !away;
+		ui.recovery.textContent = AWAY_RECOVERY;
+		ui.download.disabled = !ran();
 	};
 
 	const showVerdict = async () => {
-		if (entries.length === 0) return;
+		if (!ran()) return;
 		const verdict = await evaluateU1(transcript(), { expected: U1_EXPECTED, typing: ui.typing.value.length > 0 ? "types" : "not-observed" });
 		const item = (text: string) => {
 			const li = document.createElement("li");
@@ -164,91 +150,56 @@ function start(): void {
 		ui.findings.replaceChildren(...verdict.findings.map((finding) => item(`Finding: ${finding}`)));
 	};
 
-	const failure = (error: unknown): Phase => {
-		if (error instanceof LinkTimeout && lastOpened === U1_EXPECTED.iapProductId) return { kind: "no-answer" };
-		if (error instanceof PickCancelled || (error instanceof DOMException && error.name === "AbortError")) return { kind: "idle" };
-		return { kind: "failed" };
-	};
-
-	const run = (what: Run, body: (ctx: U1Context) => Promise<Phase>) => {
+	const run = (what: Run) => {
 		if (controller !== null) return;
-		controller = new AbortController();
-		const previous = phase;
+		const from = phase;
+		const own = new AbortController();
+		controller = own;
 		phase = { kind: "running", what };
+		ui.typing.value = "";
+		fake?.adjust(what);
 		render();
-		const ctx: U1Context = { port, clearance, signal: controller.signal, log, series: U1_PROBES };
+		const ctx: U1Context = { port, clearance, signal: own.signal, log, series: U1_PROBES };
 		const ticker = setInterval(render, 100);
 		void (async () => {
+			let outcome: RunOutcome;
 			try {
-				await port.exclusive(async () => {
-					if (what === "connect" && previous.kind === "connected") await previous.app.close();
-					if (what === "connect" && previous.kind === "refused") await previous.refused.close();
-					phase = await body(ctx);
-				});
+				outcome = await port.exclusive(() => u1Run(what, from, ctx));
 			} catch (error) {
-				log(`${what} failed: ${describe(error)}`);
-				phase = failure(error);
-			} finally {
-				clearInterval(ticker);
-				// A run that failed inside enterIap may have left its update-mode open pending; the abort rejects it.
-				controller?.abort(new DOMException("the run ended", "AbortError"));
-				controller = null;
-				render();
-				await showVerdict();
+				outcome = outcomeOfError(error);
+				log(outcome.kind === "cancelled" ? `${what} cancelled${error instanceof PickCancelled ? " (the chooser closed with no device)" : ""}` : `${what} failed: ${describe(error)}`);
 			}
+			clearInterval(ticker);
+			// A pick this run left parked must not answer the next run's click.
+			own.abort(new DOMException("the run ended", "AbortError"));
+			controller = null;
+			phase = phaseAfterRun(entries, outcome);
+			render();
+			await showVerdict();
 		})();
 	};
 
-	const finish = (end: DeepCheckEnd): Phase => {
-		if (end.kind === "refused") {
-			log(`update mode refused: ${end.refused.refusal.code}`);
-			return { kind: "refused", refused: end.refused };
-		}
-		if (end.back === null) return { kind: "idle" };
-		if ("refusal" in end.back) {
-			log(`normal mode refused after the round trip: ${end.back.refusal.code}`);
-			return { kind: "refused", refused: end.back };
-		}
-		return { kind: "connected", app: end.back };
-	};
-
-	ui.connect.addEventListener("click", () =>
-		run("connect", async (ctx) => {
-			const end = await u1Connect(ctx);
-			if (end.kind === "refused") {
-				log(`normal mode refused: ${end.refused.refusal.code}`);
-				return { kind: "refused", refused: end.refused };
-			}
-			return { kind: "connected", app: end.session };
-		}),
-	);
-	ui.deepCheck.addEventListener("click", () => {
-		if (phase.kind !== "connected") return;
-		const { app } = phase;
-		run("deep-check", async (ctx) => finish(await u1DeepCheck(app, ctx)));
-	});
-	ui.tryAgain.addEventListener("click", () => {
-		if (board !== null) board.ignoreInIap = false;
-		run("try-again", async (ctx) => finish(await u1TryAgain(ctx)));
-	});
-	ui.restart.addEventListener("click", () => {
-		if (phase.kind !== "refused" || phase.refused.restartToApp === null) return;
-		const { refused } = phase;
-		run("restart", async () => {
-			await refused.restartToApp();
-			log("RESET to app sent; the board should enumerate as 0x0304 and type");
-			return { kind: "idle" };
-		});
-	});
+	ui.connect.addEventListener("click", () => run("connect"));
+	ui.deepCheck.addEventListener("click", () => run("deep-check"));
+	ui.tryAgain.addEventListener("click", () => run("try-again"));
+	ui.restart.addEventListener("click", () => run("restart"));
 	ui.pick.addEventListener("click", () => chooser.pick());
 	ui.cancel.addEventListener("click", () => controller?.abort(new DOMException("cancelled from the page", "AbortError")));
-	ui.typing.addEventListener("input", () => void showVerdict());
+	ui.typing.addEventListener("input", () => {
+		if (lastOpened === TAB60.productId.app) entries.push({ t: now(), kind: "typing", chars: ui.typing.value.length });
+		void showVerdict();
+	});
+	addEventListener("beforeunload", (event) => {
+		if (!awayFromHome(entries)) return;
+		event.preventDefault();
+		event.returnValue = true;
+	});
 	ui.download.addEventListener("click", () => {
 		const blob = new Blob([JSON.stringify(transcript(), null, 2)], { type: "application/json" });
 		const url = URL.createObjectURL(blob);
 		const anchor = document.createElement("a");
 		anchor.href = url;
-		anchor.download = `tab60kit-u1-${started.toISOString().replace(/[:.]/g, "-")}.json`;
+		anchor.download = `tab60kit-u1-${started.toISOString().replace(/[:.]/g, "-")}${fakeMode === null ? "" : `-fake-${fakeMode}`}.json`;
 		anchor.click();
 		URL.revokeObjectURL(url);
 	});
