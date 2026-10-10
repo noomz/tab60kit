@@ -246,8 +246,8 @@ function lastIndex<T>(items: readonly T[], matches: (item: T) => boolean): numbe
 }
 
 /**
- * F7: the 0x0304 open must follow the last RESET to app through the confirm-normal-mode pick, with no Connect pick
- * between them, so a board brought back by a cold boot and Connect cannot pass. Typing must follow that open.
+ * The 0x0304 open must follow the last RESET to app through the confirm-normal-mode pick, with no Connect pick between
+ * them, so a board brought back by a cold boot and Connect cannot pass (F7). Typing must follow that open.
  */
 function checkBack(entries: readonly TranscriptEntry[], expected: U1Expected, typing: TypingObservation): CheckResult {
 	const title = `After RESET to app the board enumerates as ${hex(expected.appProductId, 4)} through the confirm pick and types`;

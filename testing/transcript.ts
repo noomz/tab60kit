@@ -56,15 +56,15 @@ export type TranscriptEntry =
 			readonly payloadBytes: number;
 			readonly payloadSha256: Sha256;
 	  }
-	/** `discarded`: a report that discardPending dropped before a send, so the core never read it. */
+	/** A `discarded` report is one that discardPending dropped before a send, so the core never read it. */
 	| { readonly t: number; readonly kind: "in" | "discarded"; readonly hex: string }
 	/** Follows the `out` entry of a frame whose send rejected. The board may still have received it. */
 	| { readonly t: number; readonly kind: "send-failed"; readonly hex: string; readonly error: string }
 	/** The shell counted a device.close() that did not settle in time as closed. */
 	| { readonly t: number; readonly kind: "close-timeout"; readonly productId: number }
-	/** The page's visibility, at its start and on each change: a hidden tab slows timers, which check 9 measures. */
+	/** The page's visibility, at its start and on each change. A hidden tab slows timers, which check 9 measures. */
 	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
-	/** The typing field changed while a normal-mode link was the last one opened: plan check 8's evidence. */
+	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
 	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
 	| { readonly t: number; readonly kind: "lost" | "closed" };
 

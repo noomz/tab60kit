@@ -782,8 +782,8 @@ export type Refused = AppRefused | IapRefused;
 /**
  * An update-mode attach that threw. A normal-mode attach closes its link, but this one keeps it open, because the
  * board is in update mode, where the keyboard cannot type, and this link is the way to send it home. The core never
- * restarts on its own: the caller decides when a reset is safe (U7's flash job reads the board first). Every caller
- * must call restartToApp or close. `cause` is the error the attach threw.
+ * restarts on its own, because the caller decides when a reset is safe (U7's flash job reads the board first). Every
+ * caller must call restartToApp or close. `cause` is the error the attach threw.
  */
 export class IapAttachFailed extends Error {
 	override readonly name = "IapAttachFailed";

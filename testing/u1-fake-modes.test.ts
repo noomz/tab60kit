@@ -21,7 +21,7 @@ interface Step {
 	readonly openHandles: number;
 }
 
-/** The page's run loop without the DOM: the mode's flips, then u1Run inside the lock, then the phase the page derives. */
+/** The page's run loop without the DOM. The mode's flips come first, then u1Run inside the lock, then the phase the page derives. */
 async function drive(mode: FakeMode, runs: readonly Run[]) {
 	const fake = fakeHardware(mode, { probes: PROBES, hid: { isActive: () => true } });
 	const entries: TranscriptEntry[] = [];
@@ -58,7 +58,7 @@ async function drive(mode: FakeMode, runs: readonly Run[]) {
 	return { steps, entries, fake, finalPhase: phase.kind, openHandlesAfterClose: fake.hid.openHandles };
 }
 
-/** Per mode: the runs a user makes, and what each run sends, ends in, and leaves open. A connected or refused phase holds one link. */
+/** Per mode, the runs a user makes, and what each run sends, ends in, and leaves open. A connected or refused phase holds one link. */
 const SCRIPTS: Readonly<Record<FakeMode, readonly Step[]>> = {
 	plain: [
 		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },

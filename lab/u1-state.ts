@@ -28,7 +28,7 @@ export type RunOutcome =
 
 const RESET_TO_IAP = "1100";
 
-/** F2: from a RESET to IAP handed to the link, acknowledged or not, until a normal-mode link opens. */
+/** True from a RESET to IAP handed to the link, acknowledged or not, until a normal-mode link opens (F2). */
 export function awayFromHome(entries: readonly TranscriptEntry[]): boolean {
 	let away = false;
 	for (const entry of entries) {
@@ -81,7 +81,7 @@ const HINT: Readonly<Record<WantReason, string>> = {
 	"after-link-loss": `Click Pick and choose the TAB 60 keyboard or ${TAB60.productName.iap}.`,
 };
 
-/** F12: the line next to the Pick button. A long run lets the click's activation lapse, so the confirm pick parks. */
+/** The line next to the Pick button (F12). A long run lets the click's activation lapse, so the confirm pick parks. */
 export function pickHint(want: DeviceWant | null): string | null {
 	return want === null ? null : HINT[want.reason];
 }

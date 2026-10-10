@@ -15,8 +15,8 @@ export interface U1Fixture extends U1Verdict {
 
 const CLEAN_COMMIT = /^[0-9a-f]{7,40}$/;
 
-/** F9: why a transcript cannot be evidence for the fixture, or null. Only the real board, from a clean build, counts. */
-export function notEvidence(environment: Environment): string | null {
+/** Why a transcript cannot be evidence for the fixture, or null (F9). Only the real board, from a clean build, counts. */
+function notEvidence(environment: Environment): string | null {
 	if (environment.fake !== "no") return `environment.fake is "${environment.fake}", and a fake board is not evidence`;
 	const { tool } = environment;
 	if (tool === undefined) return "environment.tool is missing, so nothing names the build that recorded it";

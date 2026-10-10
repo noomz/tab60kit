@@ -183,7 +183,7 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
 );
 
-// R1 "Packet framing": a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
+// From R1 "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
 const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub" } as const;
 check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
 	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),

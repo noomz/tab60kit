@@ -126,7 +126,7 @@ const jobContext = (ctx: U1Context): JobContext => ({
 	progress: (activity) => ctx.log(`${activity.kind}${"into" in activity ? ` into ${activity.into === "app" ? "normal" : "update"} mode` : ""}`),
 });
 
-/** Decision 9: this unit is read-only and the board types, so it leaves update mode whatever the boot target says. */
+/** U1 is read-only and the board types, so it leaves update mode whatever the boot target says (decision 9). */
 async function goHome(iap: IapSession | IapRefused, ctx: U1Context): Promise<Back> {
 	const back = await leaveUpdateMode(iap, jobContext(ctx));
 	ctx.log(back === null ? "confirm pick skipped" : "refusal" in back ? `normal mode refused: ${back.refusal.code}` : "back in normal mode");
@@ -167,7 +167,7 @@ export async function u1TryAgain(ctx: U1Context): Promise<DeepCheckEnd> {
 	return u1UpdateModePhase(iap, ctx);
 }
 
-/** Restart into normal mode: connect in update mode, then RESET to app through the session or the refusal, then the confirm pick. */
+/** Connects in update mode, sends RESET to app through the session or the refusal, then runs the confirm pick. */
 export async function u1Restart(ctx: U1Context): Promise<Back> {
 	return goHome(await withHome(ctx, () => connect(ctx, { modes: ["iap"], reason: "enter-update-mode" })), ctx);
 }
@@ -185,7 +185,6 @@ function deepOutcome(end: DeepCheckEnd, ctx: U1Context): RunOutcome {
 	return { kind: "refused", refused: end.refused };
 }
 
-/** Closes whatever link the phase holds. */
 async function release(from: Phase): Promise<void> {
 	if (from.kind === "connected") await from.app.close();
 	if (from.kind === "refused") await from.refused.close();
