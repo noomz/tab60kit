@@ -146,9 +146,45 @@ export const PRECONDITIONS = [
 	{ key: "secondKeyboardAtHand", label: "A second keyboard is at hand" },
 ] as const;
 
-export const PRECONDITION_MET = "yes";
+export type PreconditionKey = (typeof PRECONDITIONS)[number]["key"];
 
-/** The labels of the preconditions that `environment` does not record as met. */
-export function unmetPreconditions(environment: Readonly<Record<string, string>>): string[] {
-	return PRECONDITIONS.filter(({ key }) => environment[key] !== PRECONDITION_MET).map(({ label }) => label);
+const PRECONDITION_MET = "yes";
+
+/** The boxes lock when the first frame goes out, so what they say holds for the whole run. */
+export const preconditionsLocked = (entries: readonly TranscriptEntry[]): boolean => entries.some((entry) => entry.kind === "out");
+
+/** The entry a box change records, or null once the boxes are locked and the change does nothing. */
+export function preconditionChange(entries: readonly TranscriptEntry[], key: PreconditionKey, met: boolean, t: number): TranscriptEntry | null {
+	return preconditionsLocked(entries) ? null : { t, kind: "precondition", key, met };
+}
+
+/** The keys whose box is ticked after `entries`. Every box starts unticked. */
+export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<string> {
+	const on = new Set<string>();
+	for (const entry of entries) {
+		if (entry.kind !== "precondition") continue;
+		if (entry.met) on.add(entry.key);
+		else on.delete(entry.key);
+	}
+	return on;
+}
+
+/** The environment keys the page records, each "yes" or "no" as the box entries leave it. */
+export function preconditionEnvironment(entries: readonly TranscriptEntry[]): Record<string, string> {
+	const on = tickedBoxes(entries);
+	return Object.fromEntries(PRECONDITIONS.map(({ key }) => [key, on.has(key) ? PRECONDITION_MET : "no"]));
+}
+
+/**
+ * The labels of the preconditions that did not hold for the whole run. The environment must record each as met. A box
+ * entry before the first frame must not leave it unticked, and none may follow that frame. A transcript from a page
+ * that did not record its boxes has no box entries, so its environment alone decides.
+ */
+export function unmetPreconditions({ environment, entries }: { readonly environment: Readonly<Record<string, string>>; readonly entries: readonly TranscriptEntry[] }): string[] {
+	const first = entries.findIndex((entry) => entry.kind === "out");
+	const cut = first === -1 ? entries.length : first;
+	const atFirstFrame = new Map<string, boolean>();
+	for (const entry of entries.slice(0, cut)) if (entry.kind === "precondition") atFirstFrame.set(entry.key, entry.met);
+	const changed = new Set(entries.slice(cut).flatMap((entry) => (entry.kind === "precondition" ? [entry.key] : [])));
+	return PRECONDITIONS.filter(({ key }) => environment[key] !== PRECONDITION_MET || atFirstFrame.get(key) === false || changed.has(key)).map(({ label }) => label);
 }

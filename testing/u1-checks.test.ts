@@ -285,14 +285,22 @@ test("the CLI exits 2 with one line naming the file, and writes nothing, for a t
 	}
 });
 
-test("the CLI refuses a real-looking transcript that does not record every precondition as met, with exit 2 and no file", async () => {
+test("the CLI refuses a real-looking transcript whose preconditions did not hold for the whole run, with exit 2 and no file", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "u1-verdict-"));
 	const errors = spyOn(console, "error").mockImplementation(() => undefined);
+	const log = spyOn(console, "log").mockImplementation(() => undefined);
+	const box = (key: string, met: boolean): TranscriptEntry => ({ t: 0, kind: "precondition", key, met });
+	const ticked = [box("cableIn", true), box("karabinerLedOff", true), box("secondKeyboardAtHand", true)];
+	const first = baseline.entries.findIndex((entry) => entry.kind === "out");
+	const boxes = (before: readonly TranscriptEntry[], during: readonly TranscriptEntry[] = []): Transcript =>
+		real({ ...baseline, entries: [...before, ...baseline.entries.slice(0, first + 1), ...during, ...baseline.entries.slice(first + 1)] });
 	try {
 		const { cableIn: _cableIn, ...noCable } = real(baseline).environment;
 		const cases: readonly [string, Transcript, string][] = [
 			["no cableIn key", { ...baseline, environment: noCable }, "The cable is in"],
 			["secondKeyboardAtHand no", real(baseline, { secondKeyboardAtHand: "no" }), "A second keyboard is at hand"],
+			["a box unticked when the first frame went out", boxes([...ticked, box("cableIn", false)]), "The cable is in"],
+			["a box changed after the first frame", boxes(ticked, [box("karabinerLedOff", false), box("karabinerLedOff", true)]), "Karabiner's LED manipulation is off"],
 		];
 		for (const [why, transcript, unmet] of cases) {
 			const file = join(dir, `${why.replaceAll(" ", "-")}.json`);
@@ -300,9 +308,13 @@ test("the CLI refuses a real-looking transcript that does not record every preco
 			const out = join(dir, `${why.replaceAll(" ", "-")}-fixture.json`);
 			errors.mockClear();
 			expect({ why, code: await verdictMain([file, "--types", "--out", out]), written: existsSync(out) }).toEqual({ why, code: 2, written: false });
-			expect(errors.mock.calls.map((args) => args.join(" "))).toEqual([`the transcript does not record these preconditions as met: ${unmet}. Wrote nothing.`]);
+			expect(errors.mock.calls.map((args) => args.join(" "))).toEqual([`the transcript does not record these preconditions as met for the whole run: ${unmet}. Wrote nothing.`]);
 		}
+		const held = join(dir, "held.json");
+		writeFileSync(held, JSON.stringify(boxes(ticked)));
+		expect(await verdictMain([held, "--types", "--out", join(dir, "held-fixture.json")])).toBe(1);
 	} finally {
+		log.mockRestore();
 		errors.mockRestore();
 		rmSync(dir, { recursive: true, force: true });
 	}

@@ -9,7 +9,6 @@ import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } f
 import {
 	AWAY_RECOVERY,
 	PRECONDITIONS,
-	PRECONDITION_MET,
 	type Phase,
 	type Run,
 	type RunOutcome,
@@ -20,7 +19,11 @@ import {
 	phaseAfterRun,
 	pickHint,
 	pickLabel,
+	preconditionChange,
+	preconditionEnvironment,
+	preconditionsLocked,
 	showsRecovery,
+	tickedBoxes,
 } from "./u1-state";
 
 function fakeModeOf(search: string): string | null {
@@ -105,10 +108,16 @@ async function start(): Promise<void> {
 	const hid = fake?.hid ?? navigator.hid;
 	const load = await atLoad(hid, now);
 
+	const entries: TranscriptEntry[] = [];
 	const preconditions = PRECONDITIONS.map(({ key, label }) => {
 		const box = document.createElement("input");
 		box.type = "checkbox";
-		box.addEventListener("change", () => render());
+		box.addEventListener("change", () => {
+			const change = preconditionChange(entries, key, box.checked, now());
+			// A locked box records nothing, and render sets it back to what its entries say.
+			if (change === null) render();
+			else record(change);
+		});
 		const row = document.createElement("label");
 		row.append(box, ` ${label}`);
 		const line = document.createElement("div");
@@ -116,9 +125,7 @@ async function start(): Promise<void> {
 		ui.preconditions.append(line);
 		return { key, box };
 	});
-	const preconditionsMet = () => preconditions.every(({ box }) => box.checked);
 
-	const entries: TranscriptEntry[] = [];
 	let lastOpened: number | null = null;
 	let phase: Phase = load.phase;
 	let controller: AbortController | null = null;
@@ -140,19 +147,25 @@ async function start(): Promise<void> {
 			platform: navigator.platform,
 			fake: fakeMode ?? "no",
 			page: location.href,
-			...Object.fromEntries(preconditions.map(({ key, box }) => [key, box.checked ? PRECONDITION_MET : "no"])),
+			...preconditionEnvironment(entries),
 		},
 		entries: [...entries],
 	});
-	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing" && entry.kind !== "granted");
+	const ran = () => entries.some((entry) => entry.kind !== "visibility" && entry.kind !== "typing" && entry.kind !== "granted" && entry.kind !== "precondition");
 
 	const render = () => {
 		const want = chooser.needsClick;
 		if (want !== null && want !== parked) log(`pick parked (${want.reason}): click "${pickLabel(want)}"`);
 		parked = want;
 		const away = phase.kind === "away";
+		const on = tickedBoxes(entries);
+		const locked = preconditionsLocked(entries);
+		for (const { key, box } of preconditions) {
+			box.checked = on.has(key);
+			box.disabled = locked;
+		}
 		const canConnect = phase.kind === "idle" || phase.kind === "connected" || phase.kind === "failed" || phase.kind === "refused" || (phase.kind === "away" && phase.holding === null);
-		ui.connect.disabled = !canConnect || !preconditionsMet();
+		ui.connect.disabled = !canConnect || !PRECONDITIONS.every(({ key }) => on.has(key));
 		ui.deepCheck.disabled = phase.kind !== "connected";
 		ui.pick.hidden = want === null;
 		ui.pick.textContent = pickLabel(want);

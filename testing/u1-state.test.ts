@@ -1,8 +1,21 @@
 import { expect, test } from "bun:test";
 import type { DeviceWant, Link } from "../core/port";
 import { u1Wrap } from "../lab/u1-frames";
-import { type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
-import { type Phase, atLoad, awayFromHome, cancelLabel, showsRecovery, updateModeLinkOpen } from "../lab/u1-state";
+import { type U1Context, u1Clearance, u1Connect, u1DeepCheck, u1Run } from "../lab/u1-job";
+import {
+	PRECONDITIONS,
+	type Phase,
+	type PreconditionKey,
+	atLoad,
+	awayFromHome,
+	cancelLabel,
+	preconditionChange,
+	preconditionEnvironment,
+	preconditionsLocked,
+	showsRecovery,
+	unmetPreconditions,
+	updateModeLinkOpen,
+} from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
 import { TARGET, recordFakeRun } from "./fake-run";
 import { type FakeOptions, FakeTab60 } from "./fake-tab60";
@@ -126,4 +139,28 @@ test("the recovery text shows for an away page, and for a run only while a pick 
 		showsRecovery(running, null, [resetToIap]),
 		showsRecovery(running, want, [resetToIap, home]),
 	]).toEqual([true, true, false, false]);
+});
+
+test("the precondition boxes lock when the first frame goes out: tick all three, Connect, and an untick changes nothing", async () => {
+	const entries: TranscriptEntry[] = [];
+	const tick = (key: PreconditionKey, met: boolean) => {
+		const change = preconditionChange(entries, key, met, entries.length);
+		if (change !== null) entries.push(change);
+		return change;
+	};
+	for (const { key } of PRECONDITIONS) tick(key, true);
+	expect(tick("cableIn", false)).toMatchObject({ kind: "precondition", key: "cableIn", met: false });
+	tick("cableIn", true);
+	const hid = new FakeHid(new FakeTab60({ starting: "official-image", target: TARGET }), { rowAppearsInOpenChooser: ["app"], isActive: () => true });
+	const { port } = startWebHidLab(hid, new FakeLocks(), { wrap: u1Wrap((entry) => entries.push(entry)), onEvent: (event) => entries.push({ t: 0, ...event }) });
+	const ctx: U1Context = { port, clearance: u1Clearance(), signal: new AbortController().signal, log: () => undefined, series: { probes: 2, everyMs: 1 } };
+	const connected = await u1Run("connect", { kind: "idle" }, ctx);
+	if (connected.kind !== "connected") throw new Error("normal mode refused");
+	expect(preconditionsLocked(entries)).toBe(true);
+	expect(tick("karabinerLedOff", false)).toBeNull();
+	await connected.app.close();
+	expect(entries.filter((entry) => entry.kind === "precondition")).toHaveLength(5);
+	const environment = preconditionEnvironment(entries);
+	expect(environment).toEqual({ cableIn: "yes", karabinerLedOff: "yes", secondKeyboardAtHand: "yes" });
+	expect(unmetPreconditions({ environment, entries })).toEqual([]);
 });

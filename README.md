@@ -39,7 +39,7 @@ python3 -m http.server --bind 127.0.0.1 --directory dist-lab 8000
 
 Build from a clean tree. The page prints the commit it was built from, and the verdict refuses a transcript from a build marked `-dirty`.
 
-Open `http://127.0.0.1:8000/u1.html`. Before you click Connect, tick the three boxes at the top of the page: the cable is in, Karabiner's LED manipulation is off, and a second keyboard is at hand. Connect stays disabled until all three are ticked, in every mode, `?fake` included. The transcript records each box in its `environment` as `yes` or `no`.
+Open `http://127.0.0.1:8000/u1.html`. Before you click Connect, tick the three boxes at the top of the page: the cable is in, Karabiner's LED manipulation is off, and a second keyboard is at hand. Connect stays disabled until all three are ticked, in every mode, `?fake` included. Tick them before any click that sends a frame, Try again and Restart included. The boxes lock when the first frame goes out, so what they say holds for the whole run. A page that sent a frame before all three were ticked keeps Connect disabled until you reload it. The transcript records each box change as a `precondition` entry, and each box in its `environment` as `yes` or `no`.
 
 Keep the tab visible while a run is going. Connect picks "USB-HID Keyboard", observes, and probes READ MODE thirty times. Deep check restarts into update mode, picks "USB-HID IAP", observes (version page and SUM), probes again, and comes back to normal mode.
 
@@ -51,7 +51,7 @@ When a run ends while the board may be in update mode, the page enters the away 
 
 A page that loads while the browser still grants USB-HID IAP starts in the away state, because an earlier page left the board in update mode. It sends no frame until you click.
 
-Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json> --types` writes `fixtures/u1-macos.json` with plan U1's nine checks, the frames gate, and the environment. It exits 0 only when every frame sent is one of the nine golden frames and all nine checks pass. `--no-types` records that the board did not type afterwards. The verdict writes nothing and exits 2 for a file it cannot read. It does the same for a transcript from a fake board, from a build that is not a clean commit, or with a precondition box that was not ticked.
+Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json> --types` writes `fixtures/u1-macos.json` with plan U1's nine checks, the frames gate, and the environment. It exits 0 only when every frame sent is one of the nine golden frames and all nine checks pass. `--no-types` records that the board did not type afterwards. The verdict writes nothing and exits 2 for a file it cannot read. It does the same for a transcript from a fake board, from a build that is not a clean commit, or with a precondition box that was not ticked when the first frame went out or changed after it.
 
 `http://127.0.0.1:8000/u1.html?fake` runs the same page over the fake board and the fake WebHID, with no hardware. Every `?fake` page shows check 6 as FAIL, because the fake's version page is synthetic and does not hash to the catalog's version block. `?fake=slow` also fails check 9, by design. Each mode other than `?fake` sends the page down one failure path:
 

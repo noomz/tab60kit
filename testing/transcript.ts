@@ -72,6 +72,8 @@ export type TranscriptEntry =
 	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
 	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
 	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
+	/** A precondition box on the lab page changed (lab/u1-state.ts PRECONDITIONS). The boxes lock at the first `out` entry. */
+	| { readonly t: number; readonly kind: "precondition"; readonly key: string; readonly met: boolean }
 	/**
 	 * `mode` names the link the entry belongs to, because two links of one mode are never open at once. The keyboard
 	 * link's close can still settle after the bootloader link opens. Older transcripts leave `mode` out.
@@ -178,6 +180,11 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 		}
 		case "typing":
 			return { t, kind, chars: number(value, "chars", where) };
+		case "precondition": {
+			const { met } = value;
+			if (typeof met !== "boolean") fail(where, "met is not a boolean");
+			return { t, kind, key: string(value, "key", where), met };
+		}
 		case "lost":
 		case "closed": {
 			if (value.mode === undefined) return { t, kind };

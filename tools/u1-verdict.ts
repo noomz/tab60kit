@@ -16,13 +16,14 @@ export interface U1Fixture extends U1Verdict {
 
 const CLEAN_COMMIT = /^[0-9a-f]{7,40}$/;
 
-function notEvidence(environment: Environment): string | null {
+function notEvidence(transcript: Transcript): string | null {
+	const { environment } = transcript;
 	if (environment.fake !== "no") return `environment.fake is "${environment.fake}", and a fake board is not evidence`;
 	const { tool } = environment;
 	if (tool === undefined) return "environment.tool is missing, so nothing names the build that recorded it";
 	if (!CLEAN_COMMIT.test(tool)) return `environment.tool is "${tool}", and only a build from a clean commit is evidence`;
-	const unmet = unmetPreconditions(environment);
-	if (unmet.length > 0) return `the transcript does not record these preconditions as met: ${unmet.join("; ")}`;
+	const unmet = unmetPreconditions(transcript);
+	if (unmet.length > 0) return `the transcript does not record these preconditions as met for the whole run: ${unmet.join("; ")}`;
 	return null;
 }
 
@@ -64,7 +65,7 @@ export async function verdictMain(argv: readonly string[]): Promise<number> {
 		console.error(`${args.transcriptFile}: ${error instanceof Error ? error.message : String(error)}`);
 		return 2;
 	}
-	const refusal = notEvidence(transcript.environment);
+	const refusal = notEvidence(transcript);
 	if (refusal !== null) {
 		console.error(`${refusal}. Wrote nothing.`);
 		return 2;
