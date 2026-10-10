@@ -242,7 +242,10 @@ class WebHidPort implements DevicePort {
 		);
 	}
 
-	/** The page cannot close a chooser, so an abort that lands while one is open takes effect when it closes. */
+	/**
+	 * The page cannot close a chooser, so an abort that lands while one is open takes effect when it closes. Then a
+	 * device picked after the abort reaches openDevice, which checks the signal before it opens anything.
+	 */
 	async chosen(want: DeviceWant, signal: AbortSignal): Promise<HIDDevice> {
 		signal.throwIfAborted();
 		const startedAt = this.clock.now();
@@ -256,9 +259,7 @@ class WebHidPort implements DevicePort {
 				throw error;
 			},
 		);
-		if (device === undefined) return this.park(want, signal);
-		signal.throwIfAborted();
-		return device;
+		return device ?? this.park(want, signal);
 	}
 
 	park(want: DeviceWant, signal: AbortSignal): Promise<HIDDevice> {

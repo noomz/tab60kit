@@ -161,7 +161,14 @@ test("a chooser that closes empty after the abort rejects at once instead of par
 		return true;
 	};
 	const { port, chooser } = lab({ rowAppearsInOpenChooser: [], isActive: cancelWhileOpen });
-	await expect(port.open(IAP, controller.signal)).rejects.toThrow("cancelled from the page");
+	const outcome = await Promise.race([
+		port.open(IAP, controller.signal).then(
+			() => "opened",
+			(error: unknown) => error,
+		),
+		new Promise((resolve) => setTimeout(() => resolve("still pending"), 200)),
+	]);
+	expect(outcome).toMatchObject({ message: "cancelled from the page" });
 	expect(chooser.needsClick).toBeNull();
 });
 
