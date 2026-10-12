@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DeviceWant, Link } from "../core/port";
 import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Connect, u1DeepCheck, u1Run } from "../lab/u1-job";
@@ -9,6 +11,7 @@ import {
 	atLoad,
 	awayFromHome,
 	cancelLabel,
+	deepCheckEnabled,
 	preconditionChange,
 	preconditionEnvironment,
 	preconditionsLocked,
@@ -20,7 +23,7 @@ import { startWebHidLab } from "../web/webhid-port";
 import { TARGET, recordFakeRun } from "./fake-run";
 import { type FakeOptions, FakeTab60 } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
-import type { TranscriptEntry } from "./transcript";
+import { type TranscriptEntry, parseTranscript } from "./transcript";
 
 const at = () => 7;
 
@@ -162,4 +165,32 @@ test("the precondition boxes lock when the first frame goes out: tick all three,
 	const environment = preconditionEnvironment(entries);
 	expect(environment).toEqual({ cableIn: "yes", karabinerLedOff: "yes", secondKeyboardAtHand: "yes" });
 	expect(unmetPreconditions({ environment, entries })).toEqual([]);
+});
+
+test("Deep check is enabled only on a connected page whose three boxes were ticked when they locked, and only until an 11 00 goes out", () => {
+	const box = (key: PreconditionKey, met: boolean): TranscriptEntry => ({ t: 0, kind: "precondition", key, met });
+	const out = (prefix: string): TranscriptEntry => ({ t: 1, kind: "out", hex: prefix.padEnd(128, "0") });
+	const three = PRECONDITIONS.map(({ key }) => box(key, true));
+	const frames: Readonly<Record<string, readonly TranscriptEntry[]>> = { "no frame": [], "READ MODE": [out("1202")], "READ MODE then 11 00": [out("1202"), out("1100")] };
+	const boxes: Readonly<Record<string, (sent: readonly TranscriptEntry[]) => readonly TranscriptEntry[]>> = {
+		"no box ticked": (sent) => sent,
+		"two boxes ticked": (sent) => [box("cableIn", true), box("karabinerLedOff", true), ...sent],
+		"three boxes ticked, one unticked": (sent) => [...three, box("cableIn", false), ...sent],
+		"three boxes ticked": (sent) => [...three, ...sent],
+		"three boxes ticked after the first frame": (sent) => [...sent, ...three],
+	};
+	const phases: readonly Phase["kind"][] = ["idle", "running", "connected", "refused", "away", "failed"];
+	const enabled: string[] = [];
+	for (const phase of phases) {
+		for (const [boxLabel, withBoxes] of Object.entries(boxes)) {
+			for (const [frameLabel, sent] of Object.entries(frames)) if (deepCheckEnabled(phase, withBoxes(sent))) enabled.push(`${phase}, ${boxLabel}, ${frameLabel}`);
+		}
+	}
+	expect(enabled).toEqual(["connected, three boxes ticked, READ MODE"]);
+});
+
+test("on run 3's transcript Deep check is enabled once Connect is done and disabled from the 11 00 on, so a second click cannot send another", () => {
+	const { entries } = parseTranscript(JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "tab60kit-u1-2026-10-12T09-07-15-464Z.json"), "utf8")));
+	const resetToIap = entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1100"));
+	expect([deepCheckEnabled("connected", entries.slice(0, resetToIap)), deepCheckEnabled("connected", entries)]).toEqual([true, false]);
 });

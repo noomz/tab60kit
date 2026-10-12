@@ -160,6 +160,15 @@ export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<st
 	return on;
 }
 
+/** A page load sends RESET to IAP at most once, and only with the preconditions locked in. Try again and Restart skip this rule, because they bring the board home. */
+export function deepCheckEnabled(phase: Phase["kind"], entries: readonly TranscriptEntry[]): boolean {
+	const lock = entries.findIndex((entry) => entry.kind === "out");
+	if (phase !== "connected" || lock === -1) return false;
+	const tickedAtLock = tickedBoxes(entries.slice(0, lock));
+	const resetToIapSent = entries.some((entry) => entry.kind === "out" && entry.hex.startsWith(RESET_TO_IAP));
+	return PRECONDITIONS.every(({ key }) => tickedAtLock.has(key)) && !resetToIapSent;
+}
+
 export function preconditionEnvironment(entries: readonly TranscriptEntry[]): Record<string, string> {
 	const on = tickedBoxes(entries);
 	return Object.fromEntries(PRECONDITIONS.map(({ key }) => [key, on.has(key) ? PRECONDITION_MET : "no"]));

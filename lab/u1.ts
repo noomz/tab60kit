@@ -15,6 +15,7 @@ import {
 	atLoad,
 	awayFromHome,
 	cancelLabel,
+	deepCheckEnabled,
 	outcomeOfError,
 	phaseAfterRun,
 	pickHint,
@@ -165,7 +166,7 @@ async function start(): Promise<void> {
 		}
 		const canConnect = phase.kind === "idle" || phase.kind === "connected" || phase.kind === "failed" || phase.kind === "refused" || (phase.kind === "away" && phase.holding === null);
 		ui.connect.disabled = !canConnect || !PRECONDITIONS.every(({ key }) => on.has(key));
-		ui.deepCheck.disabled = phase.kind !== "connected";
+		ui.deepCheck.disabled = !deepCheckEnabled(phase.kind, entries);
 		ui.pick.hidden = want === null;
 		ui.pick.textContent = pickLabel(want);
 		const hint = pickHint(want);

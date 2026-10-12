@@ -3,7 +3,7 @@ import { connect } from "../core/protocol";
 import { FAKE_MODES, type FakeMode, fakeHardware } from "../lab/u1-fake";
 import { u1Wrap } from "../lab/u1-frames";
 import { type U1Context, u1Clearance, u1Run } from "../lab/u1-job";
-import { type Phase, type Run, type RunOutcome, atLoad, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
+import { PRECONDITIONS, type Phase, type Run, type RunOutcome, atLoad, deepCheckEnabled, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
 import { startWebHidLab } from "../web/webhid-port";
 import type { TranscriptEntry } from "./transcript";
 
@@ -125,6 +125,13 @@ test("?fake=reloaded starts away from the bootloader's grant, and Restart from t
 	expect(openHandlesAfterClose).toBe(0);
 	expect(fake.board.mode).toBe("app");
 	expect(fake.board.violations).toEqual([]);
+});
+
+test("?fake=reloaded: after a Restart with no box ticked the board is home but Deep check stays disabled, and the same run with all three ticked first enables it", async () => {
+	const { steps, entries } = await drive("reloaded", ["restart"]);
+	expect(steps.map((step) => step.phase)).toEqual(["connected"]);
+	const ticked = PRECONDITIONS.map(({ key }): TranscriptEntry => ({ t: 0, kind: "precondition", key, met: true }));
+	expect([deepCheckEnabled("connected", entries), deepCheckEnabled("connected", [...ticked, ...entries])]).toEqual([false, true]);
 });
 
 test("?fake=refused attaches in normal mode and refuses the update-mode attach on BL info's fw_pages", async () => {
