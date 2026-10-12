@@ -1,6 +1,6 @@
 # tab60kit
 
-tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), and U4 (property tests over the flash window and the egress audit). The flash and keymap paths still throw `notImplemented`, and later plan units write their bodies.
+tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), U3 (the extractor for the vendor updater package, and image admission), and U4 (property tests over the flash window and the egress audit). The flash and keymap paths still throw `notImplemented`, and later plan units write their bodies.
 
 The design and the units live in [`docs/`](docs/), in `design.md` and `units.md`.
 
@@ -16,9 +16,19 @@ bun run check
 `bun run check` runs the same steps as CI (`.github/workflows/ci.yml`), in this order:
 
 1. `bun run typecheck` runs `tsc` on `tsconfig.json`. It runs again on `tsconfig.browser.json`, which checks the code that ships to the page without Node or Bun types.
-2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir. `testing/egress-property.test.ts` holds plan U4's property tests. It sends 10,000 random BL info payloads through `connect` and 100,000 random frames and contexts through the egress audit, from fixed seeds. Every frame the audit passes must stay inside the window, by expectations the test writes for itself.
+2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir. `testing/egress-property.test.ts` holds plan U4's property tests. It sends 10,000 random BL info payloads through `connect` and 100,000 random frames and contexts through the egress audit, from fixed seeds. Every frame the audit passes must stay inside the window, by expectations the test writes for itself. `testing/updater.test.ts` holds plan U3's tests. They run the extractor and `admit` on a synthetic package that `testing/maav102.ts` builds, because the repo holds no vendor bytes, and on twelve mutated copies that the extractor must refuse.
 3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The property test must fail on a copy whose `inWindow` accepts one page past the end. The script ends with `failures: 0` when every check passes.
 4. `bun run reconcile` runs the flash-loop model in `testing/reconcile-model.ts`. It throws if the synthesized loop has a problem run.
+
+## Check the extractor on the vendor's exe
+
+The vendor's updater is never committed, so one check runs outside CI. Run it before every release:
+
+```sh
+TAB60_EXE=<Tab60firmwareV1.01.13.exe> TAB60_DECODER=<decode_updater.py> bun run real-exe
+```
+
+`TAB60_DECODER` is the Python extractor from the research notes, the oracle for this port, and it needs `python3`. The script fails when either variable is unset. It compares the TypeScript output with the oracle's byte for byte, checks the catalog's hashes and checksums, runs the twelve mutations on the real exe, and requires `admit` to admit V1.01.13 and to refuse it with one byte flipped.
 
 ## Build the page
 
