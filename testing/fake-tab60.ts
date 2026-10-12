@@ -31,7 +31,6 @@ export interface FakeOptions {
 	/** The board answers this command in this mode `ms` late, once, after answering `skip` (default 0) earlier ones on time. */
 	readonly slowOnce?: { readonly cmd: number; readonly sub: number; readonly mode: Mode; readonly ms: number; readonly skip?: number };
 	readonly blInfo?: Uint8Array;
-	/** The bootloader answers READ BL INFO with these bytes instead of the 52 at 0x400, so only the update-mode attach sees them. */
 	readonly blInfoInIap?: Uint8Array;
 	readonly versionBlock?: Uint8Array;
 	/** A delay keeps a chooser opened by the reset's click on screen before the bootloader row appears, as on a real board. */
@@ -61,7 +60,6 @@ const PAGE_SIZE = 0x200;
 const FW_OFFSET = 0x200;
 const FW_PAGES = 0xe7;
 const WINDOW_BYTES = FW_PAGES * PAGE_SIZE;
-/** FW INFO's answer in the first hardware session (U1 transcript, 2026-10-10). */
 const FW_INFO = Uint8Array.of(0x04, 0x00, 0x02, 0x00);
 export const VERSION_BLOCK_BYTES = 180;
 const VERSION_PAGE_PARTS_APP = 8;

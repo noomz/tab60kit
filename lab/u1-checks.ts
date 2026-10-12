@@ -18,7 +18,6 @@ export interface U1Expected {
 	readonly fwOffset: number;
 	readonly pageSize: number;
 	readonly fwPages: number;
-	/** FW INFO's first 4 payload bytes in update mode, as hex. The other 56 must be zero. The core never checks them. Only this verdict does. */
 	readonly fwInfoHex: string;
 	readonly versionPageSha256: string;
 	readonly imageBytes: number;

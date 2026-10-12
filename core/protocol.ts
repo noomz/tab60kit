@@ -917,7 +917,6 @@ async function inspect(ch: Channel, signal: AbortSignal): Promise<{ readonly inf
 	if (modeByte !== MODE_BYTE[mode]) return { code: "mode-disagrees", productIdSays: mode, readModeSays: modeByte };
 	const info = parseBlInfo(payloadOf(await transmit(ch, "readBlInfo", {}, signal)));
 	if ("code" in info) return info;
-	// Read for the transcript only. Nothing checks the reply (design.md question 8).
 	if (mode === "iap") await transmit(ch, "readFwInfo", {}, signal);
 	const window = windowFor(info);
 	if ("code" in window) return window;

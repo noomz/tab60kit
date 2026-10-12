@@ -104,7 +104,6 @@ export function parseBlInfo(payload: Uint8Array): BlInfo | LayoutRefusal {
 	};
 }
 
-/** Builds the window, or refuses the board. */
 export function windowFor(info: BlInfo): FlashWindow | LayoutRefusal {
 	if (info.identityHex !== EXPECTED_LAYOUT.identityHex) return { code: "identity-mismatch", got: info.identityHex };
 	for (const field of ["fwOffset", "pageSize", "fwPages"] as const) {
