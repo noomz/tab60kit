@@ -68,5 +68,19 @@ lint_mutation "a cast to OutReport outside the audit" one-egress web/webhid-port
 lint_mutation "a sendReport call outside the WebHID link" one-egress lab/u1.ts 'export const raw = (device: HIDDevice) => device.sendReport(0, new Uint8Array(64));'
 lint_mutation "shipped page code that takes the lab port" lab-port web/main.ts 'import { startWebHidLab } from "./webhid-port"; void startWebHidLab;'
 
+# docs/units.md U4: the property test must notice a window check that lets one page past the end through.
+copy=$(mktemp -d)
+cp -R core testing package.json "$copy/"
+perl -0pi -e 's/(offset \+ length <= window\.end - window\.base)/$1 + window.pageSize/' "$copy/core/flashmap.ts"
+grep -q 'window\.base + window\.pageSize' "$copy/core/flashmap.ts" || { echo "FAIL mutation did not apply"; exit 1; }
+out=$(cd "$copy" && "$BUN" test testing/egress-property.test.ts 2>&1)
+status=$?
+if [ $status -ne 0 ] && printf '%s\n' "$out" | grep -q "the audit passed a frame that addresses outside the window"; then
+	echo "PASS the property test catches an inWindow that accepts one page past the end"
+else
+	echo "FAIL the property test missed an inWindow that accepts one page past the end:"; echo "$out" | tail -20; fails=$((fails+1))
+fi
+rm -rf "$copy"
+
 echo "failures: $fails"
 exit $fails
