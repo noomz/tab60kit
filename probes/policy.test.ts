@@ -1,6 +1,9 @@
 // Runtime checks of the sketch's implemented pure functions against expectations written independently of them.
 // Run: bun test probes/policy.test.ts
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "bun:test";
 import { bootTarget } from "../core/chip";
 import type { AppChip, IapChip, ImageCheck, PageState } from "../core/chip";
@@ -141,10 +144,43 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 	[lab, "erase", confirmed, false, "a lab session sends nothing it does not name, confirmed or not"],
 ];
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
+const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
+const UNREVIEWED_ROWS: readonly CommandName[] = ["erase", "crc", "setWriteAddress", "write", "cfgReadReverseMap", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
 check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "erase"], "U7"), /send them: erase$/));
-check("clearance: a lab session for the seven reviewed U1 rows", () =>
-	assert.equal(labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "U1").kind, "lab"),
+check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
+check("clearance: the shipped build sends exactly the seven U1 rows and refuses erase, crc, set write address, write, and every config row", () =>
+	assert.deepEqual(
+		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
+		{ sends: new Set(U1_ROWS), refuses: new Set(UNREVIEWED_ROWS) },
+	),
 );
+for (const name of UNREVIEWED_ROWS) {
+	check(`clearance: no lab session may name ${name}, which is still unreviewed`, () => assert.throws(() => labClearance([name], "test"), new RegExp(`send them: ${name}$`)));
+}
+
+// The capture that the confirmed rows cite, from plan U1's run on the user's board on 2026-10-12.
+const CAPTURE = "fixtures/u1-macos.json";
+const CAPTURE_TRANSCRIPT_SHA256 = "c183362b98cccbebfcbe6517e0e2c3d1ba0c1f412245f20001d69a558cf019e1";
+const captures = new Set(
+	COMMAND_NAMES.flatMap((name) => {
+		const maturity: Maturity = COMMANDS[name].maturity;
+		return maturity.level === "confirmed" ? [maturity.capture] : [];
+	}),
+);
+check(`capture: every confirmed row cites ${CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE])));
+check(`capture: ${CAPTURE} exists, holds the 2026-10-12 transcript byte for byte, and its verdict passes the frames gate and checks 2 to 9`, () => {
+	const path = join(import.meta.dir, "..", CAPTURE);
+	assert.ok(existsSync(path), `${CAPTURE} is missing`);
+	const fixture: { transcriptFile: string; transcript: unknown; frames: { pass: boolean }; checks: { id: number; pass: boolean }[] } = JSON.parse(readFileSync(path, "utf8"));
+	assert.equal(fixture.transcriptFile, "testing/fixtures/tab60kit-u1-2026-10-12T09-07-15-464Z.json");
+	// The page saves a transcript as JSON.stringify(transcript, null, 2), so this reproduces the downloaded file's bytes.
+	assert.equal(createHash("sha256").update(JSON.stringify(fixture.transcript, null, 2)).digest("hex"), CAPTURE_TRANSCRIPT_SHA256);
+	assert.equal(fixture.frames.pass, true);
+	assert.deepEqual(
+		fixture.checks.filter((result) => result.id !== 1).map((result) => [result.id, result.pass]),
+		[2, 3, 4, 5, 6, 7, 8, 9].map((id) => [id, true]),
+	);
+});
 
 // The registry. No (cmd, sub) pair names two rows; the version-page read covers parts 0..2 and nothing past them.
 const overlaps: string[] = [];
@@ -280,5 +316,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 2} clearance, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 3 + UNREVIEWED_ROWS.length} clearance, 2 capture, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

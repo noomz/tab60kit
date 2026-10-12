@@ -30,7 +30,7 @@ The build writes `dist/index.html` and `dist/main.js`, and the lab page `dist-la
 
 ## The U1 lab page
 
-Plan unit U1 sends the first frames to the board: seven reviewed registry rows, nine wire commands, all reads and resets. The core's egress audit checks every frame. Behind it, the page's link wrap refuses any frame that is not byte for byte one of the nine (`lab/u1-frames.ts`) before it reaches the board. The transcript keeps the attempt as an `out` entry followed by a `send-failed` entry, and the verdict's frames gate fails on it. The page is not shipped and lives outside both package entries.
+Plan unit U1 sends the first frames to the board: seven registry rows, nine wire commands, all reads and resets. The run on the user's board on 2026-10-12 moved the seven rows to "confirmed", citing its capture in `fixtures/u1-macos.json`, so a shipped build may send them too. The core's egress audit checks every frame. Behind it, the page's link wrap refuses any frame that is not byte for byte one of the nine (`lab/u1-frames.ts`) before it reaches the board. The transcript keeps the attempt as an `out` entry followed by a `send-failed` entry, and the verdict's frames gate fails on it. The page is not shipped and lives outside both package entries.
 
 ```sh
 bun run build

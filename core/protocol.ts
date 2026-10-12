@@ -86,7 +86,7 @@ export interface CommandSpec {
 }
 
 const UNREVIEWED = { level: "unreviewed" } as const;
-const REVIEWED_FOR_U1 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-09" } as const;
+const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
 
 /**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
@@ -106,7 +106,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	readFwInfo: {
 		label: "Read firmware info",
@@ -120,7 +120,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	readMode: {
 		label: "Read mode",
@@ -135,7 +135,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:132-135; R4 app handler 0x767A" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	readVersionPage: {
 		label: "Read version page",
@@ -150,7 +150,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	resetToIap: {
 		label: "Restart into update mode",
@@ -164,7 +164,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	resetToApp: {
 		label: "Restart into normal mode",
@@ -178,7 +178,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	erase: {
 		label: "Erase pages",
@@ -206,7 +206,7 @@ export const COMMANDS = {
 		payloadBytes: 8,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
-		maturity: REVIEWED_FOR_U1,
+		maturity: CONFIRMED_BY_U1,
 	},
 	crc: {
 		label: "CRC-32 of a range",
