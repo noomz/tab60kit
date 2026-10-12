@@ -158,7 +158,6 @@ for (const name of UNREVIEWED_ROWS) {
 	check(`clearance: no lab session may name ${name}, which is still unreviewed`, () => assert.throws(() => labClearance([name], "test"), new RegExp(`send them: ${name}$`)));
 }
 
-// The capture that the confirmed rows cite, from plan U1's run on the user's board on 2026-10-12.
 const CAPTURE = "fixtures/u1-macos.json";
 const CAPTURE_TRANSCRIPT_SHA256 = "c183362b98cccbebfcbe6517e0e2c3d1ba0c1f412245f20001d69a558cf019e1";
 const captures = new Set(
@@ -173,8 +172,8 @@ check(`capture: ${CAPTURE} exists, holds the 2026-10-12 transcript byte for byte
 	assert.ok(existsSync(path), `${CAPTURE} is missing`);
 	const fixture: { transcriptFile: string; transcript: unknown; frames: { pass: boolean }; checks: { id: number; pass: boolean }[] } = JSON.parse(readFileSync(path, "utf8"));
 	assert.equal(fixture.transcriptFile, "testing/fixtures/tab60kit-u1-2026-10-12T09-07-15-464Z.json");
-	// The page saves a transcript as JSON.stringify(transcript, null, 2), so this reproduces the downloaded file's bytes.
-	assert.equal(createHash("sha256").update(JSON.stringify(fixture.transcript, null, 2)).digest("hex"), CAPTURE_TRANSCRIPT_SHA256);
+	const asDownloaded = JSON.stringify(fixture.transcript, null, 2);
+	assert.equal(createHash("sha256").update(asDownloaded).digest("hex"), CAPTURE_TRANSCRIPT_SHA256);
 	assert.equal(fixture.frames.pass, true);
 	assert.deepEqual(
 		fixture.checks.filter((result) => result.id !== 1).map((result) => [result.id, result.pass]),

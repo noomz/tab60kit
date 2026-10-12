@@ -160,7 +160,6 @@ export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<st
 	return on;
 }
 
-/** A page load sends RESET to IAP at most once, and only with the preconditions locked in. Try again and Restart skip this rule, because they bring the board home. */
 export function deepCheckEnabled(phase: Phase["kind"], entries: readonly TranscriptEntry[]): boolean {
 	const lock = entries.findIndex((entry) => entry.kind === "out");
 	if (phase !== "connected" || lock === -1) return false;
