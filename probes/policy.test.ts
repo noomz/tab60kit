@@ -1,6 +1,9 @@
 // Runtime checks of the sketch's implemented pure functions against expectations written independently of them.
 // Run: bun test probes/policy.test.ts
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "bun:test";
 import { bootTarget } from "../core/chip";
 import type { AppChip, IapChip, ImageCheck, PageState } from "../core/chip";
@@ -126,11 +129,11 @@ check("shipped caps: each blocked line asks for review and a capture", () =>
 	assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")),
 );
 
-// G1 as maturity. A lab clearance built here by cast, because labClearance refuses every row while all are unreviewed.
+// G1 as maturity.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
 const confirmed: Maturity = { level: "confirmed", by: "user", on: "2026-10-10", capture: "fixtures/u1-macos.json" };
 const unreviewed: Maturity = { level: "unreviewed" };
-const lab = { kind: "lab", only: ["readMode"], purpose: "test" } as unknown as Clearance;
+const lab = labClearance(["readMode"], "test");
 const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] = [
 	[SHIPPED, "readMode", unreviewed, false, "shipped, unreviewed"],
 	[SHIPPED, "readMode", reviewed, false, "shipped sends no merely reviewed row"],
@@ -141,7 +144,42 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 	[lab, "erase", confirmed, false, "a lab session sends nothing it does not name, confirmed or not"],
 ];
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
-check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode"], "U1"), /review these rows/));
+const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
+const UNREVIEWED_ROWS: readonly CommandName[] = ["erase", "crc", "setWriteAddress", "write", "cfgReadReverseMap", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
+check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "erase"], "U7"), /send them: erase$/));
+check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
+check("clearance: the shipped build sends exactly the seven U1 rows and refuses erase, crc, set write address, write, and every config row", () =>
+	assert.deepEqual(
+		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
+		{ sends: new Set(U1_ROWS), refuses: new Set(UNREVIEWED_ROWS) },
+	),
+);
+for (const name of UNREVIEWED_ROWS) {
+	check(`clearance: no lab session may name ${name}, which is still unreviewed`, () => assert.throws(() => labClearance([name], "test"), new RegExp(`send them: ${name}$`)));
+}
+
+const CAPTURE = "fixtures/u1-macos.json";
+const CAPTURE_TRANSCRIPT_SHA256 = "c183362b98cccbebfcbe6517e0e2c3d1ba0c1f412245f20001d69a558cf019e1";
+const captures = new Set(
+	COMMAND_NAMES.flatMap((name) => {
+		const maturity: Maturity = COMMANDS[name].maturity;
+		return maturity.level === "confirmed" ? [maturity.capture] : [];
+	}),
+);
+check(`capture: every confirmed row cites ${CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE])));
+check(`capture: ${CAPTURE} exists, holds the 2026-10-12 transcript byte for byte, and its verdict passes the frames gate and checks 2 to 9`, () => {
+	const path = join(import.meta.dir, "..", CAPTURE);
+	assert.ok(existsSync(path), `${CAPTURE} is missing`);
+	const fixture: { transcriptFile: string; transcript: unknown; frames: { pass: boolean }; checks: { id: number; pass: boolean }[] } = JSON.parse(readFileSync(path, "utf8"));
+	assert.equal(fixture.transcriptFile, "testing/fixtures/tab60kit-u1-2026-10-12T09-07-15-464Z.json");
+	const asDownloaded = JSON.stringify(fixture.transcript, null, 2);
+	assert.equal(createHash("sha256").update(asDownloaded).digest("hex"), CAPTURE_TRANSCRIPT_SHA256);
+	assert.equal(fixture.frames.pass, true);
+	assert.deepEqual(
+		fixture.checks.filter((result) => result.id !== 1).map((result) => [result.id, result.pass]),
+		[2, 3, 4, 5, 6, 7, 8, 9].map((id) => [id, true]),
+	);
+});
 
 // The registry. No (cmd, sub) pair names two rows; the version-page read covers parts 0..2 and nothing past them.
 const overlaps: string[] = [];
@@ -180,6 +218,21 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
 );
 
+// From R1 "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
+const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub" } as const;
+check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
+	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),
+);
+check("registry: each row's payload is exactly its address fields", () =>
+	assert.deepEqual(
+		COMMAND_NAMES.filter((name) => {
+			const spec: CommandSpec = COMMANDS[name];
+			return spec.payloadBytes !== PAYLOAD_OF_ADDRESSING[spec.address];
+		}),
+		[],
+	),
+);
+
 // The egress audit, on frames built by hand from R1 "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
 const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
 	const out = new Uint8Array(bytes);
@@ -192,7 +245,13 @@ const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
 	}
 	return out;
 };
+const poke = (bytes: Uint8Array, at: number, value: number) => {
+	const out = Uint8Array.from(bytes);
+	out[at] = value;
+	return out;
+};
 const iap: EgressContext = { mode: "iap", window, cursor: null, cleared: () => true };
+const app: EgressContext = { ...iap, mode: "app" };
 const audited = (bytes: Uint8Array, requested: CommandName, ctx: EgressContext = iap) => {
 	const verdict = auditEgress(bytes, requested, ctx);
 	return verdict.ok ? { ok: verdict.command, cursor: verdict.cursor } : { refused: verdict.refusal.code };
@@ -217,8 +276,19 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["WRITE 52 bytes at the image start", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x234 }],
 	["WRITE past the window end", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x1ce00 - 10 }), { refused: "outside-window" }],
 	["a 63-byte frame", audited(frame(0x12, 0x02, 0, 0, 63), "readMode"), { refused: "bad-length" }],
+	["READ MODE with 0xBEEF in the crc16 field", audited(poke(poke(frame(0x12, 0x02), 2, 0xef), 3, 0xbe), "readMode", app), { refused: "crc16-field" }],
+	["RESET to IAP carrying a payload byte", audited(poke(frame(0x11, 0x00), 4, 0xde), "resetToIap", app), { refused: "payload-overrun" }],
+	["READ VERSION PAGE with junk in its last byte", audited(poke(frame(0x12, 0x20), 63, 0x01), "readVersionPage", app), { refused: "payload-overrun" }],
+	["SUM with a byte past its range", audited(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), "sum"), { refused: "payload-overrun" }],
+	["set the write address with a byte past its offset", audited(poke(frame(0x1e, 0x01, 0x200), 8, 0x01), "setWriteAddress"), { refused: "payload-overrun" }],
+	["WRITE 20 bytes with its last payload byte set", audited(poke(frame(0x1f, 20), 23, 0xff), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x214 }],
+	["WRITE 20 bytes with a byte past them", audited(poke(frame(0x1f, 20), 24, 0xff), "write", { ...iap, cursor: 0x200 }), { refused: "payload-overrun" }],
 ];
 for (const [why, actual, want] of egress) check(`egress: ${why}`, () => assert.deepEqual(actual, want));
+check("egress: a payload overrun names the first stray byte", () => {
+	const verdict = auditEgress(poke(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), 40, 0x01), "sum", iap);
+	assert.deepEqual(verdict.ok ? null : verdict.refusal, { code: "payload-overrun", at: 12 });
+});
 
 // The link gate, on timestamps alone: 15 s of answered probes, at most 1 s apart, and no timeout or loss in them.
 const probes = (from: number, to: number, every = 500, skip: (t: number) => boolean = () => false): LinkEvent[] => {
@@ -245,5 +315,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 1} clearance, 6 registry, ${egress.length} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 3 + UNREVIEWED_ROWS.length} clearance, 2 capture, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

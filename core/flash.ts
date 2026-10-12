@@ -152,7 +152,7 @@ export interface FlashOptions {
  *     try:
  *       session ??= connect(ctx, { modes: ["app", "iap"], reason: losses ? "after-link-loss" : "connect" })
  *                   (a LayoutRefusal -> stopped(board-refused))
- *       obs = await observe(session); board = obs.chip; progress(reading, board)
+ *       obs = await observe(session, signal); board = obs.chip; progress(reading, board)
  *       step = obs.mode === "app" ? decideInApp(obs.chip, target, verified) : decideInIap(obs.chip, target, rewrite)
  *       if step === "done" -> finished(official, confirmedInNormalMode: true)
  *       if ++attempts[step] > STEPS[step].maxAttempts -> stopped(attempts-exhausted)
@@ -166,6 +166,7 @@ export interface FlashOptions {
  *         iap / "exit-to-app":          verified = true; session = await leaveUpdateMode(obs.session, ctx)
  *                                       null (confirm skipped) -> finished(official, confirmedInNormalMode: false)
  *                                       otherwise loop: the next observation in normal mode returns "done"
+ *     catch IapAttachFailed: close its link, then handle its cause as below (no observation exists to decide a reset)
  *     catch LinkLost or LinkTimeout: events.push(lost or timeout at clock.now()); session = null
  *                                    attempts = zero per step              a drop is not a failed attempt
  *                                    ++losses > MAX_LINK_LOSSES -> stopped(too-many-link-losses); progress(link-lost); continue
@@ -179,7 +180,7 @@ export interface FlashOptions {
  *     verdict = judgeLink(events, clock.now(), WRITE_LINK_RULE)
  *     stable -> return
  *     progress(holding-link, verdict's quiet time so far, WRITE_LINK_RULE.quietMs)
- *     await iap.probe(); events.push(probe-ok at clock.now()); await clock.sleep(PROBE_EVERY_MS, signal)
+ *     await iap.probe(signal); events.push(probe-ok at clock.now()); await clock.sleep(PROBE_EVERY_MS, signal)
  *   a timeout or loss during a probe propagates to the loop above, which records it and reconnects
  */
 export function makeOfficial(target: FlashableImage, options: FlashOptions = { rewrite: false }): Job {

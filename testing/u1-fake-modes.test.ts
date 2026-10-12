@@ -1,0 +1,165 @@
+import { expect, test } from "bun:test";
+import { connect } from "../core/protocol";
+import { FAKE_MODES, type FakeMode, fakeHardware } from "../lab/u1-fake";
+import { u1Wrap } from "../lab/u1-frames";
+import { type U1Context, u1Clearance, u1Run } from "../lab/u1-job";
+import { PRECONDITIONS, type Phase, type Run, type RunOutcome, atLoad, deepCheckEnabled, outcomeOfError, phaseAfterRun } from "../lab/u1-state";
+import { startWebHidLab } from "../web/webhid-port";
+import type { TranscriptEntry } from "./transcript";
+
+const PROBES = 6;
+const probes = (n: number) => Array.from({ length: n }, () => "1202");
+const CONNECT = ["1202", "1200", "1220", "1221", "1222", ...probes(PROBES)];
+const UPDATE_ATTACH = ["1202", "1200", "1201"];
+const UPDATE_OBSERVE = ["1220", "1221", "1222", "1d01"];
+const HOME = ["1101", "1202", "1200"];
+const UPDATE_CHECKS = [...UPDATE_ATTACH, ...UPDATE_OBSERVE, ...probes(PROBES), ...HOME];
+const DEEP = ["1100", ...UPDATE_CHECKS];
+
+interface Step {
+	readonly what: Run;
+	readonly frames: readonly string[];
+	readonly phase: Phase["kind"];
+	readonly openHandles: number;
+}
+
+async function drive(mode: FakeMode, runs: readonly Run[]) {
+	const fake = fakeHardware(mode, { probes: PROBES, hid: { isActive: () => true } });
+	const load = await atLoad(fake.hid, () => performance.now());
+	const entries: TranscriptEntry[] = [...load.entries];
+	const { port, chooser } = startWebHidLab(fake.hid, fake.locks, {
+		wrap: u1Wrap((entry) => entries.push(entry)),
+		onEvent: (event) => entries.push({ t: performance.now(), ...event }),
+	});
+	const user = setInterval(() => chooser.needsClick?.modes.includes(fake.hid.device.mode) && chooser.pick(), 2);
+	const frames = () => entries.flatMap((entry) => (entry.kind === "out" ? [entry.hex.slice(0, 4)] : []));
+	const steps: Step[] = [];
+	let phase: Phase = load.phase;
+	try {
+		for (const what of runs) {
+			const before = frames().length;
+			const controller = new AbortController();
+			fake.adjust(what);
+			const ctx: U1Context = { port, clearance: u1Clearance(), signal: controller.signal, log: () => undefined, series: { probes: PROBES, everyMs: 1 } };
+			let outcome: RunOutcome;
+			try {
+				outcome = await port.exclusive(() => u1Run(what, phase, ctx));
+			} catch (error) {
+				outcome = outcomeOfError(error);
+			}
+			controller.abort(new DOMException("the run ended", "AbortError"));
+			phase = phaseAfterRun(entries, outcome);
+			steps.push({ what, frames: frames().slice(before), phase: phase.kind, openHandles: fake.hid.openHandles });
+		}
+	} finally {
+		clearInterval(user);
+	}
+	if (phase.kind === "connected") await phase.app.close();
+	if (phase.kind === "refused") await phase.refused.close();
+	if (phase.kind === "away" && phase.holding !== null) await phase.holding.close();
+	return { start: load.phase.kind, steps, entries, fake, finalPhase: phase.kind, openHandlesAfterClose: fake.hid.openHandles };
+}
+
+const SCRIPTS: Readonly<Record<FakeMode, readonly Step[]>> = {
+	plain: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: DEEP, phase: "connected", openHandles: 1 },
+	],
+	parked: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: DEEP, phase: "connected", openHandles: 1 },
+	],
+	deaf: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: ["1100", "1202", "1101"], phase: "away", openHandles: 0 },
+		{ what: "try-again", frames: UPDATE_CHECKS, phase: "connected", openHandles: 1 },
+	],
+	cancelled: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: ["1100"], phase: "away", openHandles: 0 },
+		{ what: "restart", frames: [...UPDATE_ATTACH, ...HOME], phase: "connected", openHandles: 1 },
+	],
+	refused: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: ["1100", ...UPDATE_ATTACH], phase: "away", openHandles: 1 },
+		{ what: "try-again", frames: UPDATE_ATTACH, phase: "away", openHandles: 1 },
+		{ what: "restart", frames: HOME, phase: "connected", openHandles: 1 },
+	],
+	"sum-refused": [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: ["1100", ...UPDATE_ATTACH, ...UPDATE_OBSERVE, "1101"], phase: "away", openHandles: 0 },
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+	],
+	drop: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: ["1100", ...UPDATE_ATTACH, ...UPDATE_OBSERVE, ...probes(5), "1101"], phase: "away", openHandles: 0 },
+		{ what: "try-again", frames: UPDATE_CHECKS, phase: "connected", openHandles: 1 },
+	],
+	slow: [
+		{ what: "connect", frames: CONNECT, phase: "connected", openHandles: 1 },
+		{ what: "deep-check", frames: DEEP, phase: "connected", openHandles: 1 },
+	],
+	reloaded: [{ what: "try-again", frames: UPDATE_CHECKS, phase: "connected", openHandles: 1 }],
+};
+
+for (const mode of FAKE_MODES) {
+	test(`?fake=${mode}: each run sends only the nine frames, ends in its phase, and leaks no link`, async () => {
+		const script = SCRIPTS[mode];
+		const { start, steps, fake, finalPhase, openHandlesAfterClose } = await drive(
+			mode,
+			script.map((step) => step.what),
+		);
+		expect(start).toBe(mode === "reloaded" ? "away" : "idle");
+		expect(steps).toEqual([...script]);
+		expect(finalPhase).toBe("connected");
+		expect(openHandlesAfterClose).toBe(0);
+		expect(fake.board.violations).toEqual([]);
+	}, 10_000);
+}
+
+test("?fake=reloaded starts away from the bootloader's grant, and Restart from there brings the board home", async () => {
+	const { start, steps, fake, finalPhase, openHandlesAfterClose } = await drive("reloaded", ["restart"]);
+	expect(start).toBe("away");
+	expect(steps).toEqual([{ what: "restart", frames: [...UPDATE_ATTACH, ...HOME], phase: "connected", openHandles: 1 }]);
+	expect(finalPhase).toBe("connected");
+	expect(openHandlesAfterClose).toBe(0);
+	expect(fake.board.mode).toBe("app");
+	expect(fake.board.violations).toEqual([]);
+});
+
+test("?fake=reloaded: after a Restart with no box ticked the board is home but Deep check stays disabled, and the same run with all three ticked first enables it", async () => {
+	const { steps, entries } = await drive("reloaded", ["restart"]);
+	expect(steps.map((step) => step.phase)).toEqual(["connected"]);
+	const ticked = PRECONDITIONS.map(({ key }): TranscriptEntry => ({ t: 0, kind: "precondition", key, met: true }));
+	expect([deepCheckEnabled("connected", entries), deepCheckEnabled("connected", [...ticked, ...entries])]).toEqual([false, true]);
+});
+
+test("?fake=refused attaches in normal mode and refuses the update-mode attach on BL info's fw_pages", async () => {
+	const { board } = fakeHardware("refused", { probes: PROBES });
+	const ctx = { port: board.port(), clearance: u1Clearance(), signal: new AbortController().signal };
+	const app = await connect(ctx, { modes: ["app"], reason: "connect" });
+	if ("refusal" in app) throw new Error(`normal mode refused: ${app.refusal.code}`);
+	const iap = await app.enterIap(ctx);
+	if (!("refusal" in iap)) throw new Error("the update-mode attach did not refuse");
+	expect(iap.refusal).toEqual({ code: "layout-mismatch", field: "fwPages", expected: 0xe7, got: 0xe8 });
+	await iap.restartToApp();
+	expect(board.violations).toEqual([]);
+});
+
+test("?fake=drop records the RESET to app it could not send on the dropped link", async () => {
+	const { entries } = await drive("drop", ["connect", "deep-check"]);
+	expect(entries.filter((entry) => entry.kind === "send-failed").map((entry) => (entry.kind === "send-failed" ? entry.hex.slice(0, 4) : ""))).toEqual(["1101"]);
+});
+
+test("?fake=slow records the fifth update-mode probe's 700 ms answer instead of timing out", async () => {
+	const { entries } = await drive("slow", ["connect", "deep-check"]);
+	const reset = entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1100"));
+	const latencies: number[] = [];
+	for (let i = reset; i < entries.length; i++) {
+		const entry = entries[i];
+		const reply = entries[i + 1];
+		if (entry?.kind === "out" && entry.hex.startsWith("1202") && reply?.kind === "in") latencies.push(reply.t - entry.t);
+	}
+	expect(latencies.filter((ms) => ms >= 690)).toHaveLength(1);
+	expect(latencies.findIndex((ms) => ms >= 690)).toBe(5);
+});

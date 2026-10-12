@@ -1,22 +1,42 @@
 import { copyFileSync, rmSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
-const PAGES = [{ html: "web/index.html", entry: "web/main.ts", outdir: "dist" }] as const;
+export const PAGES = [
+	{ html: "web/index.html", entry: "web/main.ts", outdir: "dist" },
+	{ html: "lab/u1.html", entry: "lab/u1.ts", outdir: "dist-lab" },
+] as const;
 
 const repo = join(import.meta.dir, "..");
-const outRoot = resolve(process.argv[2] ?? repo);
 
-for (const page of PAGES) {
-	const outdir = join(outRoot, page.outdir);
-	rmSync(outdir, { recursive: true, force: true });
-	await Bun.build({
-		entrypoints: [join(repo, page.entry)],
-		outdir,
-		naming: "[name].js",
-		target: "browser",
-		format: "esm",
-		minify: false,
-	});
-	copyFileSync(join(repo, page.html), join(outdir, "index.html"));
-	console.log(`built ${page.outdir}/`);
+function git(args: readonly string[]): string | null {
+	const result = Bun.spawnSync(["git", ...args], { cwd: repo });
+	return result.exitCode === 0 ? result.stdout.toString().trim() : null;
 }
+
+export function toolCommit(): string {
+	const sha = git(["rev-parse", "--short", "HEAD"]) ?? "unknown";
+	const dirty = (git(["status", "--porcelain"]) ?? "") !== "";
+	return dirty ? `${sha}-dirty` : sha;
+}
+
+export async function build(outRoot: string): Promise<void> {
+	const commit = toolCommit();
+	for (const page of PAGES) {
+		const outdir = join(outRoot, page.outdir);
+		rmSync(outdir, { recursive: true, force: true });
+		const result = await Bun.build({
+			entrypoints: [join(repo, page.entry)],
+			outdir,
+			naming: "[name].js",
+			target: "browser",
+			format: "esm",
+			minify: false,
+			define: { TAB60KIT_COMMIT: JSON.stringify(commit) },
+		});
+		if (!result.success) throw new AggregateError(result.logs, `${page.entry} did not build`);
+		copyFileSync(join(repo, page.html), join(outdir, basename(page.html)));
+		console.log(`built ${page.outdir}/${basename(page.html)} from ${commit}`);
+	}
+}
+
+if (import.meta.main) await build(resolve(process.argv[2] ?? repo));

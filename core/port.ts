@@ -58,7 +58,7 @@ export interface DevicePort {
 	 * Resolves with a link to the TAB 60 vendor interface in one of `want.modes`. Never resolves a link for any other device.
 	 * Web: may open a chooser at once (if the click's activation is still live) or wait for a pick from a click.
 	 * Node: polls enumeration by VID, PID, and usage page. Fake: reconnects at once.
-	 * Rejects with PickCancelled, OsPermissionDenied, or the signal's AbortError.
+	 * Rejects with PickCancelled, OsPermissionDenied, OpenTimedOut, DeviceAlreadyOpen, or the signal's reason.
 	 */
 	open(want: DeviceWant, signal: AbortSignal): Promise<Link>;
 
@@ -79,10 +79,14 @@ export interface Link {
 	send(report: OutReport): Promise<void>;
 	/** The next input report, in arrival order. Rejects LinkLost or LinkTimeout. */
 	next(timeoutMs: number): Promise<InReport>;
-	/** Drops queued input reports, so a late reply to a timed-out request cannot pair with the next request. */
-	discardPending(): void;
+	/**
+	 * Drops queued input reports, so a late reply to a timed-out request cannot pair with the next request.
+	 * Returns what it dropped, so a lab transcript can keep reports the core never read.
+	 */
+	discardPending(): readonly InReport[];
 	/** Settles once, when the OS reports the device gone. Pending `send` and `next` calls reject LinkLost at the same moment. */
 	readonly lost: Promise<void>;
+	/** Idempotent, and resolves on a lost link: the core closes links a reset has already killed. */
 	close(): Promise<void>;
 }
 
@@ -109,7 +113,73 @@ export class OsPermissionDenied extends Error {
 	}
 }
 
+/** device.open() did not settle in time. The handle may be stale (R3 C12), so the shell does not retry it. */
+export class OpenTimedOut extends Error {
+	override readonly name = "OpenTimedOut";
+}
+
+/** device.open() threw InvalidStateError, which means this page already holds the device open. */
+export class DeviceAlreadyOpen extends Error {
+	override readonly name = "DeviceAlreadyOpen";
+}
+
 /** Another tab or process holds the board. */
 export class Busy extends Error {
 	override readonly name = "Busy";
+}
+
+interface Waiter {
+	readonly resolve: (report: InReport) => void;
+	readonly reject: (error: Error) => void;
+}
+
+/**
+ * The input half of a Link: reports queue in arrival order, `next` hands out the oldest or waits up to its timeout,
+ * and `end` rejects every waiter, now and later, with the link's LinkLost.
+ */
+export class ReportQueue {
+	readonly #queue: InReport[] = [];
+	readonly #waiters: Waiter[] = [];
+	#ended: LinkLost | null = null;
+
+	push(report: InReport): void {
+		if (this.#ended !== null) return;
+		const waiter = this.#waiters.shift();
+		if (waiter === undefined) this.#queue.push(report);
+		else waiter.resolve(report);
+	}
+
+	next(timeoutMs: number): Promise<InReport> {
+		if (this.#ended !== null) return Promise.reject(this.#ended);
+		const queued = this.#queue.shift();
+		if (queued !== undefined) return Promise.resolve(queued);
+		return new Promise<InReport>((resolve, reject) => {
+			const waiter: Waiter = {
+				resolve: (report) => {
+					clearTimeout(timer);
+					resolve(report);
+				},
+				reject: (error) => {
+					clearTimeout(timer);
+					reject(error);
+				},
+			};
+			const timer = setTimeout(() => {
+				this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
+				reject(new LinkTimeout(`no input report within ${timeoutMs} ms`));
+			}, timeoutMs);
+			this.#waiters.push(waiter);
+		});
+	}
+
+	discardPending(): readonly InReport[] {
+		return this.#queue.splice(0);
+	}
+
+	end(error: LinkLost): void {
+		if (this.#ended !== null) return;
+		this.#ended = error;
+		this.#queue.length = 0;
+		for (const waiter of this.#waiters.splice(0)) waiter.reject(error);
+	}
 }

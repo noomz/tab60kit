@@ -9,10 +9,11 @@
  *   rest of the app region          not checked. The key alignment of a checksum that starts past the image is unknown.
  *   option bytes [0x1FE00, 0x20000) not checkable.
  */
-import { CATALOG, type CatalogEntry } from "./firmware";
+import { CATALOG, type CatalogEntry, sha256 } from "./firmware";
 import type { BlInfo, FlashWindow, RegionName } from "./flashmap";
 import type { Job, JobContext } from "./job";
-import type { AppSession, IapSession, Session, VersionPageRead } from "./protocol";
+import { PickCancelled } from "./port";
+import { type AppRefused, type AppSession, type IapRefused, type IapSession, type Session, type VersionPageRead, connect } from "./protocol";
 import { type Crc32, type Sha256, type Sum32, notImplemented } from "./units";
 
 export type PageState =
@@ -48,27 +49,47 @@ export type Observed =
 	| { readonly mode: "app"; readonly session: AppSession; readonly chip: AppChip }
 	| { readonly mode: "iap"; readonly session: IapSession; readonly chip: IapChip };
 
-/**
- * Reads the chip through an open session.
- * TODO:
- *   page = classifyPage(await session.readVersionPage())
- *   app: return { mode, session, chip: { mode, info, window, page } }
- *   (readVersionPage sends parts 0, 1, and 2 of READ VERSION PAGE: sub 0x20, 0x21, 0x22)
- *   iap: for each distinct catalog image length L:
- *          { sum, crc } = await session.checksum(L)
- *          match = CATALOG entry with length L and wireSum32 == sum and (crc == null or wireCrc32 == crc)
- *        image = match ? official(match, crc ? "sum-and-crc" : "sum") : unrecognized(sum of the target length, crc)
- */
-export async function observe(session: Session): Promise<Observed> {
-	return notImplemented(`observe(${session.mode}) against ${CATALOG.length} catalog entries`);
+/** Rejects with the signal's reason, before its next command leaves, once `signal` is aborted. */
+export async function observe(session: Session, signal: AbortSignal): Promise<Observed> {
+	const page = await classifyPage(await session.readVersionPage(signal));
+	const { info, window } = session;
+	if (session.mode === "app") return { mode: "app", session, chip: { mode: "app", info, window, page } };
+	const image = await checkImage(session, signal);
+	return { mode: "iap", session, chip: { mode: "iap", info, window, page, image } };
 }
 
-/**
- * TODO: all 0xFF -> erased. sha256(bytes) equals a CATALOG versionBlock.sha256 -> official. Otherwise unknown,
- * with the UTF-16LE string at offset 4 when the length word at offset 0 is at most 116.
- */
+async function checkImage(session: IapSession, signal: AbortSignal): Promise<ImageCheck> {
+	const lengths = [...new Set(CATALOG.map((entry) => entry.image.bytes))];
+	let first: ImageCheck | null = null;
+	for (const bytes of lengths) {
+		const { sum, crc } = await session.checksum(bytes, signal);
+		const entry = CATALOG.find((candidate) => candidate.image.bytes === bytes && candidate.image.wireSum32 === sum && (crc === null || candidate.image.wireCrc32 === crc));
+		if (entry !== undefined) return { kind: "official", entry, by: crc === null ? "sum" : "sum-and-crc" };
+		first ??= { kind: "unrecognized", sum, crc };
+	}
+	if (first === null) throw new Error("the catalog is empty");
+	return first;
+}
+
+/** The version page (R1): a u32 byte length, the UTF-16LE version string, then fixed words from 0x78. */
+const VERSION_TEXT_OFFSET = 4;
+const FIXED_WORDS_OFFSET = 0x78;
+
 export async function classifyPage(page: VersionPageRead): Promise<PageState> {
-	return notImplemented(`classifyPage(${page.bytes.length})`);
+	const { bytes } = page;
+	if (bytes.every((b) => b === 0xff)) return { kind: "erased" };
+	const digest = await sha256(bytes);
+	const entry = CATALOG.find((candidate) => candidate.versionBlock.sha256 === digest);
+	if (entry !== undefined) return { kind: "official", entry };
+	return { kind: "unknown", text: versionText(bytes), sha256: digest };
+}
+
+function versionText(bytes: Uint8Array): string | null {
+	const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+	if (length === 0 || length > FIXED_WORDS_OFFSET - VERSION_TEXT_OFFSET) return null;
+	const text = new TextDecoder("utf-16le").decode(bytes.subarray(VERSION_TEXT_OFFSET, VERSION_TEXT_OFFSET + length));
+	const end = text.indexOf("\0");
+	return end === -1 ? text : text.slice(0, end);
 }
 
 /**
@@ -114,7 +135,8 @@ export function report(chip: ChipState): ChipReport {
 /**
  * Connect, or reuse the open session, and observe. Read-only.
  * TODO: session = start ?? connect(ctx, { modes: ["app", "iap"], reason: "connect" }). Both modes, because a board
- * left in update mode by an interrupted flash must show up here and offer to finish it. Observe, finish.
+ * left in update mode by an interrupted flash must show up here and offer to finish it. Observe, finish. An
+ * update-mode attach that throws arrives as IapAttachFailed with its link still open, so restartToApp or close it.
  */
 export const quickCheck: Job = async (start, ctx) => {
 	return notImplemented(`quickCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
@@ -124,21 +146,35 @@ export const quickCheck: Job = async (start, ctx) => {
  * Enter update mode, checksum the image, and come back. Read-only, so a lost link restarts it from the top, and no
  * link gate applies.
  * TODO:
- *   obs = observe(start ?? connect(ctx, both modes))
- *   if app: session = obs.session.enterIap(ctx); obs = observe(session)
+ *   obs = observe(start ?? connect(ctx, both modes), ctx.signal)
+ *   if app: session = obs.session.enterIap(ctx); obs = observe(session, ctx.signal)
  *   if bootTarget(obs.chip) is "normal-mode" or "boots-unchecked-image": leaveUpdateMode(session, ctx)
  *   otherwise stay in update mode and finish: the report says a flash is needed before the board can type
+ *   connect and enterIap can both reject IapAttachFailed, whose open link must be restarted or closed
  */
 export const deepCheck: Job = async (start, ctx) => {
 	return notImplemented(`deepCheck(${String(start?.mode)}, aborted=${ctx.signal.aborted})`);
 };
 
 /**
- * Shared by the deep check and the flash job: restart into normal mode, then offer the optional confirm pick.
- * TODO: progress(restarting app); await iap.exitToApp();
- *   try connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" }) -> the app session
- *   a cancel or PickCancelled here -> null (the job still finishes; the UI calls this Skip)
+ * Shared by the deep check and the flash job. Restarts into normal mode, through the session or a refused board's own
+ * RESET to app, then offers the optional confirm pick. The pick runs even when the restart's send failed, because the
+ * board may have taken the frame. When the pick then finds no device, the restart's error propagates, because nothing
+ * shows where the board is.
  */
-export async function leaveUpdateMode(iap: IapSession, ctx: JobContext): Promise<AppSession | null> {
-	return notImplemented(`leaveUpdateMode(${iap.mode}, aborted=${ctx.signal.aborted})`);
+export async function leaveUpdateMode(iap: IapSession | IapRefused, ctx: JobContext): Promise<AppSession | AppRefused | null> {
+	ctx.progress({ kind: "restarting", into: "app" });
+	const restart = await ("refusal" in iap ? iap.restartToApp() : iap.exitToApp()).then(
+		() => null,
+		(error: unknown) => ({ error }),
+	);
+	let back: AppSession | AppRefused | null;
+	try {
+		back = await connect(ctx, { modes: ["app"], reason: "confirm-normal-mode" });
+	} catch (error) {
+		if (!(error instanceof PickCancelled || ctx.signal.aborted)) throw error;
+		back = null;
+	}
+	if (back === null && restart !== null) throw restart.error;
+	return back;
 }
