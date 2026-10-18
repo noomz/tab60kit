@@ -1,6 +1,6 @@
 # tab60kit
 
-tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold) and U1 (the bootloader round trip and the read-only deep check, behind a lab page). The flash and keymap paths still throw `notImplemented`, and later plan units write their bodies.
+tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), and U4 (property tests over the flash window and the egress audit). The flash and keymap paths still throw `notImplemented`, and later plan units write their bodies.
 
 The design and the units live in [`docs/`](docs/), in `design.md` and `units.md`.
 
@@ -16,8 +16,8 @@ bun run check
 `bun run check` runs the same steps as CI (`.github/workflows/ci.yml`), in this order:
 
 1. `bun run typecheck` runs `tsc` on `tsconfig.json`. It runs again on `tsconfig.browser.json`, which checks the code that ships to the page without Node or Bun types.
-2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir.
-3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The script ends with `failures: 0` when every check passes.
+2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir. `testing/egress-property.test.ts` holds plan U4's property tests. It sends 10,000 random BL info payloads through `connect` and 100,000 random frames and contexts through the egress audit, from fixed seeds. Every frame the audit passes must stay inside the window, by expectations the test writes for itself.
+3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The property test must fail on a copy whose `inWindow` accepts one page past the end. The script ends with `failures: 0` when every check passes.
 4. `bun run reconcile` runs the flash-loop model in `testing/reconcile-model.ts`. It throws if the synthesized loop has a problem run.
 
 ## Build the page
