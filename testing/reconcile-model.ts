@@ -45,7 +45,8 @@ const info: BlInfo = {
 	identityHex: EXPECTED_LAYOUT.identityHex,
 	raw: new Uint8Array(52),
 };
-const unknownPage = (text: string | null): PageState => ({ kind: "unknown", text, sha256: sha256Literal("0".repeat(64)) });
+/** A page with version text is a whole block with its magic; one without is cut short. */
+const unknownPage = (text: string | null): PageState => ({ kind: "unknown", text, sha256: sha256Literal("0".repeat(64)), boots: text !== null });
 const unrecognized: ImageCheck = { kind: "unrecognized", sum: sum32Literal(0), crc: null };
 const PAGE: Record<Contents, PageState> = {
 	target: { kind: "official", entry },

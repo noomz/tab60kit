@@ -34,7 +34,9 @@ export type StopReason =
 	| { readonly kind: "os-permission"; readonly os: "linux" | "other" }
 	| { readonly kind: "busy" }
 	| { readonly kind: "attempts-exhausted"; readonly step: AppStep | IapStep; readonly attempts: number }
-	| { readonly kind: "too-many-link-losses"; readonly losses: number };
+	| { readonly kind: "too-many-link-losses"; readonly losses: number }
+	/** The job threw an error that means a bug. The kit rethrows it after setting this state, so the UI never sticks on "working". */
+	| { readonly kind: "error"; readonly message: string };
 
 export type JobResult =
 	| { readonly kind: "checked"; readonly depth: "quick" | "deep" }

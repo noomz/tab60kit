@@ -28,7 +28,7 @@ test("the first U1 transcript, recorded before attach read the version page in u
 	await expect(replayU1("tab60kit-u1-2026-10-10T12-16-20-942Z.json")).rejects.toThrow("replay diverged at entry 99");
 });
 
-test("replay refuses a frame the transcript did not record, and an open for the wrong reason", async () => {
+test("replay refuses a frame the transcript did not record, and an open for the wrong mode or reason", async () => {
 	const transcript = fixture("tab60kit-u1-2026-10-12T09-07-15-464Z.json");
 	const port = replayPort(transcript);
 	const signal = new AbortController().signal;
@@ -39,7 +39,20 @@ test("replay refuses a frame the transcript did not record, and an open for the 
 	await expect(link.send(frame as never)).rejects.toThrow("replay diverged at entry 9: the transcript has out 120200");
 	expect(port.divergence?.index).toBe(9);
 
-	const other = replayPort(transcript);
-	const opening = other.open({ modes: ["iap"], reason: "connect" }, signal);
-	await expect(opening).rejects.toThrow("an open for iap");
+	const wrongMode = replayPort(transcript);
+	await expect(wrongMode.open({ modes: ["iap"], reason: "connect" }, signal)).rejects.toThrow("an open for iap");
+
+	const wrongReason = replayPort(transcript);
+	await expect(wrongReason.open({ modes: ["app"], reason: "after-link-loss" }, signal)).rejects.toThrow("an open for after-link-loss");
+	expect(wrongReason.divergence?.index).toBe(8);
+});
+
+test("replay rejects a pending open when its signal aborts", async () => {
+	const port = replayPort(fixture("tab60kit-u1-2026-10-12T09-07-15-464Z.json"));
+	const link = await port.open({ modes: ["app"], reason: "connect" }, new AbortController().signal);
+	void link;
+	const cancel = new AbortController();
+	const pending = port.open({ modes: ["iap"], reason: "enter-update-mode" }, cancel.signal);
+	cancel.abort(new Error("cancelled"));
+	await expect(pending).rejects.toThrow("cancelled");
 });

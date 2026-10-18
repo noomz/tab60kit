@@ -326,7 +326,14 @@ export function replayPort(transcript: Transcript): ReplayPort {
 		if (item?.entry.kind !== "opened") return;
 		const { entry } = item;
 		const at = opens.findIndex(({ want }) => want.reason === entry.reason);
-		if (at === -1) return;
+		if (at === -1) {
+			// The core waits for a device the transcript never opened for that reason: diverge rather than hang.
+			const [stray] = opens.splice(0);
+			if (stray === undefined) return;
+			divergence ??= new ReplayDiverged(item.index, describeEntry(entry), `an open for ${stray.want.reason}`);
+			stray.reject(divergence);
+			return;
+		}
 		const [open] = opens.splice(at, 1);
 		if (open === undefined) return;
 		const mode = modeOf(entry.productId);
@@ -408,7 +415,18 @@ export function replayPort(transcript: Transcript): ReplayPort {
 					reject(signal.reason);
 					return;
 				}
-				opens.push({ want, resolve, reject });
+				const open = { want, resolve, reject };
+				opens.push(open);
+				signal.addEventListener(
+					"abort",
+					() => {
+						const at = opens.indexOf(open);
+						if (at === -1) return;
+						opens.splice(at, 1);
+						reject(signal.reason);
+					},
+					{ once: true },
+				);
 				settleOpens();
 			}),
 		exclusive: (job) => job(),

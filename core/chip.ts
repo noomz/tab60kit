@@ -14,14 +14,17 @@ import { MAX_LINK_LOSSES } from "./flash";
 import { type BlInfo, type FlashWindow, type RegionName, regions } from "./flashmap";
 import { type Activity, type Job, type JobContext, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
 import { PickCancelled } from "./port";
-import { type AppRefused, type AppSession, DeviceRefused, IapAttachFailed, type IapRefused, type IapSession, type Session, type VersionPageRead, connect } from "./protocol";
+import { type AppRefused, type AppSession, DeviceRefused, IapAttachFailed, type IapRefused, type IapSession, ModeDisagrees, type Session, type VersionPageRead, connect } from "./protocol";
 import type { Crc32, Sha256, Sum32 } from "./units";
 
 export type PageState =
 	| { readonly kind: "erased" }
 	| { readonly kind: "official"; readonly entry: CatalogEntry }
-	/** Anything else, including a block cut short by a lost link. `text` is the version string when it decodes. */
-	| { readonly kind: "unknown"; readonly text: string | null; readonly sha256: Sha256 };
+	/**
+	 * Anything else, including a block cut short by a lost link. `text` is the version string when it decodes. `boots`
+	 * says whether the IAP would boot the app over it: the 0x5AA5 magic and a programmed word at 0x78 (R1, INFERRED).
+	 */
+	| { readonly kind: "unknown"; readonly text: string | null; readonly sha256: Sha256; readonly boots: boolean };
 
 export type ImageCheck =
 	| { readonly kind: "official"; readonly entry: CatalogEntry; readonly by: "sum" | "sum-and-crc" }
@@ -89,7 +92,15 @@ export async function classifyPage(page: VersionPageRead, catalog: readonly Cata
 	const digest = await sha256(bytes);
 	const entry = catalog.find((candidate) => candidate.versionBlock.sha256 === digest);
 	if (entry !== undefined) return { kind: "official", entry };
-	return { kind: "unknown", text: versionText(bytes), sha256: digest };
+	return { kind: "unknown", text: versionText(bytes), sha256: digest, boots: bootable(bytes) };
+}
+
+const MAGIC_OFFSET = 0xb0;
+const MAGIC = 0x5aa5;
+
+function bootable(bytes: Uint8Array): boolean {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	return view.getUint16(MAGIC_OFFSET, true) === MAGIC && view.getUint32(FIXED_WORDS_OFFSET, true) !== 0xffffffff;
 }
 
 function versionText(bytes: Uint8Array): string | null {
@@ -108,7 +119,7 @@ function versionText(bytes: Uint8Array): string | null {
 export type BootTarget = "normal-mode" | "stays-in-update-mode" | "boots-unchecked-image" | "boots-damaged-image";
 
 export function bootTarget(chip: ChipState): BootTarget {
-	if (chip.page.kind === "erased") return "stays-in-update-mode";
+	if (chip.page.kind === "erased" || (chip.page.kind === "unknown" && !chip.page.boots)) return "stays-in-update-mode";
 	if (chip.mode === "app") return chip.page.kind === "official" ? "normal-mode" : "boots-unchecked-image";
 	if (chip.page.kind === "official") {
 		return chip.image.kind === "official" && chip.image.entry.id === chip.page.entry.id
@@ -184,9 +195,9 @@ export const quickCheck: Job = (start, ctx) => check("quick", start, ctx);
 export const deepCheck: Job = (start, ctx) => check("deep", start, ctx);
 
 /**
- * Both checks, as one loop. A board found refused, or found in update mode, is never restarted: the core leaves it
- * where it was. Only the deep check's own restart into update mode is undone, through the refusal or the failed
- * attach that restart produced.
+ * Both checks, as one loop. A refused board is never restarted, except to undo the deep check's own restart into
+ * update mode. The deep check sends a board in update mode home only when its boot target says the IAP would boot it
+ * anyway ("normal-mode" or "boots-unchecked-image"), so the restart does what a power cycle would do.
  */
 async function check(depth: "quick" | "deep", start: Session | null, ctx: JobContext): Promise<JobEnd> {
 	let session: Session | null = start;
@@ -239,7 +250,7 @@ async function check(depth: "quick" | "deep", start: Session | null, ctx: JobCon
 		} catch (error) {
 			const cause = await releaseAfter(error, session, restarted);
 			session = null;
-			if (isLinkFailure(cause) || cause instanceof DeviceRefused) {
+			if (isLinkFailure(cause) || cause instanceof DeviceRefused || cause instanceof ModeDisagrees) {
 				if (++losses > MAX_LINK_LOSSES) return stopped({ kind: "too-many-link-losses", losses });
 				progress({ kind: "link-lost", losses });
 				continue;

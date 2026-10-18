@@ -84,14 +84,50 @@ test("a board that already holds the target is checked in update mode and left a
 	await bootsTarget(rewritten, image);
 });
 
-test("a shipped kit stops at G1 before the first erase leaves, and the board keeps its image", async () => {
+test("a shipped kit stops at G1 before it sends anything, so the board stays in normal mode and types", async () => {
 	const board = fake();
 	const end = await createKit(board.port()).makeOfficial(image);
 	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "gate" } });
 	expect(end.kind === "stopped" && end.reason.kind === "gate" ? end.reason.blocked : "").toContain("Erase pages");
+	expect(board.received).toEqual([]);
+	expect(board.mode).toBe("app");
+});
+
+test("a read the board always refuses ends the job within the loss budget", async () => {
+	const board = fake({ refuseAlways: { cmd: 0x1d, sub: 0x01 } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image);
+	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "too-many-link-losses", losses: 11 } });
+	expect(ofCommand(board, 0x1d, 0x01).length).toBeLessThanOrEqual(11);
 	expect(ofCommand(board, 0x1d, 0x00)).toHaveLength(0);
-	expect(ofCommand(board, 0x1e)).toHaveLength(0);
+});
+
+test("an ERASE the board refuses costs one attempt; the retry goes out on a new link only after its own 15 s gate", async () => {
+	const board = fake({ refuseOnce: { cmd: 0x1d, sub: 0x00 } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image);
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	const [refused, retried] = ofCommand(board, 0x1d, 0x00);
+	if (refused === undefined || retried === undefined) throw new Error("no retry");
+	expect(retried.t - refused.t).toBeGreaterThanOrEqual(15_000);
+	const probesBetween = board.received.filter((r) => r.cmd === 0x12 && r.sub === 0x02 && r.t > refused.t && r.t < retried.t);
+	expect(probesBetween.length).toBeGreaterThanOrEqual(30);
 	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+test("an ERASE refused every time ends with attempts-exhausted, and the board still boots what it had", async () => {
+	const board = fake({ refuseAlways: { cmd: 0x1d, sub: 0x00 } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image);
+	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "attempts-exhausted", step: "erase-and-write-image", attempts: 3 } });
+	expect(ofCommand(board, 0x1d, 0x00)).toHaveLength(3);
+	expect((await board.bootTarget()).mode).toBe("app");
+});
+
+test("an error that means a bug stops the kit with an error state instead of leaving it working", async () => {
+	const board = fake();
+	const kit = createKit({ ...board.port(), open: async () => Promise.reject(new Error("boom")) }, FLASH_CLEARANCE);
+	await expect(kit.check("quick")).rejects.toThrow("boom");
+	expect(kit.state).toMatchObject({ kind: "stopped", job: "quick-check", reason: { kind: "error", message: "Error: boom" } });
+	await expect(kit.check("quick")).rejects.toThrow("boom");
 });
 
 test("no flash write within 15 s of a timeout: a probe that times out restarts the gate on the next link", async () => {
@@ -183,6 +219,12 @@ test("the deep check comes home from a board that boots, and stays in update mod
 	expect(report(stays.board).boot).toBe("stays-in-update-mode");
 	expect(erased.mode).toBe("iap");
 	expect(ofCommand(erased, 0x11)).toHaveLength(0);
+
+	// A page cut short has no magic: the IAP would stay in update mode, so the deep check does not try to send it home.
+	const partial = fake({ starting: "update-mode-partial-version-block" });
+	const left = await createKit(partial.port(), FLASH_CLEARANCE).check("deep");
+	expect(left).toMatchObject({ kind: "finished", result: { kind: "checked", depth: "deep" } });
+	expect(ofCommand(partial, 0x11)).toHaveLength(0);
 });
 
 test("report draws the four regions, fingerprints the bootloader, and splits the app region at the end of an official image", async () => {

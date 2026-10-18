@@ -18,7 +18,7 @@
 import { type AppChip, type ChipState, type IapChip, type ImageCheck, type PageState, home, leaveUpdateMode, observe } from "./chip";
 import { CATALOG, type FlashableImage } from "./firmware";
 import { type Activity, type Job, type JobContext, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
-import { DeviceRefused, IapAttachFailed, ReadBackMismatch, type Session, connect } from "./protocol";
+import { type CommandName, DeviceRefused, IapAttachFailed, ModeDisagrees, ReadBackMismatch, type Session, clears, connect, gateMessage } from "./protocol";
 
 export type AppStep = "done" | "enter-iap";
 export type IapStep = "erase-and-write-image" | "write-version-block" | "exit-to-app";
@@ -148,9 +148,15 @@ export interface FlashOptions {
  * It recognizes CATALOG plus the entry it was asked to write. `admit` already proved that entry, so for a shipped
  * image this is CATALOG, and a test's synthetic image converges like a real one.
  */
+/** The rows a flash needs beyond the read and reset rows. A kit that cannot send them stops before the first frame. */
+const FLASH_ROWS = ["erase", "setWriteAddress", "write"] as const satisfies readonly CommandName[];
+
 export function makeOfficial(target: FlashableImage, options: FlashOptions = { rewrite: false }): Job {
 	const catalog = CATALOG.some((entry) => entry.id === target.entry.id) ? CATALOG : [...CATALOG, target.entry];
 	return async (start, ctx) => {
+		// G1 up front: finding out at the first ERASE would leave the board in update mode, unable to type.
+		const blocked = FLASH_ROWS.find((name) => !clears(ctx.clearance, name));
+		if (blocked !== undefined) return { kind: "stopped", reason: { kind: "gate", blocked: gateMessage(blocked, ctx.clearance) }, session: start, board: null };
 		const attempts: Record<Step, number> = { done: 0, "enter-iap": 0, "erase-and-write-image": 0, "write-version-block": 0, "exit-to-app": 0 };
 		const events: LinkEvent[] = [];
 		let losses = 0;
@@ -176,6 +182,8 @@ export function makeOfficial(target: FlashableImage, options: FlashOptions = { r
 			board,
 		});
 		for (;;) {
+			/** True once a chosen step starts acting, so a refusal counts against its attempts rather than the loss budget. */
+			let inStep = false;
 			if (ctx.signal.aborted) {
 				await session?.close().catch(() => undefined);
 				return stopped({ kind: "cancelled", during });
@@ -198,6 +206,7 @@ export function makeOfficial(target: FlashableImage, options: FlashOptions = { r
 					await holdLink(obs.session, events, ctx, progress);
 					gated = obs.session;
 				}
+				inStep = true;
 				if (obs.mode === "app") {
 					switch (step) {
 						case "enter-iap":
@@ -255,8 +264,15 @@ export function makeOfficial(target: FlashableImage, options: FlashOptions = { r
 					progress({ kind: "link-lost", losses });
 					continue;
 				}
-				// The attempt is already counted; the next observation decides.
-				if (cause instanceof DeviceRefused || cause instanceof ReadBackMismatch) continue;
+				// A refusal inside a step is already counted as its attempt. Outside one (a read, an attach, a gate probe)
+				// nothing counts it, so it costs the loss budget, or a board that always refuses a read would loop forever.
+				if (cause instanceof DeviceRefused || cause instanceof ReadBackMismatch || cause instanceof ModeDisagrees) {
+					if (!inStep) {
+						if (++losses > MAX_LINK_LOSSES) return stopped({ kind: "too-many-link-losses", losses });
+						progress({ kind: "link-lost", losses });
+					}
+					continue;
+				}
 				const reason = stopReasonFor(cause, ctx.signal, during);
 				if (reason === null) throw cause;
 				return stopped(reason);
@@ -271,6 +287,8 @@ export function makeOfficial(target: FlashableImage, options: FlashOptions = { r
  */
 async function holdLink(session: Session, events: LinkEvent[], ctx: JobContext, progress: (activity: Activity) => void): Promise<void> {
 	const { clock } = ctx.port;
+	// Probes answered on an earlier link say nothing about this one. Failures stay: they are what the gate waits out.
+	for (let i = events.length - 1; i >= 0; i--) if (events[i]?.kind === "probe-ok") events.splice(i, 1);
 	for (;;) {
 		const verdict = judgeLink(events, clock.now(), WRITE_LINK_RULE);
 		if (verdict.kind === "stable") return;

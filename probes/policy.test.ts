@@ -44,7 +44,7 @@ const pages: Record<string, PageState> = {
 	target: { kind: "official", entry },
 	"other-official": { kind: "official", entry: other },
 	erased: { kind: "erased" },
-	partial: { kind: "unknown", text: null, sha256: "0".repeat(64) as never },
+	partial: { kind: "unknown", text: null, sha256: "0".repeat(64) as never, boots: false },
 };
 const images: Record<string, ImageCheck> = {
 	target: { kind: "official", entry, by: "sum" },
@@ -100,6 +100,12 @@ check("boot: target page over an unrecognized image", () =>
 );
 check("boot: erased page over the target image", () =>
 	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.erased!, image: images.target! }), "stays-in-update-mode"),
+);
+check("boot: a page cut short has no magic, so the IAP stays in update mode whatever the image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.partial!, image: images.unrecognized! }), "stays-in-update-mode"),
+);
+check("boot: a whole foreign block with its magic boots the unchecked image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: { kind: "unknown", text: "V1.01.16", sha256: "0".repeat(64) as never, boots: true }, image: images.unrecognized! }), "boots-unchecked-image"),
 );
 
 // The window: [0x3000, 0x1FE00), offsets count from 0x3000, and 32-bit wrap cannot sneak in.

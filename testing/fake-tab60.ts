@@ -16,7 +16,14 @@ import { type Sha256, sha256Literal } from "../core/units";
 
 export interface FakeOptions {
 	/** What the board holds at the start of the test. */
-	readonly starting: "official-image" | "update-mode-official-image" | "untrusted-image" | "update-mode-erased" | "update-mode-partial-version-block";
+	readonly starting:
+		| "official-image"
+		| "update-mode-official-image"
+		| "untrusted-image"
+		| "update-mode-erased"
+		| "update-mode-partial-version-block"
+		/** A valid version page over an image that fails its sum, in update mode: the "boots-damaged-image" case. */
+		| "update-mode-damaged-image";
 	/** The image a correct run ends with, from the catalog entry the test flashes. */
 	readonly target: { readonly imageBytes: number; readonly wireSum32: number };
 	/**
@@ -24,10 +31,17 @@ export interface FakeOptions {
 	 * board then re-enumerates in the same mode, as after a USB glitch.
 	 */
 	readonly loseLinkAtPacket?: number;
+	/**
+	 * Execute this output report, then lose the link before its reply leaves: the board did the work and the host
+	 * never heard. Counted like `loseLinkAtPacket`.
+	 */
+	readonly loseLinkAfterPacket?: number;
 	/** On that loss, also reset the MCU: SRAM is cleared and the IAP decides from the version page. */
 	readonly resetOnLoss?: boolean;
 	/** The board answers this command with the FF AA error marker once. */
 	readonly refuseOnce?: { readonly cmd: number; readonly sub: number };
+	/** The board answers this command with the FF AA error marker every time, and does not execute it. */
+	readonly refuseAlways?: { readonly cmd: number; readonly sub: number };
 	/** The board answers this command in this mode `ms` late, once, after answering `skip` (default 0) earlier ones on time. */
 	readonly slowOnce?: { readonly cmd: number; readonly sub: number; readonly mode: Mode; readonly ms: number; readonly skip?: number };
 	readonly blInfo?: Uint8Array;
@@ -83,6 +97,9 @@ const MAGIC_OFFSET = 0xb0;
 const MAGIC = 0x5aa5;
 const FIXED_WORDS_OFFSET = 0x78;
 const WRITE_CHUNK_BYTES = 52;
+/** Virtual time each command costs, and each erased page on top: rough, so gaps and waits are not all zero. */
+const COMMAND_MS = 1;
+const ERASE_PAGE_MS = 10;
 
 export function blInfoBlock(fields: { readonly fwOffset?: number; readonly fwPages?: number; readonly pageSize?: number; readonly bootPid?: number } = {}): Uint8Array {
 	const block = new Uint8Array(BL_INFO_BYTES);
@@ -234,6 +251,10 @@ export class FakeTab60 {
 				this.#flash.set(page.subarray(0, 52), PROTOCOL_BASE);
 				this.#flash.set(official, PROTOCOL_BASE + FW_OFFSET);
 				break;
+			case "update-mode-damaged-image":
+				this.#flash.set(page, PROTOCOL_BASE);
+				this.#flash.set(untrusted, PROTOCOL_BASE + FW_OFFSET);
+				break;
 			default: {
 				const exhaustive: never = starting;
 				throw new Error(String(exhaustive));
@@ -340,15 +361,27 @@ export class FakeTab60 {
 			return;
 		}
 		this.#received.push({ t: this.clock.now(), cmd: bytes[0] ?? 0, sub: bytes[1] ?? 0, mode: this.#mode });
+		if (this.clock instanceof VirtualClock) this.clock.advance(COMMAND_MS);
+		if (this.options.loseLinkAfterPacket === index) {
+			const generation = this.#generation;
+			this.#handle(socket, bytes, true);
+			// A RESET the board took has already scheduled its own re-enumeration; the lost ack adds nothing.
+			if (generation !== this.#generation) return;
+			if (this.options.resetOnLoss) this.#reset(this.#bootMode());
+			else this.#reenumerate(this.#mode);
+			return;
+		}
 		queueMicrotask(() => this.#handle(socket, bytes));
 	}
 
-	#handle(socket: Socket, bytes: Uint8Array): void {
-		if (!this.#sockets.has(socket)) return;
+	/** `mute` executes the command and sends nothing back, on time or late. */
+	#handle(socket: Socket, bytes: Uint8Array, mute = false): void {
+		if (mute) socket = { report: () => undefined, detached: () => undefined, late: () => undefined };
+		else if (!this.#sockets.has(socket)) return;
 		const cmd = bytes[0] ?? 0;
 		const sub = bytes[1] ?? 0;
 		const slow = this.#slowOnce;
-		if (slow !== null && slow.cmd === cmd && slow.sub === sub && slow.mode === this.#mode) {
+		if (!mute && slow !== null && slow.cmd === cmd && slow.sub === sub && slow.mode === this.#mode) {
 			if (this.#slowSkip > 0) this.#slowSkip--;
 			else {
 				this.#slowOnce = null;
@@ -374,6 +407,8 @@ export class FakeTab60 {
 			out[5] = sub;
 			socket.report(out);
 		};
+		const always = this.options.refuseAlways;
+		if (always !== undefined && always.cmd === cmd && always.sub === sub) return refuse();
 		if (this.#refuseOnce !== null && this.#refuseOnce.cmd === cmd && this.#refuseOnce.sub === sub) {
 			this.#refuseOnce = null;
 			refuse();
@@ -456,6 +491,7 @@ export class FakeTab60 {
 	#erase(firstPage: number, pages: number): void {
 		const order = Array.from({ length: pages }, (_, i) => firstPage + i);
 		if ((this.options.eraseOrder ?? "descending") === "descending") order.reverse();
+		if (this.clock instanceof VirtualClock) this.clock.advance(pages * ERASE_PAGE_MS);
 		for (const page of order) {
 			if (page * PAGE_SIZE >= FW_OFFSET && this.#pageValid()) this.#violations.push({ kind: "app-changed-under-valid-page", page });
 			this.#flash.fill(0xff, PROTOCOL_BASE + page * PAGE_SIZE, PROTOCOL_BASE + (page + 1) * PAGE_SIZE);

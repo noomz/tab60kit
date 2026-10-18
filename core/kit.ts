@@ -82,7 +82,10 @@ export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit
 				return state;
 			});
 		} catch (error) {
-			if (!(error instanceof Busy)) throw error;
+			if (!(error instanceof Busy)) {
+				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board });
+				throw error;
+			}
 			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board });
 			return state;
 		} finally {

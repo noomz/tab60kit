@@ -210,10 +210,34 @@ test("the virtual clock: sleeps cost no wall time, a late answer advances to it,
 	};
 	expect(toHex(await ask(1_000)).slice(0, 4)).toBe("1202");
 	expect(toHex(await ask(1_000)).slice(0, 4)).toBe("1202");
-	expect(port.clock.now()).toBe(15_300);
+	// Each command costs 1 ms of virtual time, then the late answer adds its 300 ms.
+	expect(port.clock.now()).toBe(15_302);
 	board.ignoreInIap = true;
 	await expect(ask(1_000)).rejects.toThrow("no input report within 1000 ms");
-	expect(port.clock.now()).toBe(16_300);
-	expect(board.received.map((r) => r.t)).toEqual([15_000, 15_000, 15_300]);
+	expect(port.clock.now()).toBe(16_303);
+	expect(board.received.map((r) => r.t)).toEqual([15_000, 15_001, 15_302]);
 	expect(board.received.every((r) => r.mode === "iap")).toBe(true);
+});
+
+test("loseLinkAfterPacket executes the command and loses the link before the reply", async () => {
+	const board = new FakeTab60({ starting: "update-mode-official-image", target, loseLinkAfterPacket: 0 });
+	const { ask, detached } = tap(board);
+	expect(await ask(erase(0, 0x200))).toEqual([]);
+	expect(detached()).toBe(1);
+	expect(await board.bootTarget()).toEqual({ mode: "iap", versionPageSha256: "erased" });
+});
+
+test("refuseAlways refuses every matching command and leaves flash alone", async () => {
+	const board = new FakeTab60({ starting: "update-mode-official-image", target, refuseAlways: { cmd: 0x1d, sub: 0x00 } });
+	const { ask } = tap(board);
+	for (let i = 0; i < 3; i++) expect((await ask(erase(0, 0x200)))[0]?.slice(0, 4)).toBe("ffaa");
+	expect((await board.bootTarget()).mode).toBe("app");
+});
+
+test("update-mode-damaged-image holds a valid page over an image that misses the target sum", async () => {
+	const board = new FakeTab60({ starting: "update-mode-damaged-image", target });
+	const { ask } = tap(board);
+	expect(board.mode).toBe("iap");
+	expect((await board.bootTarget()).mode).toBe("app");
+	expect(await ask(`1d010000${u32(0x200)}${u32(target.imageBytes)}`)).not.toEqual([`1d010000${u32(target.wireSum32)}`.padEnd(128, "0")]);
 });
