@@ -6,8 +6,8 @@
  * length and SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
  * tests stay byte-exact without redistributing vendor bytes.
  */
-import type { DevicePort, Link, Mode, WantReason } from "../core/port";
-import { type Sha256, notImplemented, sha256Literal } from "../core/units";
+import { type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type Mode, type OutReport, type WantReason, asInReport, modeOf } from "../core/port";
+import { type Sha256, sha256Literal } from "../core/units";
 
 /**
  * What the page records about the session: the tool commit, user agent, platform, page URL, the `?fake` mode, and the
@@ -242,18 +242,183 @@ export function parseTranscript(json: unknown): Transcript {
 	};
 }
 
-/**
- * A port that plays a transcript back. TODO: each output report must equal the next recorded "out" entry (or match
- * an "out-write" by header and payload hash); the reply is the next "in" entry. Any divergence throws with the index.
- */
-export function replayPort(transcript: Transcript): DevicePort {
-	return notImplementedPort(`replayPort(${transcript.entries.length} entries)`);
+/** What the core did that the transcript did not record at that point. */
+export class ReplayDiverged extends Error {
+	override readonly name = "ReplayDiverged";
+	constructor(
+		readonly index: number,
+		readonly expected: string,
+		readonly got: string,
+	) {
+		super(`replay diverged at entry ${index}: the transcript has ${expected}, the core did ${got}`);
+	}
 }
 
-export function notImplementedPort(what: string): DevicePort {
+export interface ReplayPort extends DevicePort {
+	/** The first divergence, kept here because the job under test may catch the error it threw. */
+	readonly divergence: ReplayDiverged | null;
+	/** The wire entries the core has not reached yet. */
+	remaining(): readonly { readonly index: number; readonly entry: TranscriptEntry }[];
+}
+
+/** "in" shares its union member with "discarded", so it is spelled out. */
+type WireEntry = Extract<TranscriptEntry, { kind: "opened" | "out" | "out-write" | "send-failed" | "lost" | "closed" }> | { readonly t: number; readonly kind: "in"; readonly hex: string };
+
+const WIRE_KINDS: readonly string[] = ["opened", "out", "out-write", "in", "send-failed", "lost", "closed"] satisfies readonly WireEntry["kind"][];
+const isWire = (entry: TranscriptEntry): entry is WireEntry => WIRE_KINDS.includes(entry.kind);
+
+const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (b) => Number.parseInt(b, 16));
+
+async function sha256Hex(bytes: Uint8Array): Promise<Sha256> {
+	return sha256Literal(hexOf(new Uint8Array(await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes)))));
+}
+
+function describeEntry(entry: WireEntry | undefined): string {
+	if (entry === undefined) return "nothing left";
+	switch (entry.kind) {
+		case "opened":
+			return `an open of 0x${entry.productId.toString(16)} for ${entry.reason}`;
+		case "out":
+		case "in":
+		case "send-failed":
+			return `${entry.kind} ${entry.hex.slice(0, 24)}`;
+		case "out-write":
+			return `a WRITE ${entry.header} of ${entry.payloadBytes} bytes`;
+		case "lost":
+		case "closed":
+			return `${entry.kind}${entry.mode === undefined ? "" : ` (${entry.mode})`}`;
+		default: {
+			const exhaustive: never = entry;
+			return exhaustive;
+		}
+	}
+}
+
+/**
+ * A port that plays a transcript back, in the transcript's order. Each output report must equal the next recorded
+ * "out" entry (or match an "out-write" by header and payload hash), and each read gets the next "in" entry. An open
+ * waits until the transcript reaches its "opened" entry, because the core asks for the update-mode link before the
+ * RESET that makes it appear. A read that finds no "in" next times out, as it did when recorded. The clock is the
+ * transcript's: it reads the time of the last entry consumed, and a sleep returns at once.
+ * Entries the core does not cause (picks, visibility, typing, preconditions, discarded reports) are skipped.
+ */
+export function replayPort(transcript: Transcript): ReplayPort {
+	const wire = transcript.entries.flatMap((entry, index) => (isWire(entry) ? [{ index, entry }] : []));
+	let cursor = 0;
+	let now = 0;
+	let divergence: ReplayDiverged | null = null;
+	const opens: { readonly want: DeviceWant; readonly resolve: (link: Link) => void; readonly reject: (error: unknown) => void }[] = [];
+	const peek = () => wire[cursor];
+	const take = () => {
+		const item = wire[cursor++];
+		if (item !== undefined) now = item.entry.t;
+		return item;
+	};
+	const diverge = (got: string): never => {
+		const item = peek();
+		divergence ??= new ReplayDiverged(item?.index ?? transcript.entries.length, describeEntry(item?.entry), got);
+		throw divergence;
+	};
+
+	/** Resolves the waiting open, if any, once the transcript reaches an "opened" entry. */
+	function settleOpens(): void {
+		const item = peek();
+		if (item?.entry.kind !== "opened") return;
+		const { entry } = item;
+		const at = opens.findIndex(({ want }) => want.reason === entry.reason);
+		if (at === -1) return;
+		const [open] = opens.splice(at, 1);
+		if (open === undefined) return;
+		const mode = modeOf(entry.productId);
+		take();
+		if (mode === null || !open.want.modes.includes(mode)) {
+			divergence ??= new ReplayDiverged(item.index, describeEntry(entry), `an open for ${open.want.modes.join(" or ")}`);
+			open.reject(divergence);
+			return;
+		}
+		open.resolve(new ReplayLink(mode));
+	}
+
+	class ReplayLink implements Link {
+		#lost = false;
+		#settleLost = () => undefined as void;
+		readonly lost = new Promise<void>((resolve) => {
+			this.#settleLost = resolve;
+		});
+
+		constructor(readonly mode: Mode) {}
+
+		/** Consumes a recorded loss of this link wherever it sits next. */
+		#noteLoss(): boolean {
+			const entry = peek()?.entry;
+			if (entry?.kind === "lost" && (entry.mode === undefined || entry.mode === this.mode)) {
+				take();
+				this.#lost = true;
+				this.#settleLost();
+			}
+			return this.#lost;
+		}
+
+		async send(report: OutReport): Promise<void> {
+			settleOpens();
+			if (this.#noteLoss()) throw new LinkLost("the recorded link was lost");
+			const entry = peek()?.entry;
+			const hex = hexOf(report);
+			if (entry?.kind === "out") {
+				if (entry.hex !== hex) diverge(`out ${hex.slice(0, 24)}`);
+			} else if (entry?.kind === "out-write") {
+				const payloadSha256 = await sha256Hex(report.subarray(4, 4 + report[1]!));
+				if (entry.header !== hex.slice(0, 8) || entry.payloadBytes !== report[1] || entry.payloadSha256 !== payloadSha256) diverge(`a WRITE ${hex.slice(0, 8)}`);
+			} else diverge(`out ${hex.slice(0, 24)}`);
+			take();
+			const failed = peek()?.entry;
+			if (failed?.kind === "send-failed") {
+				take();
+				throw new LinkLost(failed.error);
+			}
+			settleOpens();
+		}
+
+		async next(timeoutMs: number): Promise<InReport> {
+			if (this.#noteLoss()) throw new LinkLost("the recorded link was lost");
+			const entry = peek()?.entry;
+			if (entry?.kind !== "in") throw new LinkTimeout(`no recorded reply within ${timeoutMs} ms`);
+			take();
+			settleOpens();
+			return asInReport(fromHex(entry.hex));
+		}
+
+		discardPending(): readonly InReport[] {
+			return [];
+		}
+
+		async close(): Promise<void> {
+			this.#noteLoss();
+			const entry = peek()?.entry;
+			if (entry?.kind !== "closed" || (entry.mode !== undefined && entry.mode !== this.mode)) diverge(`a close of the ${this.mode} link`);
+			take();
+			settleOpens();
+		}
+	}
+
 	return {
-		open: async () => notImplemented(`${what}.open`),
-		exclusive: async () => notImplemented(`${what}.exclusive`),
-		clock: { now: () => notImplemented(`${what}.clock.now`), sleep: async () => notImplemented(`${what}.clock.sleep`) },
+		open: (want, signal) =>
+			new Promise<Link>((resolve, reject) => {
+				if (signal.aborted) {
+					reject(signal.reason);
+					return;
+				}
+				opens.push({ want, resolve, reject });
+				settleOpens();
+			}),
+		exclusive: (job) => job(),
+		clock: {
+			now: () => now,
+			sleep: async (_ms, signal) => signal.throwIfAborted(),
+		},
+		get divergence() {
+			return divergence;
+		},
+		remaining: () => wire.slice(cursor),
 	};
 }

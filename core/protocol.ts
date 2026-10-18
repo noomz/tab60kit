@@ -16,8 +16,8 @@
  * Only the audit makes an `OutReport`, the one type `Link.send` accepts.
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
-import type { FlashableImage } from "./firmware";
-import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, imageSpan, inWindow, parseBlInfo, windowFor } from "./flashmap";
+import { type FlashableImage, imageBytes } from "./firmware";
+import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, windowFor } from "./flashmap";
 import type { KeyId, KeyWrite, Layer, OsMode, Usage } from "./keymap";
 import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
@@ -87,6 +87,8 @@ export interface CommandSpec {
 
 const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
+/** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
+const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
 
 /**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
@@ -192,7 +194,7 @@ export const COMMANDS = {
 		payloadBytes: 8,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U5,
 	},
 	sum: {
 		label: "Sum of a range",
@@ -234,7 +236,7 @@ export const COMMANDS = {
 		payloadBytes: 4,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U5,
 	},
 	write: {
 		label: "Write up to 52 bytes",
@@ -248,7 +250,7 @@ export const COMMANDS = {
 		payloadBytes: "sub",
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
-		maturity: UNREVIEWED,
+		maturity: REVIEWED_FOR_U5,
 	},
 	cfgReadReverseMap: {
 		label: "Read reverse keymap (cmd 0x51/0x11)",
@@ -386,6 +388,11 @@ export class DeviceRefused extends Error {
 	) {
 		super(`${COMMANDS[command].label}: device error 0x${detail.toString(16)}`);
 	}
+}
+
+/** The version page read back after writeVersionBlock differs from the block it wrote. The next observation decides. */
+export class ReadBackMismatch extends Error {
+	override readonly name = "ReadBackMismatch";
 }
 
 /** Why the egress audit refused a frame. Every code but "not-cleared" means a bug in the core. */
@@ -630,6 +637,19 @@ function rangePayload(span: Span): Uint8Array {
 
 const u32Of = (reply: InReport) => viewOf(reply).getUint32(PAYLOAD_OFFSET, true);
 
+/** Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address. */
+async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (done: number, total: number) => void): Promise<void> {
+	const address = new Uint8Array(4);
+	new DataView(address.buffer).setUint32(0, span.offset, true);
+	await transmit(ch, "setWriteAddress", { payload: address }, NEVER_ABORTED);
+	const size = EXPECTED_LAYOUT.writeChunkBytes;
+	const chunks = Math.ceil(bytes.length / size);
+	for (let i = 0; i < chunks; i++) {
+		await transmit(ch, "write", { payload: bytes.subarray(i * size, (i + 1) * size) }, NEVER_ABORTED);
+		onChunk(i + 1, chunks);
+	}
+}
+
 /** READ MODE's payload byte 0 (R1 "Commands"). */
 const MODE_BYTE = { iap: 0, app: 1 } as const satisfies Record<Mode, number>;
 
@@ -667,7 +687,10 @@ async function readVersionPage(ch: Channel, signal: AbortSignal): Promise<Versio
 	return { bytes };
 }
 
-/** RESET to app is how a cancelled job sends the board home, so it leaves under a signal that never aborts. */
+/**
+ * RESET to app is how a cancelled job sends the board home, and a flash step runs to its end once it starts (a cancel
+ * stops the job at its next step boundary), so both leave under a signal that never aborts.
+ */
 const NEVER_ABORTED = new AbortController().signal;
 
 async function restartToApp(ch: Channel): Promise<void> {
@@ -891,15 +914,24 @@ class Iap implements IapSession {
 	}
 
 	async eraseWindow(): Promise<void> {
-		return notImplemented(`eraseWindow(${this.window.pageSize})`);
+		await transmit(this.ch, "erase", { payload: rangePayload(versionPage(this.window)) }, NEVER_ABORTED);
+		await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
 	}
 
 	async writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void> {
-		return notImplemented(`writeImage(${image.entry.id}, ${onChunk.name})`);
+		const { bytes } = imageBytes(image).wire;
+		const span = imageSpan(this.window, bytes.length);
+		if (span === null) throw new RangeError(`an image of ${bytes.length} bytes does not fit the window`);
+		await writeAt(this.ch, span, bytes, onChunk);
 	}
 
 	async writeVersionBlock(image: FlashableImage): Promise<void> {
-		return notImplemented(`writeVersionBlock(${image.entry.id})`);
+		const { bytes } = imageBytes(image).versionBlock;
+		const span = versionSpan(this.window);
+		if (bytes.length !== span.length) throw new RangeError(`a version block of ${bytes.length} bytes, expected ${span.length}`);
+		await writeAt(this.ch, span, bytes, () => undefined);
+		const back = (await readVersionPage(this.ch, NEVER_ABORTED)).bytes.subarray(0, span.length);
+		if (back.some((byte, at) => byte !== bytes[at])) throw new ReadBackMismatch("the version page read back differs from the block written");
 	}
 
 	exitToApp(): Promise<void> {

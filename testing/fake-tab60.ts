@@ -11,8 +11,8 @@
  * It also records violations: anything a real board might accept that this tool must never send.
  */
 import type { Clock, DevicePort, InReport, Link, Mode, OutReport } from "../core/port";
-import { LinkLost, ReportQueue, asInReport } from "../core/port";
-import { type Sha256, notImplemented } from "../core/units";
+import { LinkLost, LinkTimeout, ReportQueue, asInReport } from "../core/port";
+import { type Sha256, sha256Literal } from "../core/units";
 
 export interface FakeOptions {
 	/** What the board holds at the start of the test. */
@@ -35,6 +35,13 @@ export interface FakeOptions {
 	readonly versionBlock?: Uint8Array;
 	/** A delay keeps a chooser opened by the reset's click on screen before the bootloader row appears, as on a real board. */
 	readonly reenumerateAfterMs?: number;
+	/**
+	 * "virtual" moves time only when something waits: a sleep returns at once, and a late or missing answer advances
+	 * the clock to the reply or to the request's timeout. The drop sweep runs the 15 s link gate this way. Default "real".
+	 */
+	readonly clock?: "real" | "virtual";
+	/** The order the IAP erases the pages of one ERASE, which R1 does not document. Default "descending", the order that punishes one ERASE over the whole window. */
+	readonly eraseOrder?: "descending" | "ascending";
 }
 
 export type Violation =
@@ -46,8 +53,16 @@ export type Violation =
 	| { readonly kind: "app-changed-under-valid-page"; readonly page: number }
 	/** A config command (0x40 and up) sent during a flash job, or any command in a mode that lacks it. */
 	| { readonly kind: "wrong-mode"; readonly cmd: number; readonly sub: number; readonly mode: Mode }
-	/** An update-mode command this fake does not model yet (erase, CRC, set-address, write): U5. */
+	/** An update-mode command this fake does not model: CRC, which no clearance sends yet. */
 	| { readonly kind: "not-modeled"; readonly cmd: number; readonly sub: number };
+
+/** One output report the board received, stamped with the fake's clock. */
+export interface Received {
+	readonly t: number;
+	readonly cmd: number;
+	readonly sub: number;
+	readonly mode: Mode;
+}
 
 const REPORT_BYTES = 64;
 const PAYLOAD_OFFSET = 4;
@@ -67,6 +82,7 @@ const VERSION_PAGE_PARTS_IAP = 3;
 const MAGIC_OFFSET = 0xb0;
 const MAGIC = 0x5aa5;
 const FIXED_WORDS_OFFSET = 0x78;
+const WRITE_CHUNK_BYTES = 52;
 
 export function blInfoBlock(fields: { readonly fwOffset?: number; readonly fwPages?: number; readonly pageSize?: number; readonly bootPid?: number } = {}): Uint8Array {
 	const block = new Uint8Array(BL_INFO_BYTES);
@@ -122,6 +138,8 @@ export interface Plug {
 export interface Socket {
 	readonly report: (bytes: Uint8Array) => void;
 	readonly detached: () => void;
+	/** A virtual-clock link takes answers that come `ms` late (Infinity: never) here, and decides between reply and timeout. */
+	readonly late?: (ms: number, deliver: () => void) => void;
 }
 
 const realClock: Clock = {
@@ -144,8 +162,35 @@ const realClock: Clock = {
 		}),
 };
 
+/** Time that moves only when the fake or a sleep moves it. */
+export class VirtualClock implements Clock {
+	#now = 0;
+
+	now(): number {
+		return this.#now;
+	}
+
+	advance(ms: number): void {
+		this.#now += ms;
+	}
+
+	async sleep(ms: number, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted();
+		this.#now += ms;
+	}
+}
+
+async function sha256Of(bytes: Uint8Array): Promise<Sha256> {
+	const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes)));
+	return sha256Literal(Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join(""));
+}
+
 export class FakeTab60 {
 	#mode: Mode;
+	/** False between a detach and the re-enumeration that follows it: the host sees no device. */
+	#present = true;
+	/** Only the latest scheduled re-enumeration happens; a second detach supersedes the first. */
+	#generation = 0;
 	readonly #flash = new Uint8Array(FLASH_BYTES).fill(0xff);
 	readonly #sockets = new Set<Socket>();
 	readonly #arrivals: { readonly modes: readonly Mode[]; readonly resolve: () => void }[] = [];
@@ -154,7 +199,11 @@ export class FakeTab60 {
 	#slowOnce: NonNullable<FakeOptions["slowOnce"]> | null;
 	#slowSkip: number;
 	#packets = 0;
+	/** The IAP's write address, a window offset, held in SRAM until the next MCU reset. */
+	#cursor: number | null = null;
 	readonly #violations: Violation[] = [];
+	readonly #received: Received[] = [];
+	readonly clock: Clock;
 	ignoreInIap = false;
 
 	constructor(readonly options: FakeOptions) {
@@ -162,6 +211,7 @@ export class FakeTab60 {
 		this.#refuseOnce = options.refuseOnce ?? null;
 		this.#slowOnce = options.slowOnce ?? null;
 		this.#slowSkip = options.slowOnce?.skip ?? 0;
+		this.clock = options.clock === "virtual" ? new VirtualClock() : realClock;
 		this.#flash.set(options.blInfo ?? blInfoBlock(), BL_INFO_ADDR);
 		const page = options.versionBlock ?? syntheticVersionBlock();
 		const official = bytesSummingTo(target.imageBytes, target.wireSum32);
@@ -204,9 +254,14 @@ export class FakeTab60 {
 		return this.#packets;
 	}
 
-	/** Where the board would go on its next reset, and what its version page holds. */
-	bootTarget(): { readonly mode: Mode; readonly versionPageSha256: Sha256 | "erased" } {
-		return notImplemented("bootTarget");
+	get received(): readonly Received[] {
+		return this.#received;
+	}
+
+	/** Where the board would go on its next reset, and what its 180-byte version block holds. */
+	async bootTarget(): Promise<{ readonly mode: Mode; readonly versionPageSha256: Sha256 | "erased" }> {
+		const block = this.#flash.slice(PROTOCOL_BASE, PROTOCOL_BASE + VERSION_BLOCK_BYTES);
+		return { mode: this.#bootMode(), versionPageSha256: block.every((b) => b === 0xff) ? "erased" : await sha256Of(block) };
 	}
 
 	plug(socket: Socket): Plug {
@@ -223,7 +278,7 @@ export class FakeTab60 {
 	}
 
 	whenIn(modes: readonly Mode[], signal: AbortSignal): Promise<void> {
-		if (modes.includes(this.#mode)) return Promise.resolve();
+		if (this.#present && modes.includes(this.#mode)) return Promise.resolve();
 		return new Promise<void>((resolve, reject) => {
 			if (signal.aborted) {
 				reject(signal.reason);
@@ -239,23 +294,52 @@ export class FakeTab60 {
 		});
 	}
 
+	/**
+	 * A shell that watches enumeration, as a Node shell would. An open for a mode the board is not in waits for the next
+	 * enumeration, and rejects LinkLost when the board comes back in a mode the caller did not ask for (a RESET that
+	 * the board never received, so it re-enumerated where it was). The job counts a loss and observes again.
+	 */
 	port(): DevicePort {
 		return {
 			open: async (want, signal) => {
-				await this.whenIn(want.modes, signal);
+				if (!this.#present || !want.modes.includes(this.#mode)) {
+					const arrived = await this.#nextEnumeration(signal);
+					if (!want.modes.includes(arrived)) throw new LinkLost(`the board came back in ${arrived === "app" ? "normal" : "update"} mode`);
+				}
 				return new FakeLink(this, this.#mode);
 			},
 			exclusive: (job) => job(),
-			clock: realClock,
+			clock: this.clock,
 		};
+	}
+
+	#nextEnumeration(signal: AbortSignal): Promise<Mode> {
+		return new Promise<Mode>((resolve, reject) => {
+			if (signal.aborted) {
+				reject(signal.reason);
+				return;
+			}
+			const onAbort = () => {
+				stop();
+				reject(signal.reason);
+			};
+			const stop = this.onEnumerate((mode) => {
+				stop();
+				signal.removeEventListener("abort", onAbort);
+				resolve(mode);
+			});
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 
 	#receive(socket: Socket, bytes: Uint8Array): void {
 		const index = this.#packets++;
 		if (this.options.loseLinkAtPacket === index) {
-			this.#reset(this.options.resetOnLoss ? this.#bootMode() : this.#mode);
+			if (this.options.resetOnLoss) this.#reset(this.#bootMode());
+			else this.#reenumerate(this.#mode);
 			return;
 		}
+		this.#received.push({ t: this.clock.now(), cmd: bytes[0] ?? 0, sub: bytes[1] ?? 0, mode: this.#mode });
 		queueMicrotask(() => this.#handle(socket, bytes));
 	}
 
@@ -268,7 +352,7 @@ export class FakeTab60 {
 			if (this.#slowSkip > 0) this.#slowSkip--;
 			else {
 				this.#slowOnce = null;
-				setTimeout(() => this.#handle(socket, bytes), slow.ms);
+				this.#late(socket, slow.ms, () => this.#handle(socket, bytes));
 				return;
 			}
 		}
@@ -295,7 +379,7 @@ export class FakeTab60 {
 			refuse();
 			return;
 		}
-		if (this.#mode === "iap" && this.ignoreInIap) return;
+		if (this.#mode === "iap" && this.ignoreInIap) return this.#late(socket, Number.POSITIVE_INFINITY, () => undefined);
 		const mode = this.#mode;
 		const versionPagePart = (part: number) => reply(this.#flash.subarray(PROTOCOL_BASE + part * PAYLOAD_BYTES, PROTOCOL_BASE + (part + 1) * PAYLOAD_BYTES));
 		if (cmd === 0x12 && sub === 0x00) return reply((mode === "iap" ? this.options.blInfoInIap : undefined) ?? this.#flash.subarray(BL_INFO_ADDR, BL_INFO_ADDR + BL_INFO_BYTES));
@@ -304,26 +388,91 @@ export class FakeTab60 {
 		if (mode === "app" && cmd === 0x11 && sub === 0x00) return this.#reset("iap");
 		if (mode === "iap") {
 			if (cmd === 0x12 && sub === 0x01) return reply(FW_INFO);
-			if (cmd === 0x1d && sub === 0x01) {
-				const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+			const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+			if (cmd === 0x1d && (sub === 0x00 || sub === 0x01)) {
 				const offset = view.getUint32(4, true);
 				const length = view.getUint32(8, true);
 				if (offset + length > WINDOW_BYTES || length === 0) {
 					this.#violations.push({ kind: "outside-window", cmd, offset, length });
 					return refuse();
 				}
+				if (sub === 0x00) {
+					if (offset % PAGE_SIZE !== 0 || length % PAGE_SIZE !== 0) return refuse();
+					this.#erase(offset / PAGE_SIZE, length / PAGE_SIZE);
+					return reply(new Uint8Array(0));
+				}
 				const payload = new Uint8Array(4);
 				new DataView(payload.buffer).setUint32(0, this.#sum(PROTOCOL_BASE + offset, length), true);
 				return reply(payload);
 			}
+			if (cmd === 0x1e && sub === 0x01) {
+				const offset = view.getUint32(4, true);
+				if (offset >= WINDOW_BYTES) {
+					this.#violations.push({ kind: "outside-window", cmd, offset, length: 1 });
+					this.#cursor = null;
+					return refuse();
+				}
+				this.#cursor = offset;
+				return reply(new Uint8Array(0));
+			}
+			if (cmd === 0x1f && sub >= 1 && sub <= WRITE_CHUNK_BYTES) {
+				const at = this.#cursor;
+				if (at === null) return refuse();
+				if (at + sub > WINDOW_BYTES) {
+					this.#violations.push({ kind: "outside-window", cmd, offset: at, length: sub });
+					this.#cursor = null;
+					return refuse();
+				}
+				this.#write(at, bytes.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + sub));
+				this.#cursor = at + sub;
+				// R1's write ack: 1E 02, then the next write address, which the host compares with its own cursor.
+				const out = new Uint8Array(REPORT_BYTES);
+				out[0] = 0x1e;
+				out[1] = 0x02;
+				out.set(echo, 2);
+				new DataView(out.buffer).setUint32(PAYLOAD_OFFSET, this.#cursor, true);
+				socket.report(out);
+				return;
+			}
 			if (cmd === 0x11 && sub === 0x01) return this.#reset(this.#bootMode());
-			if ((cmd === 0x1d && sub <= 0x02) || cmd === 0x1e || cmd === 0x1f) {
+			if (cmd === 0x1d && sub === 0x02) {
 				this.#violations.push({ kind: "not-modeled", cmd, sub });
 				return refuse();
 			}
 		}
 		this.#violations.push({ kind: "wrong-mode", cmd, sub, mode });
 		refuse();
+	}
+
+	#late(socket: Socket, ms: number, deliver: () => void): void {
+		if (socket.late !== undefined) socket.late(ms, deliver);
+		else if (Number.isFinite(ms)) setTimeout(deliver, ms);
+	}
+
+	#pageValid(): boolean {
+		return this.#bootMode() === "app";
+	}
+
+	#erase(firstPage: number, pages: number): void {
+		const order = Array.from({ length: pages }, (_, i) => firstPage + i);
+		if ((this.options.eraseOrder ?? "descending") === "descending") order.reverse();
+		for (const page of order) {
+			if (page * PAGE_SIZE >= FW_OFFSET && this.#pageValid()) this.#violations.push({ kind: "app-changed-under-valid-page", page });
+			this.#flash.fill(0xff, PROTOCOL_BASE + page * PAGE_SIZE, PROTOCOL_BASE + (page + 1) * PAGE_SIZE);
+		}
+	}
+
+	/** NOR flash: a write clears bits and never sets them, so writing over unerased bytes leaves their AND. */
+	#write(at: number, data: Uint8Array): void {
+		const wasValid = this.#pageValid();
+		if (at + data.length > FW_OFFSET && wasValid) {
+			this.#violations.push({ kind: "app-changed-under-valid-page", page: Math.floor(Math.max(at, FW_OFFSET) / PAGE_SIZE) });
+		}
+		const target = this.#flash.subarray(PROTOCOL_BASE + at, PROTOCOL_BASE + at + data.length);
+		target.set(target.map((old, i) => old & (data[i] ?? 0xff)));
+		if (!wasValid && this.#pageValid() && this.#sum(PROTOCOL_BASE + FW_OFFSET, this.options.target.imageBytes) !== this.options.target.wireSum32 >>> 0) {
+			this.#violations.push({ kind: "version-block-before-verified-image" });
+		}
 	}
 
 	#sum(from: number, length: number): number {
@@ -341,9 +490,18 @@ export class FakeTab60 {
 		return magic && fixed ? "app" : "iap";
 	}
 
+	/** An MCU reset: SRAM, and with it the write address, is gone. */
 	#reset(into: Mode): void {
+		this.#cursor = null;
+		this.#reenumerate(into);
+	}
+
+	/** A USB glitch: the host sees the device leave and come back; the MCU keeps running. */
+	#reenumerate(into: Mode): void {
 		this.#detachAll();
-		setTimeout(() => this.#enumerate(into), this.options.reenumerateAfterMs ?? 2);
+		this.#present = false;
+		const generation = ++this.#generation;
+		setTimeout(() => generation === this.#generation && this.#enumerate(into), this.options.reenumerateAfterMs ?? 2);
 	}
 
 	#detachAll(): void {
@@ -355,6 +513,7 @@ export class FakeTab60 {
 
 	#enumerate(mode: Mode): void {
 		this.#mode = mode;
+		this.#present = true;
 		for (const arrival of this.#arrivals.splice(0)) {
 			if (arrival.modes.includes(mode)) arrival.resolve();
 			else this.#arrivals.push(arrival);
@@ -363,9 +522,25 @@ export class FakeTab60 {
 	}
 }
 
+interface Waiter {
+	readonly timeoutMs: number;
+	readonly resolve: (report: InReport) => void;
+	readonly reject: (error: Error) => void;
+}
+
+/**
+ * On the real clock, input goes through the core's ReportQueue and its timers. On the virtual clock, the link keeps
+ * its own inbox: a request's timeout fires only when the board reports an answer late or never, which advances the
+ * clock to the reply or to the timeout, whichever comes first.
+ */
 class FakeLink implements Link {
 	readonly #queue = new ReportQueue();
 	readonly #plug: Plug;
+	readonly #virtual: VirtualClock | null;
+	readonly #inbox: InReport[] = [];
+	#waiter: Waiter | null = null;
+	#late: { readonly ms: number; readonly deliver: () => void } | null = null;
+	#endedBy: LinkLost | null = null;
 	#ended = false;
 	readonly lost: Promise<void>;
 
@@ -374,13 +549,14 @@ class FakeLink implements Link {
 		this.lost = new Promise<void>((resolve) => {
 			settleLost = resolve;
 		});
+		this.#virtual = board.clock instanceof VirtualClock ? board.clock : null;
 		this.#plug = board.plug({
-			report: (bytes) => this.#queue.push(asInReport(bytes)),
+			report: (bytes) => this.#push(asInReport(bytes)),
 			detached: () => {
-				this.#ended = true;
-				this.#queue.end(new LinkLost("the board re-enumerated"));
+				this.#end(new LinkLost("the board re-enumerated"));
 				settleLost();
 			},
+			...(this.#virtual === null ? {} : { late: (ms: number, deliver: () => void) => this.#onLate(ms, deliver) }),
 		});
 	}
 
@@ -390,17 +566,67 @@ class FakeLink implements Link {
 	}
 
 	next(timeoutMs: number): Promise<InReport> {
-		return this.#queue.next(timeoutMs);
+		if (this.#virtual === null) return this.#queue.next(timeoutMs);
+		if (this.#endedBy !== null) return Promise.reject(this.#endedBy);
+		const queued = this.#inbox.shift();
+		if (queued !== undefined) return Promise.resolve(queued);
+		return new Promise<InReport>((resolve, reject) => {
+			const waiter = { timeoutMs, resolve, reject };
+			const late = this.#late;
+			this.#late = null;
+			if (late === null) this.#waiter = waiter;
+			else this.#settleLate(late, waiter);
+		});
 	}
 
 	discardPending(): readonly InReport[] {
-		return this.#queue.discardPending();
+		return this.#virtual === null ? this.#queue.discardPending() : this.#inbox.splice(0);
 	}
 
 	async close(): Promise<void> {
 		if (this.#ended) return;
-		this.#ended = true;
 		this.#plug.unplug();
-		this.#queue.end(new LinkLost("closed"));
+		this.#end(new LinkLost("closed"));
+	}
+
+	#push(report: InReport): void {
+		if (this.#virtual === null) return this.#queue.push(report);
+		if (this.#endedBy !== null) return;
+		const waiter = this.#waiter;
+		this.#waiter = null;
+		if (waiter === null) this.#inbox.push(report);
+		else waiter.resolve(report);
+	}
+
+	#end(error: LinkLost): void {
+		if (this.#ended) return;
+		this.#ended = true;
+		if (this.#virtual === null) return this.#queue.end(error);
+		this.#endedBy = error;
+		this.#inbox.length = 0;
+		this.#late = null;
+		this.#waiter?.reject(error);
+		this.#waiter = null;
+	}
+
+	#onLate(ms: number, deliver: () => void): void {
+		const waiter = this.#waiter;
+		this.#waiter = null;
+		if (waiter === null) this.#late = { ms, deliver };
+		else this.#settleLate({ ms, deliver }, waiter);
+	}
+
+	#settleLate(late: { readonly ms: number; readonly deliver: () => void }, waiter: Waiter): void {
+		const clock = this.#virtual;
+		if (clock === null) return;
+		if (late.ms <= waiter.timeoutMs) {
+			clock.advance(late.ms);
+			this.#waiter = waiter;
+			late.deliver();
+			return;
+		}
+		clock.advance(waiter.timeoutMs);
+		waiter.reject(new LinkTimeout(`no input report within ${waiter.timeoutMs} ms`));
+		if (Number.isFinite(late.ms)) late.deliver();
 	}
 }

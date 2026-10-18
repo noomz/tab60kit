@@ -82,5 +82,32 @@ else
 fi
 rm -rf "$copy"
 
+# docs/units.md U5: the drop sweep and the link-gate scenario must each notice the defect they exist for.
+mutation_check() {
+	local why=$1 file=$2 pattern=$3 applied=$4 expect=$5 copy out status
+	shift 5
+	copy=$(mktemp -d)
+	cp -R core testing package.json "$copy/"
+	perl -0pi -e "$pattern" "$copy/$file"
+	grep -qF -- "$applied" "$copy/$file" || { echo "FAIL mutation did not apply: $why"; exit 1; }
+	out=$(cd "$copy" && "$BUN" "$@" 2>&1)
+	status=$?
+	if [ $status -ne 0 ] && printf '%s\n' "$out" | grep -qF -- "$expect"; then
+		echo "PASS $why"
+	else
+		echo "FAIL missed $why:"; echo "$out" | tail -20; fails=$((fails+1))
+	fi
+	rm -rf "$copy"
+}
+mutation_check "the drop sweep catches a decideInIap that writes the version block over an unrecognized image" core/flash.ts \
+	's/if \(rewrite \|\| !isTargetImage\(chip\.image, target\)\) return "erase-and-write-image";/if (rewrite) return "erase-and-write-image";/' \
+	'if (rewrite) return "erase-and-write-image";' 'version-block-before-verified-image' testing/drop-sweep.ts official-image
+mutation_check "the drop sweep catches an eraseWindow that sends one ERASE over the whole window" core/protocol.ts \
+	's/await transmit\(this\.ch, "erase", \{ payload: rangePayload\(versionPage\(this\.window\)\) \}, NEVER_ABORTED\);\n\t\tawait transmit\(this\.ch, "erase", \{ payload: rangePayload\(appRegion\(this\.window\)\) \}, NEVER_ABORTED\);/await transmit(this.ch, "erase", { payload: rangePayload({ offset: versionPage(this.window).offset, length: this.window.end - this.window.base }) }, NEVER_ABORTED);/' \
+	'length: this.window.end - this.window.base' 'app-changed-under-valid-page' testing/drop-sweep.ts official-image
+mutation_check "the gate scenario catches a job that writes before judgeLink says stable" core/flash.ts \
+	's/if \(verdict\.kind === "stable"\) return;/if (verdict.kind === "stable" || true) return;/' \
+	'|| true) return;' '(fail) no flash write within 15 s of a timeout' test testing/flash-job.test.ts
+
 echo "failures: $fails"
 exit $fails

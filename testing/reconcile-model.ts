@@ -1,7 +1,7 @@
 /**
  * Candidate A's drop test (proof/reconcile.ts), adapted to this design's own decision code. It drives the real
  * decideInApp, decideInIap, STEPS, and MAX_LINK_LOSSES from core/flash.ts over a toy board (mode, image, version page:
- * no bytes, no addresses), through the loop that makeOfficial's TODO describes. Drops land at every combination of up
+ * no bytes, no addresses), through the loop that makeOfficial runs. Drops land at every combination of up
  * to four of the first 40 drop points, with and without an MCU reset on each drop, from nine starting states, on a
  * board whose image writes all verify and on one whose first two writes fail their checksum, which the vendor's
  * budget of three write attempts must still finish.
@@ -59,8 +59,9 @@ const IMAGE: Record<Contents, ImageCheck> = {
 	erased: unrecognized,
 	partial: unrecognized,
 };
-const appChip = (board: Board): AppChip => ({ mode: "app", info, window, page: PAGE[board.page] });
-const iapChip = (board: Board): IapChip => ({ mode: "iap", info, window, page: PAGE[board.page], image: IMAGE[board.image] });
+const blInfoSha256 = sha256Literal("0".repeat(64));
+const appChip = (board: Board): AppChip => ({ mode: "app", info, blInfoSha256, window, page: PAGE[board.page] });
+const iapChip = (board: Board): IapChip => ({ mode: "iap", info, blInfoSha256, window, page: PAGE[board.page], image: IMAGE[board.image] });
 
 /** A page with the 0x5AA5 magic: the target's block, or another firmware's. A block cut short has none. */
 const magic = (page: Contents) => page === "target" || page === "other";
