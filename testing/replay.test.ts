@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { U1_PROBES, type U1Context, u1Clearance, u1Connect, u1DeepCheck } from "../lab/u1-job";
+import { type IapChip, report } from "../core/chip";
+import { createKit } from "../core/kit";
 import { parseTranscript, replayPort } from "./transcript";
 
 const fixture = (name: string) => parseTranscript(JSON.parse(readFileSync(join(import.meta.dir, "fixtures", name), "utf8")));
@@ -56,3 +58,25 @@ test("replay rejects a pending open when its signal aborts", async () => {
 	cancel.abort(new Error("cancelled"));
 	await expect(pending).rejects.toThrow("cancelled");
 });
+
+for (const name of ["tab60kit-u6-2026-10-18T13-29-00-812Z.json", "tab60kit-u6-2026-10-18T13-30-25-781Z.json"]) {
+	test(`the U6 hardware transcript ${name} replays through a shipped kit, and the board's own replies draw the plan's flash map`, async () => {
+		const port = replayPort(fixture(name));
+		const kit = createKit(port);
+		expect(await kit.check("quick")).toMatchObject({ kind: "finished", result: { kind: "checked", depth: "quick" } });
+		let deep: IapChip | null = null;
+		kit.subscribe((state) => {
+			if (state.board?.mode === "iap") deep = state.board;
+		});
+		expect(await kit.check("deep")).toMatchObject({ kind: "finished", result: { kind: "checked", depth: "deep" } });
+		expect(port.divergence).toBeNull();
+		expect(port.remaining()).toEqual([]);
+		if (deep === null) throw new Error("no update-mode observation");
+		const rows = report(deep).regions.map((row) => row.finding);
+		expect(rows[0]).toMatchObject({ kind: "not-checkable-over-usb" });
+		expect(rows[0]?.kind === "not-checkable-over-usb" && rows[0].fingerprint).toMatch(/^[0-9a-f]{64}$/);
+		expect(rows[1]).toMatchObject({ kind: "official", by: "version-page-bytes", entry: { version: "V1.01.13" } });
+		expect(rows[2]).toMatchObject({ kind: "official", by: "sum", entry: { version: "V1.01.13" } });
+		expect(report(deep).boot).toBe("normal-mode");
+	});
+}
