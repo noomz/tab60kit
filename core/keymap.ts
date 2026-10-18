@@ -164,12 +164,27 @@ export function capabilities(clearance: Clearance): ConfigCapabilities {
 	};
 }
 
-/** Pure diff: the overrides whose usage differs from what the board reports. */
+const ascending = (a: number, b: number) => a - b;
+
+/**
+ * Pure diff: the overrides whose usage differs from what the board reports, by layer and then key. A cell without an
+ * override is left alone, because the defaults above the base layer are unknown (U10 settles which index is the
+ * base). A layer missing from `observed` gets every override written.
+ */
 export function planKeymap(
 	doc: KeymapDoc,
 	observed: ReadonlyMap<Layer, ReadonlyMap<KeyId, Usage>>,
 ): readonly KeyWrite[] {
-	return notImplemented(`planKeymap(${doc.overrides.size} layers, ${observed.size} observed)`);
+	const writes: KeyWrite[] = [];
+	for (const layer of [...doc.overrides.keys()].sort(ascending)) {
+		const keys = doc.overrides.get(layer)!;
+		const held = observed.get(layer);
+		for (const key of [...keys.keys()].sort(ascending)) {
+			const want = keys.get(key)!;
+			if (held?.get(key) !== want) writes.push({ layer, key, usage: want });
+		}
+	}
+	return writes;
 }
 
 /**
