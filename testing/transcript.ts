@@ -262,10 +262,11 @@ export interface ReplayPort extends DevicePort {
 }
 
 /** "in" shares its union member with "discarded", so it is spelled out. */
-type WireEntry = Extract<TranscriptEntry, { kind: "opened" | "out" | "out-write" | "send-failed" | "lost" | "closed" }> | { readonly t: number; readonly kind: "in"; readonly hex: string };
+export type WireEntry = Extract<TranscriptEntry, { kind: "opened" | "out" | "out-write" | "send-failed" | "lost" | "closed" }> | { readonly t: number; readonly kind: "in"; readonly hex: string };
 
 const WIRE_KINDS: readonly string[] = ["opened", "out", "out-write", "in", "send-failed", "lost", "closed"] satisfies readonly WireEntry["kind"][];
-const isWire = (entry: TranscriptEntry): entry is WireEntry => WIRE_KINDS.includes(entry.kind);
+/** The entries the core causes: opens, frames, replies, failed sends, losses, and closes. */
+export const isWire = (entry: TranscriptEntry): entry is WireEntry => WIRE_KINDS.includes(entry.kind);
 
 const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (b) => Number.parseInt(b, 16));
 

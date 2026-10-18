@@ -1,6 +1,17 @@
-import { CATALOG } from "@tab60kit/core";
+import { mountApp } from "./app";
+import { screenFor } from "./screens";
+import { viewFor } from "./view";
+import { startWebHid } from "./webhid-port";
 
-const known = CATALOG.map((entry) => `${entry.version} (${entry.layoutName})`).join(", ");
-
-document.body.textContent =
-	"hid" in navigator ? `The app arrives in plan unit U6. Official firmware in the catalog: ${known}.` : "Use Chrome or Edge.";
+const why = !("hid" in navigator) ? "no-webhid" : !isSecureContext ? "insecure-context" : null;
+if (why === null) {
+	const { kit, chooser } = startWebHid(navigator.hid, navigator.locks);
+	mountApp(document.body, kit, chooser);
+} else {
+	const view = viewFor(screenFor({ kind: "unsupported", why }), null);
+	const title = document.createElement("h1");
+	title.textContent = view.title;
+	const line = document.createElement("p");
+	line.textContent = view.lines.join(" ");
+	document.body.replaceChildren(title, line);
+}
