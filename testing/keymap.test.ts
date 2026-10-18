@@ -1,8 +1,8 @@
-// Plan U9: the key table and the keymap diff. The table's ROM bytes are checked locally by testing/real-image.ts (CI
-// has no vendor bytes); these tests check its shape. The generators are seeded, as in egress-property.test.ts, so a
-// failure names a case that repeats.
+// Plan U9: the key table, the keymap diff, and the document parse. The table's ROM bytes are checked locally by
+// testing/real-image.ts (CI has no vendor bytes); these tests check its shape. The generators are seeded, as in
+// egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
-import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, keyId, planKeymap, usage } from "../core/keymap";
+import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, keyId, parseKeymapDoc, planKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -104,4 +104,83 @@ test("10,000 random documents: applying the writes gives back every override and
 		const order = writes.map((w) => w.layer * 80 + w.key);
 		for (let j = 1; j < order.length; j++) if (order[j]! <= order[j - 1]!) throw new Error(`${where}: writes are not in layer, key order`);
 	}
+});
+
+const canonical = (overrides: Record<string, Record<string, unknown>> = { "0": { "41": 41 } }, osMode: unknown = null) => ({
+	format: "tab60kit-keymap",
+	version: 1,
+	osMode,
+	overrides,
+});
+
+test("parseKeymapDoc reads the canonical shape", () => {
+	const doc = parseKeymapDoc(canonical({ "0": { "41": 41, "4": 0xe0 }, "3": {} }, 2));
+	expect(doc).toEqual({
+		overrides: new Map<Layer, Map<KeyId, Usage>>([
+			[0, new Map([[keyId(4), usage(0xe0)], [keyId(41), usage(41)]])],
+			[3, new Map()],
+		]),
+		osMode: 2,
+	});
+});
+
+test("parseKeymapDoc rejects each malformed field with its path", () => {
+	const cases: readonly [unknown, string][] = [
+		[null, "$: "],
+		[[], "$: "],
+		["{}", "$: "],
+		[{ ...canonical(), extra: 1 }, "$.extra: "],
+		[{ version: 1, osMode: null, overrides: {} }, "$.format: is missing"],
+		[{ ...canonical(), format: "via" }, "$.format: "],
+		[{ ...canonical(), version: 2 }, "$.version: "],
+		[{ ...canonical(), version: "1" }, "$.version: "],
+		[canonical(undefined, 5), "$.osMode: "],
+		[canonical(undefined, 1.5), "$.osMode: "],
+		[canonical(undefined, "1"), "$.osMode: "],
+		[{ ...canonical(), overrides: [] }, "$.overrides: "],
+		[{ ...canonical(), overrides: null }, "$.overrides: "],
+		[canonical({ "4": {} }), "$.overrides.4: "],
+		[canonical({ "-1": {} }), "$.overrides.-1: "],
+		[canonical({ "00": {} }), "$.overrides.00: "],
+		[canonical({ base: {} }), "$.overrides.base: "],
+		[canonical({ "0": [] as unknown as Record<string, unknown> }), "$.overrides.0: "],
+		[canonical({ "1": 5 as unknown as Record<string, unknown> }), "$.overrides.1: "],
+		...[53, 57, 71, 79, 55, 80, 255].map((cell): [unknown, string] => [canonical({ "0": { [cell]: 4 } }), `$.overrides.0.${cell}: `]),
+		[canonical({ "0": { "041": 4 } }), "$.overrides.0.041: "],
+		[canonical({ "0": { "4.0": 4 } }), "$.overrides.0.4.0: "],
+		[canonical({ "0": { esc: 4 } }), "$.overrides.0.esc: "],
+		[canonical({ "2": { "4": 0xe8 } }), "$.overrides.2.4: "],
+		[canonical({ "2": { "4": -1 } }), "$.overrides.2.4: "],
+		[canonical({ "2": { "4": 4.5 } }), "$.overrides.2.4: "],
+		[canonical({ "2": { "4": "4" } }), "$.overrides.2.4: "],
+		[canonical({ "2": { "4": null } }), "$.overrides.2.4: "],
+	];
+	for (const [json, prefix] of cases) {
+		const got = parseKeymapDoc(json);
+		if (!("error" in got)) throw new Error(`accepted ${JSON.stringify(json)}`);
+		expect(got.error.startsWith(prefix)).toBe(true);
+	}
+});
+
+test("1,000 random documents round-trip through serialize and parse, and serialize is canonical", () => {
+	const r = random(0x0955_0003);
+	for (let i = 0; i < 1_000; i++) {
+		const doc = r.doc();
+		const text = serializeKeymapDoc(doc);
+		const back = parseKeymapDoc(JSON.parse(text));
+		expect(back).toEqual(doc);
+		expect(serializeKeymapDoc(back as KeymapDoc)).toBe(text);
+	}
+});
+
+test("serialize of a parsed canonical string returns the same string, sorted", () => {
+	const text = '{\n\t"format": "tab60kit-keymap",\n\t"version": 1,\n\t"osMode": null,\n\t"overrides": {\n\t\t"0": {\n\t\t\t"41": 41\n\t\t},\n\t\t"2": {}\n\t}\n}\n';
+	expect(serializeKeymapDoc(parseKeymapDoc(JSON.parse(text)) as KeymapDoc)).toBe(text);
+	const unsorted: KeymapDoc = {
+		overrides: new Map<Layer, Map<KeyId, Usage>>([[3, new Map([[keyId(41), usage(1)], [keyId(4), usage(2)]])], [1, new Map()]]),
+		osMode: 4,
+	};
+	expect(serializeKeymapDoc(unsorted)).toBe(
+		'{\n\t"format": "tab60kit-keymap",\n\t"version": 1,\n\t"osMode": 4,\n\t"overrides": {\n\t\t"1": {},\n\t\t"3": {\n\t\t\t"4": 2,\n\t\t\t"41": 1\n\t\t}\n\t}\n}\n',
+	);
 });

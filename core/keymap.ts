@@ -204,11 +204,62 @@ export function applyKeymap(doc: KeymapDoc): Job {
 		notImplemented(`applyKeymap(${doc.overrides.size} layers) from ${String(start?.mode)}, aborted=${ctx.signal.aborted}`);
 }
 
-/** Boundary parse for an imported file or stored JSON. Unknown keys, usages, or layers are errors, not dropped. */
+const FORMAT = "tab60kit-keymap";
+const VERSION = 1;
+const FIELDS = ["format", "version", "osMode", "overrides"] as const;
+const LAYERS: readonly string[] = ["0", "1", "2", "3"];
+const CAP_IDS: ReadonlySet<number> = new Set(TAB60_KEYS.map((cap) => cap.id));
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * Boundary parse for an imported file or stored JSON, the shape `serializeKeymapDoc` writes. Every field is required,
+ * and an unknown field, layer, key, or usage is an error naming its path, never dropped. A key is the decimal id of a
+ * cap in TAB60_KEYS. An empty layer object parses to an empty map, so the round trip is exact. Object.keys lists
+ * array-index keys ascending, so the maps come out sorted.
+ */
 export function parseKeymapDoc(json: unknown): KeymapDoc | { readonly error: string } {
-	return notImplemented(`parseKeymapDoc(${typeof json})`);
+	const error = (path: string, why: string) => ({ error: `${path}: ${why}` });
+	if (!isObject(json)) return error("$", "is not an object");
+	const extra = Object.keys(json).find((field) => !(FIELDS as readonly string[]).includes(field));
+	if (extra !== undefined) return error(`$.${extra}`, "is not a keymap field");
+	const missing = FIELDS.find((field) => !(field in json));
+	if (missing !== undefined) return error(`$.${missing}`, "is missing");
+	if (json.format !== FORMAT) return error("$.format", `is ${JSON.stringify(json.format)}, not "${FORMAT}"`);
+	if (json.version !== VERSION) return error("$.version", `is ${JSON.stringify(json.version)}, not ${VERSION}`);
+	const { osMode } = json;
+	if (osMode !== null && !(Number.isInteger(osMode) && (osMode as number) >= 0 && (osMode as number) <= 4)) {
+		return error("$.osMode", `is ${JSON.stringify(osMode)}, not null or an integer from 0 to 4`);
+	}
+	if (!isObject(json.overrides)) return error("$.overrides", "is not an object");
+
+	const overrides = new Map<Layer, ReadonlyMap<KeyId, Usage>>();
+	for (const layer of Object.keys(json.overrides)) {
+		const path = `$.overrides.${layer}`;
+		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 3");
+		const keys = json.overrides[layer];
+		if (!isObject(keys)) return error(path, "is not an object");
+		const layerMap = new Map<KeyId, Usage>();
+		for (const key of Object.keys(keys)) {
+			const id = Number(key);
+			if (String(id) !== key || !CAP_IDS.has(id)) return error(`${path}.${key}`, "is not the id of a TAB 60 cap");
+			const value = keys[key];
+			if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 0xe7) {
+				return error(`${path}.${key}`, `is ${JSON.stringify(value)}, not an integer from 0 to 231 (0xE7)`);
+			}
+			layerMap.set(keyId(id), usage(value as number));
+		}
+		overrides.set(Number(layer) as Layer, layerMap);
+	}
+	return { overrides, osMode: osMode as OsMode | null };
 }
 
+/** Deterministic: layers and keys ascending, tab-indented, with a final newline. `parseKeymapDoc` reads it back equal. */
 export function serializeKeymapDoc(doc: KeymapDoc): string {
-	return notImplemented(`serializeKeymapDoc(${doc.overrides.size})`);
+	const overrides: Record<string, Record<string, number>> = {};
+	for (const layer of [...doc.overrides.keys()].sort(ascending)) {
+		const keys = doc.overrides.get(layer)!;
+		overrides[layer] = Object.fromEntries([...keys.keys()].sort(ascending).map((key) => [key, keys.get(key)!]));
+	}
+	return `${JSON.stringify({ format: FORMAT, version: VERSION, osMode: doc.osMode, overrides }, null, "\t")}\n`;
 }
