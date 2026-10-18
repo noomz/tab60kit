@@ -13,6 +13,7 @@
 		"probes": "TSC=node_modules/.bin/tsc probes/run.sh",
 		"reconcile": "bun testing/reconcile-model.ts",
 		"sweep": "bun testing/u1-sweep.ts",
+		"real-exe": "bun testing/real-exe.ts",
 		"check": "bun run typecheck && bun test && bun run probes && bun run reconcile"
 	},
 	"devDependencies": {

@@ -20,7 +20,6 @@ import {
 	type Sha256,
 	type Sum32,
 	crc32Literal,
-	notImplemented,
 	sha256Literal,
 	sum32Literal,
 } from "./units";
@@ -168,20 +167,34 @@ export type Admission =
 	| { readonly kind: "refused"; readonly refusal: AdmissionRefusal };
 
 /**
- * The single flashability decision.
- * TODO:
- *   if provenance is "foreign" -> refused foreign-image with OPEN_FIRMWARE_PREREQUISITES (all unmet)
- *   if impliedBase !== protocolBase + fwOffset (0x3200) -> wrong-base
- *   entry = CATALOG.find(e => e.image.sha256 === plainSha256 && e.versionBlock.sha256 === versionBlock?.sha256)
- *   if none -> not-in-catalog
- *   if versionBlock is null -> no-version-block
- *   handle = { entry } as FlashableImage; BYTES.set(handle, { wire, versionBlock })   (the only construction site)
- *   -> admitted { image: handle }
+ * The single flashability decision. `catalog` is CATALOG for every shipped caller; a test passes its own to admit a
+ * synthetic image, because CI holds no vendor bytes.
+ *
+ * The bytes are checked against the entry's length, sum, and CRC-32 here, so the handle never rests on the
+ * candidate's claimed hash alone, and they are copied, so a caller cannot change them after admission.
  */
-export function admit(candidate: ImageCandidate): Admission {
-	return notImplemented(
-		`admit(${candidate.provenance.kind}, base must be ${EXPECTED_LAYOUT.protocolBase + EXPECTED_LAYOUT.fwOffset}, into ${BYTES.constructor.name})`,
+export function admit(candidate: ImageCandidate, catalog: readonly CatalogEntry[] = CATALOG): Admission {
+	const refused = (refusal: AdmissionRefusal): Admission => ({ kind: "refused", refusal });
+	if (candidate.provenance.kind === "foreign") return refused({ code: "foreign-image", missing: OPEN_FIRMWARE_PREREQUISITES });
+	const expected = EXPECTED_LAYOUT.protocolBase + EXPECTED_LAYOUT.fwOffset;
+	if (candidate.impliedBase !== expected) return refused({ code: "wrong-base", implied: candidate.impliedBase, expected });
+	const { wire, versionBlock } = candidate;
+	if (versionBlock === null) return refused({ code: "no-version-block" });
+	const entry = catalog.find(
+		(e) =>
+			e.image.sha256 === candidate.plainSha256 &&
+			e.versionBlock.sha256 === versionBlock.sha256 &&
+			e.image.bytes === wire.bytes.length &&
+			e.image.wireSum32 === sum32(wire.bytes) &&
+			e.image.wireCrc32 === crc32(wire.bytes),
 	);
+	if (entry === undefined) return refused({ code: "not-in-catalog", plainSha256: candidate.plainSha256 });
+	const image = { entry } as FlashableImage;
+	BYTES.set(image, {
+		wire: { ...wire, bytes: Uint8Array.from(wire.bytes) },
+		versionBlock: { ...versionBlock, bytes: Uint8Array.from(versionBlock.bytes) },
+	});
+	return { kind: "admitted", image };
 }
 
 export type UpdaterReading =
@@ -200,28 +213,69 @@ export type UpdaterReading =
 			}[];
 	  };
 
-/**
- * The public entry for the user's exe: parse, hash, and admit each image. Runs in the page; nothing is uploaded.
- * TODO: contents = parseMaav102(exe); per image: plain = xorWords(wire), checksums of wire, sha256 of plain and of
- * the version block, impliedBase from the vector table; candidate with provenance vendor-package; admit(candidate).
- */
+/** The public entry for the user's exe: parse, hash, and admit each image. Runs in the page; nothing is uploaded. */
 export async function readUpdater(exe: Uint8Array): Promise<UpdaterReading> {
-	return notImplemented(`readUpdater(${exe.length} bytes) via ${parseMaav102.name}`);
+	const contents = parseMaav102(exe);
+	if ("code" in contents) return { kind: "refused", refusal: contents };
+	const exeSha256 = await sha256(exe);
+	const images = await Promise.all(
+		contents.images.map(async (packaged) => {
+			const plainSha256 = await sha256(xorWords(packaged.wire));
+			const block = packaged.versionBlock;
+			const stringBytes = new DataView(block.buffer, block.byteOffset, block.byteLength).getUint32(0, true);
+			const admission = admit({
+				provenance: { kind: "vendor-package", exeSha256 },
+				layoutName: packaged.layoutName,
+				plainSha256,
+				impliedBase: packaged.impliedBase,
+				wire: { bytes: packaged.wire, sum32: sum32(packaged.wire), crc32: crc32(packaged.wire) },
+				versionBlock: {
+					bytes: block,
+					sha256: await sha256(block),
+					version: new TextDecoder("utf-16le").decode(block.subarray(4, 4 + stringBytes)).split("\0", 1)[0] ?? "",
+				},
+			});
+			return { slot: packaged.slot, layoutName: packaged.layoutName, plainSha256, bytes: packaged.wire.length, admission };
+		}),
+	);
+	return { kind: "read", exe: { sha256: exeSha256, bytes: exe.length }, title: contents.title, version: contents.version, images };
+}
+
+function words(bytes: Uint8Array): DataView {
+	if (bytes.length % 4 !== 0) throw new RangeError(`${bytes.length} bytes is not a whole number of 32-bit words`);
+	return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 /** XOR with CYKB_XOR_KEY. Its own inverse: plain to wire and wire to plain. */
 export function xorWords(bytes: Uint8Array): Uint8Array {
-	return notImplemented(`xorWords(${bytes.length} bytes, ${CYKB_XOR_KEY.length}-word key)`);
+	const from = words(bytes);
+	const out = new Uint8Array(bytes.length);
+	const to = new DataView(out.buffer);
+	for (let at = 0; at < bytes.length; at += 4) {
+		to.setUint32(at, from.getUint32(at, true) ^ (CYKB_XOR_KEY[(at / 4) % CYKB_XOR_KEY.length] ?? 0), true);
+	}
+	return out;
 }
 
 /** Wrapping sum of little-endian u32 words: the vendor updater's check (routine 0x402B00). */
 export function sum32(wire: Uint8Array): Sum32 {
-	return notImplemented(`sum32(${wire.length})`);
+	const view = words(wire);
+	let sum = 0;
+	for (let at = 0; at < wire.length; at += 4) sum = (sum + view.getUint32(at, true)) >>> 0;
+	return sum32Literal(sum);
 }
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
+	let c = n;
+	for (let bit = 0; bit < 8; bit++) c = c & 1 ? 0xedb8_8320 ^ (c >>> 1) : c >>> 1;
+	return c;
+});
 
 /** zlib CRC-32: pok3rtool's second check. */
 export function crc32(wire: Uint8Array): Crc32 {
-	return notImplemented(`crc32(${wire.length})`);
+	let c = 0xffff_ffff;
+	for (const byte of wire) c = (CRC_TABLE[(c ^ byte) & 0xff] ?? 0) ^ (c >>> 8);
+	return crc32Literal((c ^ 0xffff_ffff) >>> 0);
 }
 
 export async function sha256(bytes: Uint8Array): Promise<Sha256> {
