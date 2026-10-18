@@ -12,6 +12,12 @@ test("a parked pick shows a Pick button that names the row; an open chooser only
 	expect(open.lines[0]).toBe("In the chooser, pick USB-HID IAP.");
 });
 
+test("the optional confirm pick offers Skip instead of Stop", () => {
+	const confirm = { name: "device-prompt", reason: "confirm-normal-mode", pickRow: "USB-HID Keyboard", skippable: true } as const;
+	expect(viewFor(confirm, { modes: ["app"], reason: "confirm-normal-mode" }).actions).toEqual(["pick", "skip"]);
+	expect(viewFor(confirm, null).actions).toEqual(["skip"]);
+});
+
 test("progress warns against unplugging only when the board cannot type", () => {
 	const restarting = viewFor({ name: "progress", activity: { kind: "restarting", into: "iap" }, holdStill: true, report: null }, null);
 	expect(restarting.lines).toEqual(["Restarting the board into update mode.", "Do not unplug the keyboard."]);

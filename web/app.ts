@@ -13,6 +13,7 @@ const LABEL: Readonly<Record<Exclude<Action, "pick">, string>> = {
 	connect: "Connect",
 	"deep-check": "Deep check",
 	cancel: "Stop",
+	skip: "Skip",
 };
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
@@ -50,6 +51,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser): () => v
 			render();
 		},
 		cancel: () => kit.cancel(),
+		// During the optional confirm pick, the kit's cancel is Skip: the job still finishes.
+		skip: () => kit.cancel(),
 	};
 
 	function render(): void {
@@ -77,9 +80,11 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser): () => v
 	};
 	addEventListener("beforeunload", holdStill);
 	const unsubscribe = kit.subscribe(render);
+	const unsubscribePick = chooser.subscribe(render);
 	render();
 	return () => {
 		unsubscribe();
+		unsubscribePick();
 		removeEventListener("beforeunload", holdStill);
 	};
 }

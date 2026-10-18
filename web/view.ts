@@ -6,7 +6,7 @@
 import type { Activity, BootTarget, ChipReport, DeviceWant, Finding, JobResult, StopReason } from "@tab60kit/core";
 import type { Screen } from "./screens";
 
-export type Action = "connect" | "deep-check" | "pick" | "cancel";
+export type Action = "connect" | "deep-check" | "pick" | "cancel" | "skip";
 
 export interface FlashRow {
 	readonly region: string;
@@ -163,7 +163,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 				lines,
 				flashMap: null,
 				boot: null,
-				actions: needsClick === null ? ["cancel"] : ["pick", "cancel"],
+				actions: [...(needsClick === null ? [] : ["pick" as const]), screen.skippable ? "skip" : "cancel"],
 				pickLabel: needsClick === null ? null : `Pick ${screen.pickRow}`,
 				holdStill: screen.reason !== "connect",
 			};

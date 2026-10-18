@@ -41,6 +41,11 @@ export interface Chooser {
 	 * waiting; this says how: null means the chooser is already open, so the prompt only names the row to pick.
 	 */
 	readonly needsClick: DeviceWant | null;
+	/**
+	 * Calls `listener` whenever `needsClick` changes. A pick parks after the job already reported "awaiting-device"
+	 * (the chooser opened and came back empty), so a page that redraws only on kit state would never show its button.
+	 */
+	subscribe(listener: () => void): () => void;
 }
 
 export interface CollectionReport {
@@ -169,6 +174,12 @@ async function closeDevice(device: HIDDevice, report: (event: PortEvent) => void
 
 class WebHidPort implements DevicePort {
 	#pending: PendingPick | null = null;
+	readonly #pickListeners = new Set<() => void>();
+
+	#setPending(pending: PendingPick | null): void {
+		this.#pending = pending;
+		for (const listener of this.#pickListeners) listener();
+	}
 	readonly clock = browserClock;
 
 	constructor(
@@ -185,6 +196,10 @@ class WebHidPort implements DevicePort {
 			get needsClick() {
 				return port.#pending?.want ?? null;
 			},
+			subscribe: (listener) => {
+				port.#pickListeners.add(listener);
+				return () => port.#pickListeners.delete(listener);
+			},
 		};
 	}
 
@@ -192,7 +207,7 @@ class WebHidPort implements DevicePort {
 	pick(): void {
 		const pending = this.#pending;
 		if (pending === null) return;
-		this.#pending = null;
+		this.#setPending(null);
 		this.hid.requestDevice({ filters: [...hidFilters(pending.want.modes)] }).then(
 			([device]) => {
 				this.report({ kind: "pick", reason: pending.want.reason, path: "parked", productId: device?.productId ?? null, waitMs: this.clock.now() - pending.startedAt });
@@ -264,7 +279,7 @@ class WebHidPort implements DevicePort {
 		if (this.#pending !== null) throw new Error("a device pick is already pending");
 		return new Promise<HIDDevice>((resolve, reject) => {
 			const onAbort = () => {
-				this.#pending = null;
+				this.#setPending(null);
 				reject(signal.reason);
 			};
 			const settle = <T>(fn: (value: T) => void) => (value: T) => {
@@ -272,7 +287,7 @@ class WebHidPort implements DevicePort {
 				fn(value);
 			};
 			signal.addEventListener("abort", onAbort, { once: true });
-			this.#pending = { want, startedAt: this.clock.now(), resolve: settle(resolve), reject: settle(reject) };
+			this.#setPending({ want, startedAt: this.clock.now(), resolve: settle(resolve), reject: settle(reject) });
 		});
 	}
 

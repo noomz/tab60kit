@@ -71,3 +71,22 @@ test("a transcript that differs anywhere but in timing fails the identity check,
 	expect(identity?.detail).toContain("in 1d010000");
 	expect(checks.find((check) => check.title.startsWith("SUM"))?.pass).toBe(false);
 });
+
+test("an empty confirm chooser parks the pick and tells the page, so a Pick click finishes the deep check (the 2026-10-18 hardware stall)", async () => {
+	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 } });
+	// As on the real board: the confirm chooser opens before the keyboard re-enumerates and comes back empty at once.
+	const hid = new FakeHid(board, { rowAppearsInOpenChooser: ["iap"], isActive: () => true });
+	const { kit, chooser } = startWebHid(hid, new FakeLocks());
+	const told: string[] = [];
+	chooser.subscribe(() => {
+		const want = chooser.needsClick;
+		told.push(want === null ? "cleared" : want.reason);
+		// What the page's Pick button does once the redraw shows it.
+		if (want !== null) setTimeout(() => chooser.pick(), 10);
+	});
+	await kit.check("quick");
+	const end = await kit.check("deep");
+	expect(told).toEqual(["confirm-normal-mode", "cleared"]);
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "checked", depth: "deep" } });
+	expect(board.mode).toBe("app");
+});
