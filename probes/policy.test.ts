@@ -33,7 +33,7 @@ const entry = CATALOG[0]!;
 const other = { ...entry, id: "some-other-official-image" };
 const target = { entry } as unknown as FlashableImage;
 const window = { base: 0x3000, imageBase: 0x3200, end: 0x1fe00, pageSize: 0x200 } as unknown as FlashWindow;
-const common = { info: {} as never, window };
+const common = { info: {} as never, blInfoSha256: "0".repeat(64) as never, window };
 let checks = 0;
 const check = (name: string, fn: () => void) => {
 	test(name, fn);
@@ -44,7 +44,7 @@ const pages: Record<string, PageState> = {
 	target: { kind: "official", entry },
 	"other-official": { kind: "official", entry: other },
 	erased: { kind: "erased" },
-	partial: { kind: "unknown", text: null, sha256: "0".repeat(64) as never },
+	partial: { kind: "unknown", text: null, sha256: "0".repeat(64) as never, boots: false },
 };
 const images: Record<string, ImageCheck> = {
 	target: { kind: "official", entry, by: "sum" },
@@ -101,6 +101,12 @@ check("boot: target page over an unrecognized image", () =>
 check("boot: erased page over the target image", () =>
 	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.erased!, image: images.target! }), "stays-in-update-mode"),
 );
+check("boot: a page cut short has no magic, so the IAP stays in update mode whatever the image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: pages.partial!, image: images.unrecognized! }), "stays-in-update-mode"),
+);
+check("boot: a whole foreign block with its magic boots the unchecked image", () =>
+	assert.equal(bootTarget({ mode: "iap", ...common, page: { kind: "unknown", text: "V1.01.16", sha256: "0".repeat(64) as never, boots: true }, image: images.unrecognized! }), "boots-unchecked-image"),
+);
 
 // The window: [0x3000, 0x1FE00), offsets count from 0x3000, and 32-bit wrap cannot sneak in.
 check("window: the V1.01.13 image", () => assert.equal(inWindow(window, 0x200, 34_268), true));
@@ -145,13 +151,15 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 ];
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
 const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
-const UNREVIEWED_ROWS: readonly CommandName[] = ["erase", "crc", "setWriteAddress", "write", "cfgReadReverseMap", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
-check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "erase"], "U7"), /send them: erase$/));
+const REVIEWED_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "write"];
+const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgReadReverseMap", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
+check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
 check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
+check("clearance: a lab session for the reviewed erase, set write address, and write rows", () => assert.equal(labClearance(REVIEWED_ROWS, "U5").kind, "lab"));
 check("clearance: the shipped build sends exactly the seven U1 rows and refuses erase, crc, set write address, write, and every config row", () =>
 	assert.deepEqual(
 		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
-		{ sends: new Set(U1_ROWS), refuses: new Set(UNREVIEWED_ROWS) },
+		{ sends: new Set(U1_ROWS), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
 	),
 );
 for (const name of UNREVIEWED_ROWS) {

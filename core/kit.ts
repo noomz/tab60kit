@@ -5,11 +5,10 @@
 import { deepCheck, quickCheck } from "./chip";
 import type { FlashableImage } from "./firmware";
 import { type FlashOptions, makeOfficial } from "./flash";
-import type { JobState } from "./job";
+import type { Activity, Job, JobContext, JobKind, JobState } from "./job";
 import { type ConfigCapabilities, type KeymapDoc, applyKeymap, capabilities } from "./keymap";
-import type { DevicePort } from "./port";
-import { type Clearance, SHIPPED } from "./protocol";
-import { notImplemented } from "./units";
+import { Busy, type DevicePort } from "./port";
+import { type Clearance, SHIPPED, type Session } from "./protocol";
 
 export interface Kit {
 	readonly state: JobState;
@@ -31,33 +30,81 @@ export interface Kit {
 /**
  * `clearance` is what G1 lets this kit send. A shipped page passes nothing and gets SHIPPED, which sends only
  * confirmed rows. A lab page passes a labClearance, which neither package entry exports.
- * TODO:
- *   session: Session | null = null       held only between jobs
- *   state: JobState = { kind: "idle", board: null }; listeners; controller: AbortController | null = null
- *
- *   run(kind: JobKind, job: Job):
- *     if controller !== null -> throw (the UI disables job buttons while a job runs; this is the backstop)
- *     controller = new AbortController()
- *     try:
- *       return await port.exclusive(async () => {
- *         start = session; session = null                       ownership moves to the job
- *         ctx = { port: watched(port), clearance, signal, progress: (activity, board) => set working state }
- *           watched(port).open(want, signal): opening = port.open(want, signal) first, so a WebHID port has already
- *             parked or opened its chooser; then set awaiting-device { job: kind, want }; await opening; set working
- *         end = await job(start, ctx)
- *         session = end.session                                 and comes back
- *         set finished or stopped from end; return state
- *       })
- *     catch Busy -> set stopped { reason: busy }                another tab or process has the board
- *     finally controller = null
- *
- *   check(depth) = run(depth === "quick" ? "quick-check" : "deep-check", depth === "quick" ? quickCheck : deepCheck)
- *   makeOfficial(image, options) = run("make-official", makeOfficial(image, options))
- *   applyKeymap(doc) = run("apply-keymap", applyKeymap(doc))
- *   capabilities() = keymap capabilities(clearance)
- *   cancel() = controller?.abort()
  */
 export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit {
-	const jobs = [quickCheck, deepCheck, makeOfficial, applyKeymap].map((job) => job.name).join(", ");
-	return notImplemented(`createKit(${typeof port.open}, ${clearance.kind}): ${jobs}, ${capabilities.name}`);
+	/** Held only between jobs. A running job owns it and hands it back in its end. */
+	let session: Session | null = null;
+	let state: JobState = { kind: "idle", board: null };
+	let controller: AbortController | null = null;
+	const listeners = new Set<(state: JobState) => void>();
+	const set = (next: JobState) => {
+		state = next;
+		for (const listener of listeners) listener(next);
+	};
+
+	async function run(kind: JobKind, job: Job): Promise<JobState> {
+		// The UI disables job buttons while a job runs; this is the backstop.
+		if (controller !== null) throw new Error(`a job is running; ${kind} must wait`);
+		const running = new AbortController();
+		controller = running;
+		try {
+			return await port.exclusive(async () => {
+				const start = session;
+				session = null;
+				let activity: Activity = { kind: "reading" };
+				const watched: DevicePort = {
+					exclusive: (inner) => port.exclusive(inner),
+					clock: port.clock,
+					open: async (want, signal) => {
+						// Called first, so a WebHID port has already parked or opened its chooser before the prompt shows.
+						const opening = port.open(want, signal);
+						set({ kind: "awaiting-device", job: kind, want, board: state.board });
+						try {
+							return await opening;
+						} finally {
+							set({ kind: "working", job: kind, activity, board: state.board });
+						}
+					},
+				};
+				const ctx: JobContext = {
+					port: watched,
+					clearance,
+					signal: running.signal,
+					progress: (next, board) => {
+						activity = next;
+						set({ kind: "working", job: kind, activity, board: board ?? state.board });
+					},
+				};
+				const end = await job(start, ctx);
+				session = end.session;
+				const board = end.board ?? state.board;
+				set(end.kind === "finished" ? { kind: "finished", job: kind, result: end.result, board } : { kind: "stopped", job: kind, reason: end.reason, board });
+				return state;
+			});
+		} catch (error) {
+			if (!(error instanceof Busy)) {
+				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board });
+				throw error;
+			}
+			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board });
+			return state;
+		} finally {
+			controller = null;
+		}
+	}
+
+	return {
+		get state() {
+			return state;
+		},
+		subscribe(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+		check: (depth) => run(depth === "quick" ? "quick-check" : "deep-check", depth === "quick" ? quickCheck : deepCheck),
+		makeOfficial: (image, options) => run("make-official", makeOfficial(image, options)),
+		applyKeymap: (doc) => run("apply-keymap", applyKeymap(doc)),
+		capabilities: () => capabilities(clearance),
+		cancel: () => controller?.abort(),
+	};
 }

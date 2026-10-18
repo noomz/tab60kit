@@ -16,7 +16,7 @@ async function sweep(rewrite: boolean): Promise<void> {
 		const end = await kit.makeOfficial(image, { rewrite });
 		expect(end.kind).toBe("finished");
 		expect(board.violations).toEqual([]);
-		expect(board.bootTarget()).toEqual({ mode: "app", versionPageSha256: image.entry.versionBlock.sha256 });
+		expect(await board.bootTarget()).toEqual({ mode: "app", versionPageSha256: image.entry.versionBlock.sha256 });
 	}
 }
 void sweep;

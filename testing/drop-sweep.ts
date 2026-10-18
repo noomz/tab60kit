@@ -3,40 +3,96 @@
  * It answers the idempotency questions for every point of a flash: what if the link drops right here, and what
  * if the MCU also resets right here.
  */
-import type { FlashableImage } from "../core/firmware";
+import { type FlashableImage, imageBytes } from "../core/firmware";
 import { createKit } from "../core/kit";
-import { notImplemented } from "../core/units";
+import { type Clearance, labClearance } from "../core/protocol";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 
+/** Where a run starts. "holds-target" is the board the user has today: it converges with no write unless asked. */
+export const STARTS = [
+	"official-image",
+	"untrusted-image",
+	"update-mode-erased",
+	"update-mode-partial-version-block",
+	"update-mode-damaged-image",
+	"holds-target",
+] as const;
+export type Start = (typeof STARTS)[number];
+
 export interface SweepFailure {
-	readonly packet: number;
-	readonly resetOnLoss: boolean;
+	readonly start: Start;
 	readonly rewrite: boolean;
-	readonly starting: FakeOptions["starting"];
+	readonly packet: number;
+	/** "before": the board never saw the packet. "after": it executed the packet and the reply was lost. */
+	readonly lost: "before" | "after";
+	readonly resetOnLoss: boolean;
 	readonly why: string;
+}
+
+/** Every row the flash job sends: the seven U1 rows and the three flash-write rows reviewed for U5. */
+export const FLASH_CLEARANCE: Clearance = labClearance(
+	["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp", "erase", "setWriteAddress", "write"],
+	"U5 drop sweep, fake board only",
+);
+
+export interface SweepReport {
+	readonly runs: number;
+	readonly failures: readonly SweepFailure[];
+}
+
+function startOptions(start: Start, image: FlashableImage): Pick<FakeOptions, "starting" | "versionBlock"> {
+	if (start === "holds-target") return { starting: "update-mode-official-image", versionBlock: imageBytes(image).versionBlock.bytes };
+	return { starting: start };
 }
 
 /**
  * The fake runs a virtual clock, so the link gate's 15 s of probes cost no wall time, and its probe packets are
- * drop points like any other.
- * TODO:
- *   target = { imageBytes: image.entry.image.bytes, wireSum32: image.entry.image.wireSum32 }
- *   for starting of ["official-image", "untrusted-image", "update-mode-erased", "update-mode-partial-version-block"],
- *   for rewrite of [false, true]:
- *     clean = new FakeTab60({ starting, target }); run createKit(clean.port()).makeOfficial(image, { rewrite })
- *     n = clean.packetsReceived
- *     for packet in 0..n-1, for resetOnLoss in [false, true]:
- *       board = new FakeTab60({ starting, target, loseLinkAtPacket: packet, resetOnLoss })
- *       end = await createKit(board.port()).makeOfficial(image, { rewrite })
- *       failure unless all hold:
- *         end.kind === "finished" and end.result is official
- *         board.violations is empty (the fake's default descending erase order makes a one-command erase fail here)
- *         board.bootTarget() is app with the entry's version block hash
- *   4 starting states x 2 rewrite x 2 reset modes x about 720 packets (30 of them gate probes), so about 11,500 runs
- *   against an in-memory board. Cheap enough for every push (a guess until U5 measures it).
- *   testing/reconcile-model.ts already runs the same loop over C's decide tables on a toy board; this sweep adds bytes,
- *   addresses, and the real encoder.
+ * drop points like any other. For each start and rewrite setting, a clean run counts the packets; then the link drops
+ * at each one, before the board sees it and after it executed it, with and without an MCU reset. Every run must
+ * finish official, leave no violation, and leave a board that boots normal mode over the entry's version block.
+ * testing/reconcile-model.ts runs the same loop over the decide tables on a toy board; this sweep adds bytes,
+ * addresses, the real encoder, and the fake's erase order.
  */
-export async function dropSweep(image: FlashableImage): Promise<readonly SweepFailure[]> {
-	return notImplemented(`dropSweep(${image.entry.id}) with ${createKit.name} on ${FakeTab60.name}`);
+export async function dropSweep(image: FlashableImage, starts: readonly Start[] = STARTS): Promise<SweepReport> {
+	const target = { imageBytes: image.entry.image.bytes, wireSum32: image.entry.image.wireSum32 };
+	const failures: SweepFailure[] = [];
+	let runs = 0;
+	const run = async (options: Partial<FakeOptions>, start: Start, rewrite: boolean) => {
+		const board = new FakeTab60({ ...startOptions(start, image), ...options, target, clock: "virtual", reenumerateAfterMs: 0 });
+		const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite });
+		runs++;
+		const boot = await board.bootTarget();
+		const problems: string[] = [];
+		if (end.kind !== "finished" || end.result.kind !== "official") problems.push(`ended ${end.kind}${end.kind === "stopped" ? ` (${JSON.stringify(end.reason)})` : ""}`);
+		if (board.violations.length > 0) problems.push(`violations ${JSON.stringify(board.violations.slice(0, 3))}${board.violations.length > 3 ? ` and ${board.violations.length - 3} more` : ""}`);
+		if (boot.mode !== "app" || boot.versionPageSha256 !== image.entry.versionBlock.sha256) problems.push(`boots ${boot.mode} over ${boot.versionPageSha256}`);
+		return { board, why: problems.join("; ") };
+	};
+	for (const start of starts) {
+		for (const rewrite of [false, true]) {
+			const clean = await run({}, start, rewrite);
+			if (clean.why !== "") failures.push({ start, rewrite, packet: -1, lost: "before", resetOnLoss: false, why: `clean run: ${clean.why}` });
+			for (let packet = 0; packet < clean.board.packetsReceived; packet++) {
+				for (const lost of ["before", "after"] as const) {
+					for (const resetOnLoss of [false, true]) {
+						const drop = lost === "before" ? { loseLinkAtPacket: packet } : { loseLinkAfterPacket: packet };
+						const { why } = await run({ ...drop, resetOnLoss }, start, rewrite);
+						if (why !== "") failures.push({ start, rewrite, packet, lost, resetOnLoss, why });
+					}
+				}
+			}
+		}
+	}
+	return { runs, failures };
+}
+
+if (import.meta.main) {
+	const { syntheticFlashable } = await import("./synthetic-image");
+	const started = performance.now();
+	const asked = process.argv.slice(2);
+	const unknown = asked.filter((name) => !(STARTS as readonly string[]).includes(name));
+	if (unknown.length > 0) throw new Error(`unknown starts: ${unknown.join(", ")}`);
+	const report = await dropSweep(await syntheticFlashable(), asked.length > 0 ? STARTS.filter((name) => asked.includes(name)) : STARTS);
+	console.log(JSON.stringify({ runs: report.runs, failures: report.failures.length, seconds: Math.round((performance.now() - started) / 100) / 10, examples: report.failures.slice(0, 5) }));
+	process.exit(report.failures.length === 0 ? 0 : 1);
 }

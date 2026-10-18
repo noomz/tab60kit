@@ -15,11 +15,10 @@
  * Three pure functions make every flash decision. decideInApp and decideInIap pick the next step from an
  * observation, and judgeLink says whether the link has been quiet long enough to start a step that changes flash.
  */
-import { type AppChip, type IapChip, type PageState, type ImageCheck, observe } from "./chip";
-import type { FlashableImage } from "./firmware";
-import type { Job } from "./job";
-import { connect } from "./protocol";
-import { notImplemented } from "./units";
+import { type AppChip, type ChipState, type IapChip, type ImageCheck, type PageState, home, leaveUpdateMode, observe } from "./chip";
+import { CATALOG, type FlashableImage } from "./firmware";
+import { type Activity, type Job, type JobContext, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
+import { type CommandName, DeviceRefused, IapAttachFailed, ModeDisagrees, ReadBackMismatch, type Session, clears, connect, gateMessage } from "./protocol";
 
 export type AppStep = "done" | "enter-iap";
 export type IapStep = "erase-and-write-image" | "write-version-block" | "exit-to-app";
@@ -143,49 +142,159 @@ export interface FlashOptions {
 }
 
 /**
- * The flash job.
- * TODO:
- *   attempts = zero per step; losses = 0; verified = false; rewrite = options.rewrite
- *   events: LinkEvent[] = []; gated: Session | null = null; session = start; board = null
- *   loop:
- *     if signal aborted -> stopped(cancelled, during: last activity)
- *     try:
- *       session ??= connect(ctx, { modes: ["app", "iap"], reason: losses ? "after-link-loss" : "connect" })
- *                   (a LayoutRefusal -> stopped(board-refused))
- *       obs = await observe(session, signal); board = obs.chip; progress(reading, board)
- *       step = obs.mode === "app" ? decideInApp(obs.chip, target, verified) : decideInIap(obs.chip, target, rewrite)
- *       if step === "done" -> finished(official, confirmedInNormalMode: true)
- *       if ++attempts[step] > STEPS[step].maxAttempts -> stopped(attempts-exhausted)
- *       if STEPS[step].changesFlash and gated !== obs.session:
- *         await holdLink(obs.session, events, ctx); gated = obs.session          no flash write before the gate says stable
- *       switch on obs.mode, then on step (exhaustive, so a new step fails to compile until handled):
- *         app / "enter-iap":            progress(restarting iap); session = await obs.session.enterIap(ctx)
- *         iap / "erase-and-write-image": progress(erasing); await eraseWindow()
- *                                       await writeImage(target, (i, n) => progress(writing-image i of n)); rewrite = false
- *         iap / "write-version-block":  progress(writing-version-block); await writeVersionBlock(target)
- *         iap / "exit-to-app":          verified = true; session = await leaveUpdateMode(obs.session, ctx)
- *                                       null (confirm skipped) -> finished(official, confirmedInNormalMode: false)
- *                                       otherwise loop: the next observation in normal mode returns "done"
- *     catch IapAttachFailed: close its link, then handle its cause as below (no observation exists to decide a reset)
- *     catch LinkLost or LinkTimeout: events.push(lost or timeout at clock.now()); session = null
- *                                    attempts = zero per step              a drop is not a failed attempt
- *                                    ++losses > MAX_LINK_LOSSES -> stopped(too-many-link-losses); progress(link-lost); continue
- *     catch DeviceRefused: continue (the attempt is already counted; the next observation decides)
- *     catch NotCleared: stopped(gate, its message)          G1: nothing was sent for this command
- *     catch PickCancelled: stopped(cancelled)               the board stays wherever the last step left it; rerun converges
- *     catch OsPermissionDenied: stopped(os-permission)
+ * The flash job: observe, decide, act, and observe again, until the board is checked official or a budget runs out.
+ * Any lost link, timeout, refusal, MCU reset, or cancel leaves the next run to start from a fresh observation.
  *
- * holdLink(iap, events, ctx), the link gate. Once per link, because every later failure ends the link:
- *   loop:
- *     verdict = judgeLink(events, clock.now(), WRITE_LINK_RULE)
- *     stable -> return
- *     progress(holding-link, verdict's quiet time so far, WRITE_LINK_RULE.quietMs)
- *     await iap.probe(signal); events.push(probe-ok at clock.now()); await clock.sleep(PROBE_EVERY_MS, signal)
- *   a timeout or loss during a probe propagates to the loop above, which records it and reconnects
+ * It recognizes CATALOG plus the entry it was asked to write. `admit` already proved that entry, so for a shipped
+ * image this is CATALOG, and a test's synthetic image converges like a real one.
  */
+/** The rows a flash needs beyond the read and reset rows. A kit that cannot send them stops before the first frame. */
+const FLASH_ROWS = ["erase", "setWriteAddress", "write"] as const satisfies readonly CommandName[];
+
 export function makeOfficial(target: FlashableImage, options: FlashOptions = { rewrite: false }): Job {
-	return async (start, ctx) =>
-		notImplemented(
-			`makeOfficial(${target.entry.id}, rewrite=${options.rewrite}) from ${String(start?.mode)} via ${connect.name} and ${observe.name}, ${ctx.clearance.kind}, aborted=${ctx.signal.aborted}`,
-		);
+	const catalog = CATALOG.some((entry) => entry.id === target.entry.id) ? CATALOG : [...CATALOG, target.entry];
+	return async (start, ctx) => {
+		// G1 up front: finding out at the first ERASE would leave the board in update mode, unable to type.
+		const blocked = FLASH_ROWS.find((name) => !clears(ctx.clearance, name));
+		if (blocked !== undefined) return { kind: "stopped", reason: { kind: "gate", blocked: gateMessage(blocked, ctx.clearance) }, session: start, board: null };
+		const attempts: Record<Step, number> = { done: 0, "enter-iap": 0, "erase-and-write-image": 0, "write-version-block": 0, "exit-to-app": 0 };
+		const events: LinkEvent[] = [];
+		let losses = 0;
+		let verified = false;
+		let rewrite = options.rewrite;
+		let gated: Session | null = null;
+		let session: Session | null = start;
+		let board: ChipState | null = null;
+		let during: Activity | null = null;
+		const progress = (activity: Activity, chip?: ChipState) => {
+			during = activity;
+			if (chip === undefined) ctx.progress(activity);
+			else {
+				board = chip;
+				ctx.progress(activity, chip);
+			}
+		};
+		const stopped = (reason: StopReason, end: Session | null = null): JobEnd => ({ kind: "stopped", reason, session: end, board });
+		const finished = (confirmedInNormalMode: boolean, end: Session | null): JobEnd => ({
+			kind: "finished",
+			result: { kind: "official", entry: target.entry, confirmedInNormalMode },
+			session: end,
+			board,
+		});
+		for (;;) {
+			/** True once a chosen step starts acting, so a refusal counts against its attempts rather than the loss budget. */
+			let inStep = false;
+			if (ctx.signal.aborted) {
+				await session?.close().catch(() => undefined);
+				return stopped({ kind: "cancelled", during });
+			}
+			try {
+				if (session === null) {
+					const opened = await connect(ctx, { modes: ["app", "iap"], reason: losses > 0 ? "after-link-loss" : "connect" });
+					if ("refusal" in opened) {
+						await opened.close();
+						return stopped({ kind: "board-refused", refusal: opened.refusal });
+					}
+					session = opened;
+				}
+				const obs = await observe(session, ctx.signal, catalog);
+				progress({ kind: "reading" }, obs.chip);
+				const step: Step = obs.mode === "app" ? decideInApp(obs.chip, target, verified) : decideInIap(obs.chip, target, rewrite);
+				if (step === "done") return finished(true, obs.session);
+				if (++attempts[step] > STEPS[step].maxAttempts) return stopped({ kind: "attempts-exhausted", step, attempts: attempts[step] - 1 }, obs.session);
+				if (STEPS[step].changesFlash && gated !== obs.session) {
+					await holdLink(obs.session, events, ctx, progress);
+					gated = obs.session;
+				}
+				inStep = true;
+				if (obs.mode === "app") {
+					switch (step) {
+						case "enter-iap":
+							progress({ kind: "restarting", into: "iap" });
+							session = null;
+							{
+								const iap = await obs.session.enterIap(ctx);
+								if ("refusal" in iap) return stopped({ kind: "board-refused", refusal: iap.refusal }, await home(await leaveUpdateMode(iap, ctx)));
+								session = iap;
+							}
+							break;
+						default:
+							throw new Error(`decideInApp chose ${step}`);
+					}
+					continue;
+				}
+				const iap = obs.session;
+				switch (step) {
+					case "erase-and-write-image":
+						progress({ kind: "erasing" });
+						await iap.eraseWindow();
+						await iap.writeImage(target, (chunk, chunks) => progress({ kind: "writing-image", chunk, chunks }));
+						rewrite = false;
+						break;
+					case "write-version-block":
+						progress({ kind: "writing-version-block" });
+						await iap.writeVersionBlock(target);
+						break;
+					case "exit-to-app": {
+						verified = true;
+						session = null;
+						const back = await leaveUpdateMode(iap, ctx);
+						if (back === null) return finished(false, null);
+						if ("refusal" in back) {
+							await back.close();
+							return stopped({ kind: "board-refused", refusal: back.refusal });
+						}
+						session = back;
+						break;
+					}
+					default:
+						throw new Error(`decideInIap chose ${step}`);
+				}
+			} catch (error) {
+				let cause = error;
+				if (error instanceof IapAttachFailed) {
+					await error.close().catch(() => undefined);
+					cause = error.cause;
+				} else await session?.close().catch(() => undefined);
+				session = null;
+				if (isLinkFailure(cause)) {
+					events.push({ t: ctx.port.clock.now(), kind: cause.name === "LinkTimeout" ? "timeout" : "lost" });
+					for (const step of Object.keys(attempts) as Step[]) attempts[step] = 0;
+					if (++losses > MAX_LINK_LOSSES) return stopped({ kind: "too-many-link-losses", losses });
+					progress({ kind: "link-lost", losses });
+					continue;
+				}
+				// A refusal inside a step is already counted as its attempt. Outside one (a read, an attach, a gate probe)
+				// nothing counts it, so it costs the loss budget, or a board that always refuses a read would loop forever.
+				if (cause instanceof DeviceRefused || cause instanceof ReadBackMismatch || cause instanceof ModeDisagrees) {
+					if (!inStep) {
+						if (++losses > MAX_LINK_LOSSES) return stopped({ kind: "too-many-link-losses", losses });
+						progress({ kind: "link-lost", losses });
+					}
+					continue;
+				}
+				const reason = stopReasonFor(cause, ctx.signal, during);
+				if (reason === null) throw cause;
+				return stopped(reason);
+			}
+		}
+	};
+}
+
+/**
+ * The link gate. Once per link, because every later failure ends the link. Probes until judgeLink says stable; a
+ * timeout or loss during a probe propagates to the loop, which records it and reconnects.
+ */
+async function holdLink(session: Session, events: LinkEvent[], ctx: JobContext, progress: (activity: Activity) => void): Promise<void> {
+	const { clock } = ctx.port;
+	// Probes answered on an earlier link say nothing about this one. Failures stay: they are what the gate waits out.
+	for (let i = events.length - 1; i >= 0; i--) if (events[i]?.kind === "probe-ok") events.splice(i, 1);
+	for (;;) {
+		const verdict = judgeLink(events, clock.now(), WRITE_LINK_RULE);
+		if (verdict.kind === "stable") return;
+		progress({ kind: "holding-link", quietMs: verdict.kind === "insufficient" ? verdict.quietMs : 0, needMs: WRITE_LINK_RULE.quietMs });
+		await session.probe(ctx.signal);
+		events.push({ t: clock.now(), kind: "probe-ok" });
+		await clock.sleep(PROBE_EVERY_MS, ctx.signal);
+	}
 }

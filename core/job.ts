@@ -8,8 +8,8 @@ import type { ChipState } from "./chip";
 import type { CatalogEntry } from "./firmware";
 import type { AppStep, IapStep } from "./flash";
 import type { LayoutRefusal } from "./flashmap";
-import type { DeviceWant } from "./port";
-import type { LinkContext, Session } from "./protocol";
+import { type DeviceWant, LinkLost, LinkTimeout, OsPermissionDenied, PickCancelled } from "./port";
+import { type LinkContext, NotCleared, type Session } from "./protocol";
 import type { Mode } from "./units";
 
 export type JobKind = "quick-check" | "deep-check" | "make-official" | "apply-keymap";
@@ -34,7 +34,9 @@ export type StopReason =
 	| { readonly kind: "os-permission"; readonly os: "linux" | "other" }
 	| { readonly kind: "busy" }
 	| { readonly kind: "attempts-exhausted"; readonly step: AppStep | IapStep; readonly attempts: number }
-	| { readonly kind: "too-many-link-losses"; readonly losses: number };
+	| { readonly kind: "too-many-link-losses"; readonly losses: number }
+	/** The job threw an error that means a bug. The kit rethrows it after setting this state, so the UI never sticks on "working". */
+	| { readonly kind: "error"; readonly message: string };
 
 export type JobResult =
 	| { readonly kind: "checked"; readonly depth: "quick" | "deep" }
@@ -83,3 +85,19 @@ export type JobEnd =
 	  };
 
 export type Job = (start: Session | null, ctx: JobContext) => Promise<JobEnd>;
+
+/** A lost or silent link says nothing about the step it interrupted: the job reconnects and observes again. */
+export function isLinkFailure(error: unknown): error is LinkLost | LinkTimeout {
+	return error instanceof LinkLost || error instanceof LinkTimeout;
+}
+
+/**
+ * How a job reports an error that ends it and that the user can act on, or null for an error that means a bug, which
+ * the job rethrows. `during` is the job's last activity, so a cancel says what may have happened.
+ */
+export function stopReasonFor(error: unknown, signal: AbortSignal, during: Activity | null): StopReason | null {
+	if (signal.aborted || error instanceof PickCancelled) return { kind: "cancelled", during };
+	if (error instanceof NotCleared) return { kind: "gate", blocked: error.message };
+	if (error instanceof OsPermissionDenied) return { kind: "os-permission", os: error.os };
+	return null;
+}
