@@ -1,6 +1,6 @@
 # tab60kit
 
-tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), U3 (the extractor for the vendor updater package, and image admission), U4 (property tests over the flash window and the egress audit), and U5 (the flash job, the link gate, the check jobs, and the kit, proved against the fake board by a drop sweep). No flash command has reached a real board yet: the erase and write rows are reviewed but not confirmed, so a shipped kit stops at G1 before the first erase (plan unit U7 captures them). The keymap path still throws `notImplemented`.
+tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), U3 (the extractor for the vendor updater package, and image admission), U4 (property tests over the flash window and the egress audit), U5 (the flash job, the link gate, the check jobs, and the kit, proved against the fake board by a drop sweep), and U6 (the shipped page: Connect, Deep check, and the flash map). No flash command has reached a real board yet: the erase and write rows are reviewed but not confirmed, so a shipped kit stops at G1 before the first erase (plan unit U7 captures them). The keymap path still throws `notImplemented`.
 
 The design and the units live in [`docs/`](docs/), in `design.md` and `units.md`.
 
@@ -37,7 +37,19 @@ TAB60_EXE=<Tab60firmwareV1.01.13.exe> TAB60_DECODER=<decode_updater.py> bun run 
 bun run build
 ```
 
-The build writes `dist/index.html` and `dist/main.js`, and the lab page `dist-lab/u1.html` and `dist-lab/u1.js`. Chrome does not load module scripts from `file://`, so serve a directory over HTTP, for example with `python3 -m http.server --directory dist 8000`. Then open `http://127.0.0.1:8000` in Chrome or Edge. WebHID needs a secure context, and `127.0.0.1` is one.
+The build writes `dist/index.html` and `dist/main.js`, and the lab pages `dist-lab/u1.html` and `dist-lab-u6/u6.html` with their scripts. Chrome does not load module scripts from `file://`, so serve a directory over HTTP, for example with `python3 -m http.server --directory dist 8000`. Then open `http://127.0.0.1:8000` in Chrome or Edge. WebHID needs a secure context, and `127.0.0.1` is one.
+
+## The U6 lab page
+
+`dist-lab-u6/u6.html` runs the shipped page's app (`web/app.ts`) and records a transcript. Its clearance names exactly the seven U1 rows, which is what a shipped kit sends. Add `?fake` to run it on the fake board.
+
+For plan U6's hardware check, build from a clean commit, then do this twice: open the page, click Connect, then Deep check, pick the board each time the chooser asks, and click Download transcript. Reload between the two runs. Then:
+
+```sh
+bun tools/u6-verdict.ts first.json second.json
+```
+
+It passes when both transcripts come from the real board and a clean build, are identical apart from timing, send U1's frames in the expected order, read a version page that hashes to the catalog's V1.01.13 block, and get the catalog's wire sum back from SUM.
 
 ## The U1 lab page
 
