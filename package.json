@@ -14,6 +14,7 @@
 		"reconcile": "bun testing/reconcile-model.ts",
 		"sweep": "bun testing/u1-sweep.ts",
 		"real-exe": "bun testing/real-exe.ts",
+		"real-image": "bun testing/real-image.ts",
 		"drop-sweep": "bun testing/drop-sweep.ts",
 		"check": "bun run typecheck && bun test && bun run probes && bun run reconcile && bun run drop-sweep"
 	},
