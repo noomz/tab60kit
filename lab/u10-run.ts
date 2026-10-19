@@ -7,6 +7,7 @@ import { type Layer, activeKeymap, predictCleanLayer, usage } from "../core/keym
 import type { DevicePort } from "../core/port";
 import { type Clearance, type CommandName, type OverrideEntry, connect, labClearance } from "../core/protocol";
 import type { TranscriptEntry } from "../testing/transcript";
+import { preconditionsFor } from "./u1-state";
 
 export const U10_PURPOSE = "U10: read the key override store";
 /** The two reviewed reads, and the confirmed U1 rows a normal-mode attach sends. */
@@ -15,6 +16,17 @@ export const U10_ROWS = ["readMode", "readBlInfo", "cfgReadKeys", "cfgReadKey"] 
 const U10_PAIRS: readonly string[] = ["1202", "1200", "5221", "5220"];
 
 export const u10Clearance = (): Clearance => labClearance(U10_ROWS, U10_PURPOSE);
+
+/**
+ * What the capture must attest before Read. The battery pull resets the override store, which the clean prediction
+ * assumes; another app holding the keyboard could send its own frames between ours.
+ */
+export const U10_PRECONDITIONS = [
+	{ key: "batteryPulled", label: "The batteries were removed and USB unplugged for 10 s, then the board was reconnected over USB" },
+	{ key: "keyboardFree", label: "No other app holds the keyboard" },
+] as const;
+
+export const u10Preconditions = preconditionsFor(U10_PRECONDITIONS);
 
 export interface StoreRead {
 	readonly entries: readonly { readonly layer: Layer; readonly usage: number; readonly entry: OverrideEntry }[];

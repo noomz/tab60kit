@@ -16,12 +16,18 @@ export interface U1Fixture extends U1Verdict {
 
 const CLEAN_COMMIT = /^[0-9a-f]{7,40}$/;
 
-function notEvidence(transcript: Transcript): string | null {
-	const { environment } = transcript;
+/** Why a transcript from a fake board, or from a build no clean commit names, cannot be a capture. Null when it can. */
+export function notRealBoardCleanBuild(environment: Environment): string | null {
 	if (environment.fake !== "no") return `environment.fake is "${environment.fake}", and a fake board is not evidence`;
 	const { tool } = environment;
 	if (tool === undefined) return "environment.tool is missing, so nothing names the build that recorded it";
 	if (!CLEAN_COMMIT.test(tool)) return `environment.tool is "${tool}", and only a build from a clean commit is evidence`;
+	return null;
+}
+
+function notEvidence(transcript: Transcript): string | null {
+	const refusal = notRealBoardCleanBuild(transcript.environment);
+	if (refusal !== null) return refusal;
 	const unmet = unmetPreconditions(transcript);
 	if (unmet.length > 0) return `the transcript does not record these preconditions as met for the whole run: ${unmet.join("; ")}`;
 	return null;

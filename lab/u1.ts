@@ -8,6 +8,7 @@ import { u1Wrap } from "./u1-frames";
 import { type U1Context, U1_EXPECTED, U1_PROBES, U1_ROWS, u1Clearance, u1Run } from "./u1-job";
 import {
 	AWAY_RECOVERY,
+	allPreconditionsTicked,
 	PRECONDITIONS,
 	type Phase,
 	type Run,
@@ -165,7 +166,7 @@ async function start(): Promise<void> {
 			box.disabled = locked;
 		}
 		const canConnect = phase.kind === "idle" || phase.kind === "connected" || phase.kind === "failed" || phase.kind === "refused" || (phase.kind === "away" && phase.holding === null);
-		ui.connect.disabled = !canConnect || !PRECONDITIONS.every(({ key }) => on.has(key));
+		ui.connect.disabled = !canConnect || !allPreconditionsTicked(entries);
 		ui.deepCheck.disabled = !deepCheckEnabled(phase.kind, entries);
 		ui.pick.hidden = want === null;
 		ui.pick.textContent = pickLabel(want);

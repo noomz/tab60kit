@@ -133,22 +133,15 @@ export const AWAY_RECOVERY = [
 	"Keep this tab visible during a run. A hidden tab slows its timers.",
 ].join("\n");
 
-/** The session conditions the U1 G1 lift requires. The page records each key in the transcript's environment. */
-export const PRECONDITIONS = [
-	{ key: "cableIn", label: "The cable is in" },
-	{ key: "karabinerLedOff", label: "Karabiner's LED manipulation is off" },
-	{ key: "secondKeyboardAtHand", label: "A second keyboard is at hand" },
-] as const;
-
-export type PreconditionKey = (typeof PRECONDITIONS)[number]["key"];
+/** A condition the human attests with a checkbox before the first frame. The page records `key` in the environment. */
+export interface Precondition {
+	readonly key: string;
+	readonly label: string;
+}
 
 const PRECONDITION_MET = "yes";
 
 export const preconditionsLocked = (entries: readonly TranscriptEntry[]): boolean => entries.some((entry) => entry.kind === "out");
-
-export function preconditionChange(entries: readonly TranscriptEntry[], key: PreconditionKey, met: boolean, t: number): TranscriptEntry | null {
-	return preconditionsLocked(entries) ? null : { t, kind: "precondition", key, met };
-}
 
 export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<string> {
 	const on = new Set<string>();
@@ -160,26 +153,50 @@ export function tickedBoxes(entries: readonly TranscriptEntry[]): ReadonlySet<st
 	return on;
 }
 
+/** The checkbox rules of one lab page, over its own list. The boxes lock when the first frame goes out. */
+export function preconditionsFor<const List extends readonly Precondition[]>(list: List) {
+	type Key = List[number]["key"];
+	const allTicked = (entries: readonly TranscriptEntry[]) => {
+		const on = tickedBoxes(entries);
+		return list.every(({ key }) => on.has(key));
+	};
+	return {
+		preconditionChange(entries: readonly TranscriptEntry[], key: Key, met: boolean, t: number): TranscriptEntry | null {
+			return preconditionsLocked(entries) ? null : { t, kind: "precondition", key, met };
+		},
+		allTicked,
+		preconditionEnvironment(entries: readonly TranscriptEntry[]): Record<string, string> {
+			const on = tickedBoxes(entries);
+			return Object.fromEntries(list.map(({ key }) => [key, on.has(key) ? PRECONDITION_MET : "no"]));
+		},
+		/** The label of each precondition the environment does not say "yes" to, was not ticked at the first frame, or changed during the run. */
+		unmetPreconditions({ environment, entries }: { readonly environment: Readonly<Record<string, string>>; readonly entries: readonly TranscriptEntry[] }): string[] {
+			const first = entries.findIndex((entry) => entry.kind === "out");
+			const cut = first === -1 ? entries.length : first;
+			const pageRecordedBoxes = entries.some((entry) => entry.kind === "precondition");
+			const tickedAtFirstFrame = tickedBoxes(entries.slice(0, cut));
+			const changedInRun = new Set(entries.slice(cut).flatMap((entry) => (entry.kind === "precondition" ? [entry.key] : [])));
+			return list
+				.filter(({ key }) => environment[key] !== PRECONDITION_MET || (pageRecordedBoxes && !tickedAtFirstFrame.has(key)) || changedInRun.has(key))
+				.map(({ label }) => label);
+		},
+	};
+}
+
+/** The session conditions the U1 G1 lift requires. */
+export const PRECONDITIONS = [
+	{ key: "cableIn", label: "The cable is in" },
+	{ key: "karabinerLedOff", label: "Karabiner's LED manipulation is off" },
+	{ key: "secondKeyboardAtHand", label: "A second keyboard is at hand" },
+] as const;
+
+export type PreconditionKey = (typeof PRECONDITIONS)[number]["key"];
+
+export const { preconditionChange, allTicked: allPreconditionsTicked, preconditionEnvironment, unmetPreconditions } = preconditionsFor(PRECONDITIONS);
+
 export function deepCheckEnabled(phase: Phase["kind"], entries: readonly TranscriptEntry[]): boolean {
 	const lock = entries.findIndex((entry) => entry.kind === "out");
 	if (phase !== "connected" || lock === -1) return false;
-	const tickedAtLock = tickedBoxes(entries.slice(0, lock));
 	const resetToIapSent = entries.some((entry) => entry.kind === "out" && entry.hex.startsWith(RESET_TO_IAP));
-	return PRECONDITIONS.every(({ key }) => tickedAtLock.has(key)) && !resetToIapSent;
-}
-
-export function preconditionEnvironment(entries: readonly TranscriptEntry[]): Record<string, string> {
-	const on = tickedBoxes(entries);
-	return Object.fromEntries(PRECONDITIONS.map(({ key }) => [key, on.has(key) ? PRECONDITION_MET : "no"]));
-}
-
-export function unmetPreconditions({ environment, entries }: { readonly environment: Readonly<Record<string, string>>; readonly entries: readonly TranscriptEntry[] }): string[] {
-	const first = entries.findIndex((entry) => entry.kind === "out");
-	const cut = first === -1 ? entries.length : first;
-	const pageRecordedBoxes = entries.some((entry) => entry.kind === "precondition");
-	const tickedAtFirstFrame = tickedBoxes(entries.slice(0, cut));
-	const changedInRun = new Set(entries.slice(cut).flatMap((entry) => (entry.kind === "precondition" ? [entry.key] : [])));
-	return PRECONDITIONS.filter(
-		({ key }) => environment[key] !== PRECONDITION_MET || (pageRecordedBoxes && !tickedAtFirstFrame.has(key)) || changedInRun.has(key),
-	).map(({ label }) => label);
+	return allPreconditionsTicked(entries.slice(0, lock)) && !resetToIapSent;
 }
