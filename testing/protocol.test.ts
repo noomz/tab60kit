@@ -171,9 +171,9 @@ test("readLayer(0) sends frames 0 to 15 of 0x52/0x21 and maps usage 16a + i to w
 	expect([entries.get(0x20), entries.get(0x21), entries.get(0x22), entries.get(0x23), entries.get(0x00), entries.get(0xff)]).toEqual([
 		{ kind: "default" },
 		{ kind: "absent" },
-		{ kind: "override", usage: usage(0x29), flags: 1 },
-		// 0x0000 is an override to usage 0, not "absent".
-		{ kind: "override", usage: usage(0x00), flags: 0 },
+		{ kind: "override", code: 0x29, flags: 1 },
+		// 0x0000 is an override to code 0, not "absent".
+		{ kind: "override", code: 0x00, flags: 0 },
 		{ kind: "absent" },
 		{ kind: "absent" },
 	]);
@@ -181,7 +181,7 @@ test("readLayer(0) sends frames 0 to 15 of 0x52/0x21 and maps usage 16a + i to w
 
 test("readKey sends layer << 8 | usage in bytes 2..3 and parses word 0", async () => {
 	const { app, session } = await u10Session([report(`5220e502${words(0x02e4)}`)]);
-	expect(await session.config.readKey(2, usage(0xe5), live)).toEqual({ kind: "override", usage: usage(0xe4), flags: 2 });
+	expect(await session.config.readKey(2, usage(0xe5), live)).toEqual({ kind: "override", code: 0xe4, flags: 2 });
 	expect(toHex(app.sent[2]!)).toBe("5220e502".padEnd(128, "0"));
 });
 

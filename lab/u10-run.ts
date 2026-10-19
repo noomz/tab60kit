@@ -45,7 +45,7 @@ export function presentUsages(): readonly number[] {
 export function describeEntry(entry: OverrideEntry | undefined): string {
 	if (entry === undefined) return "nothing";
 	if (entry.kind !== "override") return entry.kind;
-	return `override 0x${entry.usage.toString(16).padStart(2, "0")} flags ${entry.flags}`;
+	return `override 0x${entry.code.toString(16).padStart(2, "0")} flags ${entry.flags}`;
 }
 
 const sameEntry = (a: OverrideEntry | undefined, b: OverrideEntry | undefined) => describeEntry(a) === describeEntry(b);
