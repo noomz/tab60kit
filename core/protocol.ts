@@ -108,8 +108,7 @@ const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
 /** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
 const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
-/** The two override-store reads, reviewed for the U10 lab session. */
-const REVIEWED_FOR_U10 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-19" } as const;
+const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
 
 /**
  * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
@@ -304,7 +303,7 @@ export const COMMANDS = {
 		arg: { high: { min: 0, max: 0 }, low: { min: 0, max: 15 } },
 		unlocks: "keymap-read",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x21 at 0x809E..0x80DE; accessor sub_5E98 mode 3 at 0x5F0E" },
-		maturity: REVIEWED_FOR_U10,
+		maturity: CONFIRMED_BY_U10,
 	},
 	cfgReadKey: {
 		label: "Read one key override (cmd 0x52/0x20)",
@@ -320,7 +319,7 @@ export const COMMANDS = {
 		arg: { high: { min: 0, max: 2 }, low: { min: 0, max: 0xff } },
 		unlocks: "keymap-read",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x20 at 0x807C..0x809A; accessor sub_5E98 mode 3 at 0x5F0E" },
-		maturity: REVIEWED_FOR_U10,
+		maturity: CONFIRMED_BY_U10,
 	},
 	cfgSelectLayer: {
 		label: "Select layer (cmd 0x51/0x30)",

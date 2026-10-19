@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OS_KEY_MODES, type OsKeyMode, presentUsages } from "../core/keymap";
-import { NotCleared, SHIPPED } from "../core/protocol";
+import { SHIPPED } from "../core/protocol";
 import { U1_EXPECTED } from "../lab/u1-job";
 import { U10_PRECONDITIONS, diffAgainstPrediction, framesOutsideU10, readStore, u10Clearance, u10Preconditions } from "../lab/u10-run";
 import { verdictMain } from "../tools/u10-verdict";
@@ -78,10 +78,10 @@ test("a seeded override on layer 1 is the one difference the page shows", async 
 	expect(diffAgainstPrediction(read.store, "windows")).toEqual(["layer 1 usage 0x04: predicted default, read override 0x29 flags 2"]);
 });
 
-test("the shipped clearance reads nothing past the attach", async () => {
+test("the shipped clearance reads the store with the confirmed rows and sends nothing else", async () => {
 	const { read, sent } = await readOnFake([], SHIPPED);
-	expect(read.ok ? null : read.error).toBeInstanceOf(NotCleared);
-	expect(sent.map((frame) => frame.slice(0, 4))).toEqual(["1202", "1200"]);
+	if (!read.ok) throw read.error;
+	expect(new Set(sent.map((frame) => frame.slice(0, 4)))).toEqual(new Set(["1202", "1200", "5221", "5220"]));
 });
 
 test("the frame check names every sent frame outside the U10 rows", () => {
