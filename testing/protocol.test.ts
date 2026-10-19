@@ -16,6 +16,7 @@ import {
 	clears,
 	connect,
 	labClearance,
+	parseOverrideEntry,
 } from "../core/protocol";
 import { usage } from "../core/keymap";
 import { BL_INFO_HEX } from "./fixtures";
@@ -410,4 +411,24 @@ test("the audit refuses pairs the registry does not list", () => {
 	expect(audit(frame("1223"), "readVersionPage", "app")).toBe("unknown-command");
 	expect(audit(frame("12ff"), "readVersionPage", "app")).toBe("unknown-command");
 	expect(audit(frame("1002"), "readMode", "app")).toBe("unknown-command");
+});
+
+test("parseOverrideEntry reads absent, default, and flags << 8 | code, with any code byte below 0xFF", () => {
+	expect([0x0003, 0x00ff, 0x0004, 0x0204, 0x03e7, 0x0103, 0x00f0, 0x03e8, 0x02fe].map(parseOverrideEntry)).toEqual([
+		{ kind: "absent" },
+		{ kind: "default" },
+		{ kind: "override", code: 0x04, flags: 0 },
+		{ kind: "override", code: 0x04, flags: 2 },
+		{ kind: "override", code: 0xe7, flags: 3 },
+		{ kind: "override", code: 0x03, flags: 1 },
+		{ kind: "override", code: 0xf0, flags: 0 },
+		{ kind: "override", code: 0xe8, flags: 3 },
+		{ kind: "override", code: 0xfe, flags: 2 },
+	]);
+});
+
+test("parseOverrideEntry throws on flags above 3, on code 0xFF with flags set, and on a non-u16", () => {
+	for (const word of [0x0400, 0x0404, 0xff04, 0x01ff, 0x03ff, 0x10000, -1, 1.5]) {
+		expect(() => parseOverrideEntry(word)).toThrow(RangeError);
+	}
 });

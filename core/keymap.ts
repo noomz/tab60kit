@@ -11,7 +11,7 @@
  * cannot disagree.
  */
 import type { Job } from "./job";
-import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, clears, gateMessage } from "./protocol";
+import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, type OverrideEntry, clears, gateMessage } from "./protocol";
 import { type Brand, notImplemented } from "./units";
 
 /**
@@ -37,39 +37,6 @@ export function keyId(n: number): KeyId {
 export function usage(n: number): Usage {
 	if (!Number.isInteger(n) || n < 0 || n > 0xe7) throw new RangeError(`usage 0x${n.toString(16)} is outside the keyboard page`);
 	return n as Usage;
-}
-
-/** The two flag bits the store keeps per cell. Their meaning is OPEN (U11). */
-export type OverrideFlags = 0 | 1 | 2 | 3;
-
-/**
- * One entry of the per-key override store, addressed by an active usage, as cmd 0x52 returns it. "absent": no key in
- * the active keymap has that usage. "default": the key has no override and types its active usage. "override": the
- * store holds `code` for the key. The store keeps one raw byte per cell, so `code` may lie past the keyboard page
- * (0xE8..0xFE), where the firmware's other key codes live.
- */
-export type OverrideEntry =
-	| { readonly kind: "absent" }
-	| { readonly kind: "default" }
-	| { readonly kind: "override"; readonly code: number; readonly flags: OverrideFlags };
-
-const ABSENT_WORD = 0x0003;
-const DEFAULT_WORD = 0x00ff;
-
-/**
- * Decodes one u16 the board returns for an entry (U10 research, 0x807C..0x80DE and sub_5E98 mode 3 at 0x5F0E):
- * 0x0003 absent, 0x00FF default, otherwise flags << 8 | code. Throws RangeError on a word that fits none of them:
- * flags above 3, which the firmware masks to 2 bits, or a code of 0xFF with flags set, which it reports as 0x00FF.
- */
-export function parseOverrideEntry(word: number): OverrideEntry {
-	if (word === ABSENT_WORD) return { kind: "absent" };
-	if (word === DEFAULT_WORD) return { kind: "default" };
-	const flags = word >>> 8;
-	const code = word & 0xff;
-	if (!Number.isInteger(word) || word < 0 || flags > 3 || code === 0xff) {
-		throw new RangeError(`override word ${word < 0 || !Number.isInteger(word) ? word : `0x${word.toString(16).padStart(4, "0")}`} is not absent, default, or flags 0..3 with a code below 0xFF`);
-	}
-	return { kind: "override", code, flags: flags as OverrideFlags };
 }
 
 export interface KeyWrite {

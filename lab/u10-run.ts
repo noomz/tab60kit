@@ -3,9 +3,9 @@
  * layer 0 of the override store in 16 frames, then layers 1 and 2 one entry at a time for each usage the clean-store
  * prediction marks present. Each entry is compared with that prediction.
  */
-import { type Layer, type OverrideEntry, activeKeymap, predictCleanLayer, usage } from "../core/keymap";
+import { type Layer, activeKeymap, predictCleanLayer, usage } from "../core/keymap";
 import type { DevicePort } from "../core/port";
-import { type Clearance, type CommandName, connect, labClearance } from "../core/protocol";
+import { type Clearance, type CommandName, type OverrideEntry, connect, labClearance } from "../core/protocol";
 import type { TranscriptEntry } from "../testing/transcript";
 
 export const U10_PURPOSE = "U10: read the key override store";

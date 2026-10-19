@@ -67,6 +67,9 @@ lint_mutation "UI code that imports the shell entry" web-entries web/screens.ts 
 lint_mutation "a cast to OutReport outside the audit" one-egress web/webhid-port.ts 'export const forged = new Uint8Array(64) as OutReport;'
 lint_mutation "a sendReport call outside the WebHID link" one-egress lab/u1.ts 'export const raw = (device: HIDDevice) => device.sendReport(0, new Uint8Array(64));'
 lint_mutation "shipped page code that takes the lab port" lab-port web/main.ts 'import { startWebHidLab } from "./webhid-port"; void startWebHidLab;'
+lint_mutation "a protocol.ts that takes a value from keymap.ts" protocol-keymap-types-only core/protocol.ts 'import { usage } from "./keymap"; void usage;'
+lint_mutation "a protocol.ts import whose names are all inline types" protocol-keymap-types-only core/protocol.ts 'import { type KeyId } from "./keymap";'
+lint_mutation "a protocol.ts re-export of a keymap value" protocol-keymap-types-only core/protocol.ts 'export { keyId } from "./keymap";'
 
 # docs/units.md U4: the property test must notice a window check that lets one page past the end through.
 copy=$(mktemp -d)

@@ -9,7 +9,8 @@
  */
 import { readFileSync } from "node:fs";
 import { CATALOG, imageBytes, readUpdater, sha256, xorWords } from "../core/firmware";
-import { NON_CAP_CELLS, type OverrideEntry, TAB60_KEYS, activeKeymap, predictCleanLayer, romKeymap } from "../core/keymap";
+import { NON_CAP_CELLS, TAB60_KEYS, activeKeymap, predictCleanLayer, romKeymap } from "../core/keymap";
+import type { OverrideEntry } from "../core/protocol";
 import { parseMaav102 } from "../core/updater";
 
 const exePath = process.env.TAB60_EXE;
