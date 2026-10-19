@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'self'; connect-src 'none'; script-src 'self'; object-src 'none'; base-uri 'none'"
+		/>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>tab60kit lab U10</title>
+		<script type="module" src="./u10.js"></script>
+	</head>
+	<body>
+		<h1>tab60kit lab: U10 key override store read</h1>
+		<p id="about"></p>
+		<p>
+			<button id="read" type="button">Read the store</button>
+			<button id="pick" type="button" hidden>Pick the TAB 60</button>
+			<button id="download" type="button" disabled>Download transcript</button>
+		</p>
+		<p id="summary"></p>
+		<ul id="diffs"></ul>
+		<pre id="log"></pre>
+	</body>
+</html>
