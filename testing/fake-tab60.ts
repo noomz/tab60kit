@@ -1,7 +1,8 @@
 /**
- * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec, R4's app
- * command map, and the U10 static read of the override store (docs/app-firmware.md) in executable form. Every behavior it models is INFERRED until a hardware transcript (U1, U7)
- * confirms it; when the two disagree, the transcript wins and this file changes.
+ * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec, R4's app command
+ * map, and the U10 static read of the override store (docs/app-firmware.md) in executable form. Every behavior
+ * it models is INFERRED until a hardware transcript (U1, U7, U10) confirms it; when the two disagree, the transcript
+ * wins and this file changes.
  *
  * It must not import the host codec (candidate B). It implements R1's and R4's tables from the documents with its
  * own byte handling, so a codec bug in the core and the same bug in the fake cannot cancel out. probes/boundaries.ts

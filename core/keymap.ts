@@ -1,13 +1,14 @@
 /**
  * Live keymap editing on stock firmware.
  *
- * The board keeps its keymap in SRAM and rebuilds it from ROM at every boot (R4: the app has no flash-write
- * path). So the host document is the copy that persists, and applying it is another convergence: read what the
- * board holds, write the difference, read back. The board forgets the edits on any MCU reset. On 2x AAA power an
- * unplug may not reset the MCU (open question in design.md).
+ * The board rebuilds its active keymap from ROM at every boot and applies a per-key override store on top. R4 said
+ * the app has no flash-write path; the U10 static read found a serial-flash save of the block that holds the store,
+ * so whether overrides survive a battery pull is open for U11. The host document is the user's intent, and applying
+ * it is another convergence: read what the board holds, write the difference, read back.
  *
- * Every config command is unreviewed under G1. `capabilities(clearance)` derives what is unlocked from COMMANDS and
- * the same `clears` the egress audit uses, so the editor's locks and the wire gate cannot disagree.
+ * Under G1 the two override reads are reviewed and the config writes unreviewed. `capabilities(clearance)` derives
+ * what is unlocked from COMMANDS and the same `clears` the egress audit uses, so the editor's locks and the wire gate
+ * cannot disagree.
  */
 import type { Job } from "./job";
 import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, clears, gateMessage } from "./protocol";
@@ -108,7 +109,7 @@ export interface KeyCap {
  *
  * Cells with a usage that are not caps on this ANSI board: 53 (0x32, ISO #), 57 (0x35, Grave), 71 (0x64, ISO \), and
  * 79 (0xC9). The firmware rewrites 0xC9 to Space at 0x5AB4, so cell 79 is a second Space switch position. OPEN: the
- * physical Space switch is on cell 72 or on cell 79; U10 settles it on hardware.
+ * physical Space switch is on cell 72 or on cell 79. The override read cannot tell, because both usages read "default".
  */
 export const TAB60_KEYS: readonly KeyCap[] = [
 	{ id: keyId(0), row: 0, x: 0, width: 1, defaultUsage: usage(0x29), legend: "Esc" },
