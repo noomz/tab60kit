@@ -1,6 +1,6 @@
 /**
- * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec and R4's app
- * command map in executable form. Every behavior it models is INFERRED until a hardware transcript (U1, U7)
+ * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec, R4's app
+ * command map, and the U10 static read of the override store (docs/app-firmware.md) in executable form. Every behavior it models is INFERRED until a hardware transcript (U1, U7)
  * confirms it; when the two disagree, the transcript wins and this file changes.
  *
  * It must not import the host codec (candidate B). It implements R1's and R4's tables from the documents with its
@@ -56,6 +56,8 @@ export interface FakeOptions {
 	readonly clock?: "real" | "virtual";
 	/** The order the IAP erases the pages of one ERASE, which R1 does not document. Default "descending", the order that punishes one ERASE over the whole window. */
 	readonly eraseOrder?: "descending" | "ascending";
+	/** Entries of the key override store at the start, by layer and matrix cell. Every other cell holds 0xFF, its reset value. */
+	readonly overrides?: readonly { readonly layer: 0 | 1 | 2; readonly cell: number; readonly usage: number; readonly flags: 0 | 1 | 2 | 3 }[];
 }
 
 export type Violation =
@@ -97,6 +99,23 @@ const MAGIC_OFFSET = 0xb0;
 const MAGIC = 0x5aa5;
 const FIXED_WORDS_OFFSET = 0x78;
 const WRITE_CHUNK_BYTES = 52;
+/** The 80-byte matrix keymap at ROM 0xB205 of V1.01.13, which boot copies to SRAM 0x20000590 (sub_5314). */
+const ROM_KEYMAP = Uint8Array.from(
+	["291e2b143904e11d1f201a0816071b06", "21221517090a190523241c180b0d1110", "25260c120e0f3637272d132f333438e5", "2e2a30312832650000350000e70000e4", "00000000000000642c00e3e0e200e6c9"].join("").match(/../g) ?? [],
+	(byte) => parseInt(byte, 16),
+);
+/** sub_5F4C writes the Fn and Pn markers into the cells SRAM 0x20000E50/51 name, 0x3C and 0x36 by default. */
+const MARKERS: readonly [cell: number, usage: number][] = [
+	[0x3c, 0xd8],
+	[0x36, 0xd9],
+];
+const KEY_CELLS = 80;
+const KEY_LAYERS = 3;
+const NO_OVERRIDE = 0xff;
+/** What sub_5E98 returns for a usage no cell holds; the 0x52 handler sends 0x0003 in its place. */
+const NO_SUCH_KEY = 0x01ff;
+const ABSENT = 0x0003;
+
 /** Virtual time each command costs, and each erased page on top: rough, so gaps and waits are not all zero. */
 const COMMAND_MS = 1;
 const ERASE_PAGE_MS = 10;
@@ -218,6 +237,11 @@ export class FakeTab60 {
 	#packets = 0;
 	/** The IAP's write address, a window offset, held in SRAM until the next MCU reset. */
 	#cursor: number | null = null;
+	/** The override store at SRAM 0x20000D24: usage byte per cell for layers 0..2, and the two flag bits per cell (unpacked). */
+	readonly #overrides = new Uint8Array(KEY_LAYERS * KEY_CELLS).fill(NO_OVERRIDE);
+	readonly #overrideFlags = new Uint8Array(KEY_LAYERS * KEY_CELLS);
+	/** The reverse map at 0x200005E0 that sub_91EC builds from the active keymap: usage to the lowest cell holding it, 0xFF for none. */
+	readonly #reverse: Uint8Array;
 	readonly #violations: Violation[] = [];
 	readonly #received: Received[] = [];
 	readonly clock: Clock;
@@ -230,6 +254,14 @@ export class FakeTab60 {
 		this.#slowSkip = options.slowOnce?.skip ?? 0;
 		this.clock = options.clock === "virtual" ? new VirtualClock() : realClock;
 		this.#flash.set(options.blInfo ?? blInfoBlock(), BL_INFO_ADDR);
+		const active = Uint8Array.from(ROM_KEYMAP);
+		for (const [cell, marker] of MARKERS) active[cell] = marker;
+		this.#reverse = new Uint8Array(256).fill(0xff);
+		for (let cell = KEY_CELLS - 1; cell >= 0; cell--) this.#reverse[active[cell]!] = cell;
+		for (const { layer, cell, usage, flags } of options.overrides ?? []) {
+			this.#overrides[layer * KEY_CELLS + cell] = usage;
+			this.#overrideFlags[layer * KEY_CELLS + cell] = flags;
+		}
 		const page = options.versionBlock ?? syntheticVersionBlock();
 		const official = bytesSummingTo(target.imageBytes, target.wireSum32);
 		const untrusted = bytesSummingTo(target.imageBytes, target.wireSum32 + 1);
@@ -398,13 +430,12 @@ export class FakeTab60 {
 			out.set(payload.subarray(0, PAYLOAD_BYTES), PAYLOAD_OFFSET);
 			socket.report(out);
 		};
+		// The app's error marker (U10 research, 0x7684..0x76A8): FF AA 00 00, then the request's bytes 0..3.
 		const refuse = () => {
 			const out = new Uint8Array(REPORT_BYTES);
 			out[0] = 0xff;
 			out[1] = 0xaa;
-			out.set(echo, 2);
-			out[4] = cmd;
-			out[5] = sub;
+			out.set(bytes.subarray(0, 4), 4);
 			socket.report(out);
 		};
 		const always = this.options.refuseAlways;
@@ -421,6 +452,18 @@ export class FakeTab60 {
 		if (cmd === 0x12 && sub === 0x02) return reply(Uint8Array.of(mode === "app" ? 1 : 0));
 		if (cmd === 0x12 && sub >= 0x20 && sub < 0x20 + (mode === "app" ? VERSION_PAGE_PARTS_APP : VERSION_PAGE_PARTS_IAP)) return versionPagePart(sub - 0x20);
 		if (mode === "app" && cmd === 0x11 && sub === 0x00) return this.#reset("iap");
+		if (mode === "app" && cmd === 0x52 && (sub === 0x20 || sub === 0x21)) {
+			const arg = (bytes[2] ?? 0) | ((bytes[3] ?? 0) << 8);
+			const words = sub === 0x20 ? (arg <= 0x2ff ? [arg] : null) : arg <= 0x3f ? Array.from({ length: 16 }, (_, i) => (arg & 0xf) * 16 + i) : null;
+			if (words === null) return refuse();
+			const payload = new Uint8Array(2 * words.length);
+			const view = new DataView(payload.buffer);
+			words.forEach((index, i) => {
+				const word = this.#overrideEntry(index);
+				view.setUint16(2 * i, word === NO_SUCH_KEY ? ABSENT : word, true);
+			});
+			return reply(payload);
+		}
 		if (mode === "iap") {
 			if (cmd === 0x12 && sub === 0x01) return reply(FW_INFO);
 			const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -477,6 +520,15 @@ export class FakeTab60 {
 		}
 		this.#violations.push({ kind: "wrong-mode", cmd, sub, mode });
 		refuse();
+	}
+
+	/** sub_5E98(index, 3): index is layer << 8 | active usage. */
+	#overrideEntry(index: number): number {
+		const cell = this.#reverse[index & 0xff]!;
+		if (cell === 0xff) return NO_SUCH_KEY;
+		const at = (index >> 8) * KEY_CELLS + cell;
+		const byte = this.#overrides[at]!;
+		return byte === NO_OVERRIDE ? NO_OVERRIDE : (this.#overrideFlags[at]! << 8) | byte;
 	}
 
 	#late(socket: Socket, ms: number, deliver: () => void): void {
