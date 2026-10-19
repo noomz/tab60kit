@@ -2,7 +2,7 @@
 // testing/real-image.ts (CI has no vendor bytes); these tests check its shape. The generators are seeded, as in
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
-import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, keyId, parseKeymapDoc, planKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, keyId, parseKeymapDoc, parseOverrideEntry, planKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -32,7 +32,7 @@ test("the bottom row reads Ctrl Win Alt Space Alt Fn Pn Ctrl", () => {
 });
 
 type Grid = Map<Layer, Map<KeyId, Usage>>;
-const LAYERS: readonly Layer[] = [0, 1, 2, 3];
+const LAYERS: readonly Layer[] = [0, 1, 2];
 const CAPS = TAB60_KEYS.map((cap) => cap.id);
 
 /** mulberry32, as in egress-property.test.ts. */
@@ -114,11 +114,11 @@ const canonical = (overrides: Record<string, Record<string, unknown>> = { "0": {
 });
 
 test("parseKeymapDoc reads the canonical shape", () => {
-	const doc = parseKeymapDoc(canonical({ "0": { "41": 41, "4": 0xe0 }, "3": {} }, 2));
+	const doc = parseKeymapDoc(canonical({ "0": { "41": 41, "4": 0xe0 }, "2": {} }, 2));
 	expect(doc).toEqual({
 		overrides: new Map<Layer, Map<KeyId, Usage>>([
 			[0, new Map([[keyId(4), usage(0xe0)], [keyId(41), usage(41)]])],
-			[3, new Map()],
+			[2, new Map()],
 		]),
 		osMode: 2,
 	});
@@ -139,6 +139,7 @@ test("parseKeymapDoc rejects each malformed field with its path", () => {
 		[canonical(undefined, "1"), "$.osMode: "],
 		[{ ...canonical(), overrides: [] }, "$.overrides: "],
 		[{ ...canonical(), overrides: null }, "$.overrides: "],
+		[canonical({ "3": {} }), "$.overrides.3: is not a layer from 0 to 2"],
 		[canonical({ "4": {} }), "$.overrides.4: "],
 		[canonical({ "-1": {} }), "$.overrides.-1: "],
 		[canonical({ "00": {} }), "$.overrides.00: "],
@@ -177,10 +178,27 @@ test("serialize of a parsed canonical string returns the same string, sorted", (
 	const text = '{\n\t"format": "tab60kit-keymap",\n\t"version": 1,\n\t"osMode": null,\n\t"overrides": {\n\t\t"0": {\n\t\t\t"41": 41\n\t\t},\n\t\t"2": {}\n\t}\n}\n';
 	expect(serializeKeymapDoc(parseKeymapDoc(JSON.parse(text)) as KeymapDoc)).toBe(text);
 	const unsorted: KeymapDoc = {
-		overrides: new Map<Layer, Map<KeyId, Usage>>([[3, new Map([[keyId(41), usage(1)], [keyId(4), usage(2)]])], [1, new Map()]]),
+		overrides: new Map<Layer, Map<KeyId, Usage>>([[2, new Map([[keyId(41), usage(1)], [keyId(4), usage(2)]])], [1, new Map()]]),
 		osMode: 4,
 	};
 	expect(serializeKeymapDoc(unsorted)).toBe(
-		'{\n\t"format": "tab60kit-keymap",\n\t"version": 1,\n\t"osMode": 4,\n\t"overrides": {\n\t\t"1": {},\n\t\t"3": {\n\t\t\t"4": 2,\n\t\t\t"41": 1\n\t\t}\n\t}\n}\n',
+		'{\n\t"format": "tab60kit-keymap",\n\t"version": 1,\n\t"osMode": 4,\n\t"overrides": {\n\t\t"1": {},\n\t\t"2": {\n\t\t\t"4": 2,\n\t\t\t"41": 1\n\t\t}\n\t}\n}\n',
 	);
+});
+
+test("parseOverrideEntry reads absent, default, and flags << 8 | usage", () => {
+	expect([0x0003, 0x00ff, 0x0004, 0x0204, 0x03e7, 0x0103].map(parseOverrideEntry)).toEqual([
+		{ kind: "absent" },
+		{ kind: "default" },
+		{ kind: "override", usage: usage(0x04), flags: 0 },
+		{ kind: "override", usage: usage(0x04), flags: 2 },
+		{ kind: "override", usage: usage(0xe7), flags: 3 },
+		{ kind: "override", usage: usage(0x03), flags: 1 },
+	]);
+});
+
+test("parseOverrideEntry throws on a word that fits no entry", () => {
+	for (const word of [0x0400, 0x0404, 0xff04, 0x01ff, 0x03ff, 0x00e8, 0x10000, -1, 1.5]) {
+		expect(() => parseOverrideEntry(word)).toThrow(RangeError);
+	}
 });

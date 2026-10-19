@@ -13,8 +13,11 @@ import type { Job } from "./job";
 import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, clears, gateMessage } from "./protocol";
 import { type Brand, notImplemented } from "./units";
 
-/** R4: the layer index is checked below 4. Which index is the base layer is settled by U10. */
-export type Layer = 0 | 1 | 2 | 3;
+/**
+ * A key layer of the override store. sub_5E98 bounds its index at 0x2FF (layer << 8 | usage), and the reset clears
+ * 3 x (80 + 20) bytes, so there are three (U10 research, VERIFIED). Layer 0 is the base layer, INFERRED.
+ */
+export type Layer = 0 | 1 | 2;
 
 /** Index into the 80-byte matrix keymap the firmware copies from ROM 0xB205 at boot. Built only by `keyId`. */
 export type KeyId = Brand<number, "KeyId">;
@@ -33,6 +36,38 @@ export function keyId(n: number): KeyId {
 export function usage(n: number): Usage {
 	if (!Number.isInteger(n) || n < 0 || n > 0xe7) throw new RangeError(`usage 0x${n.toString(16)} is outside the keyboard page`);
 	return n as Usage;
+}
+
+/** The two flag bits the store keeps per cell. Their meaning is OPEN (U11). */
+export type OverrideFlags = 0 | 1 | 2 | 3;
+
+/**
+ * One entry of the per-key override store, addressed by an active usage, as cmd 0x52 returns it. "absent": no key in
+ * the active keymap has that usage. "default": the key has no override and types its active usage. "override": the
+ * key types `usage` instead.
+ */
+export type OverrideEntry =
+	| { readonly kind: "absent" }
+	| { readonly kind: "default" }
+	| { readonly kind: "override"; readonly usage: Usage; readonly flags: OverrideFlags };
+
+const ABSENT_WORD = 0x0003;
+const DEFAULT_WORD = 0x00ff;
+
+/**
+ * Decodes one u16 the board returns for an entry (U10 research, 0x807C..0x80DE and sub_5E98 mode 3 at 0x5F0E):
+ * 0x0003 absent, 0x00FF default, otherwise flags << 8 | usage. Throws RangeError on a word that fits none of them,
+ * such as flags above 3 or a usage past the keyboard page.
+ */
+export function parseOverrideEntry(word: number): OverrideEntry {
+	if (word === ABSENT_WORD) return { kind: "absent" };
+	if (word === DEFAULT_WORD) return { kind: "default" };
+	const flags = word >>> 8;
+	const low = word & 0xff;
+	if (!Number.isInteger(word) || word < 0 || flags > 3 || low > 0xe7) {
+		throw new RangeError(`override word ${word < 0 || !Number.isInteger(word) ? word : `0x${word.toString(16).padStart(4, "0")}`} is not absent, default, or flags 0..3 with a keyboard usage`);
+	}
+	return { kind: "override", usage: usage(low), flags: flags as OverrideFlags };
 }
 
 export interface KeyWrite {
@@ -168,8 +203,8 @@ const ascending = (a: number, b: number) => a - b;
 
 /**
  * Pure diff: the overrides whose usage differs from what the board reports, by layer and then key. A cell without an
- * override is left alone, because the defaults above the base layer are unknown (U10 settles which index is the
- * base). A layer missing from `observed` gets every override written.
+ * override is left alone, because the defaults above the base layer are unknown. A layer missing from `observed` gets
+ * every override written.
  */
 export function planKeymap(
 	doc: KeymapDoc,
@@ -207,7 +242,7 @@ export function applyKeymap(doc: KeymapDoc): Job {
 const FORMAT = "tab60kit-keymap";
 const VERSION = 1;
 const FIELDS = ["format", "version", "osMode", "overrides"] as const;
-const LAYERS: readonly string[] = ["0", "1", "2", "3"];
+const LAYERS: readonly string[] = ["0", "1", "2"];
 const CAP_IDS: ReadonlySet<number> = new Set(TAB60_KEYS.map((cap) => cap.id));
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -236,7 +271,7 @@ export function parseKeymapDoc(json: unknown): KeymapDoc | { readonly error: str
 	const overrides = new Map<Layer, ReadonlyMap<KeyId, Usage>>();
 	for (const layer of Object.keys(json.overrides)) {
 		const path = `$.overrides.${layer}`;
-		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 3");
+		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 2");
 		const keys = json.overrides[layer];
 		if (!isObject(keys)) return error(path, "is not an object");
 		const layerMap = new Map<KeyId, Usage>();
