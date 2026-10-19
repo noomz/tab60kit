@@ -18,7 +18,7 @@
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
 import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, windowFor } from "./flashmap";
-import type { KeyId, KeyWrite, Layer, OsMode, Usage } from "./keymap";
+import { type KeyWrite, type Layer, type OsMode, type OverrideEntry, type Usage, parseOverrideEntry } from "./keymap";
 import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
 
@@ -764,12 +764,34 @@ async function restartToApp(ch: Channel): Promise<void> {
 	}
 }
 
-/** The live config channel (app mode). Every method throws NotCleared until U10 and U11 lift G1 for it. */
+/**
+ * The live config channel (app mode). Each method throws NotCleared, before anything leaves, unless the clearance
+ * clears its commands. The reads return the per-key override store, not the active keymap, which no command returns
+ * (U10 research). Writes wait for U11.
+ */
 export interface ConfigChannel {
-	/** One layer as the board holds it now. The read command and format are INFERRED; U10 settles them. */
-	readLayer(layer: Layer): Promise<ReadonlyMap<KeyId, Usage>>;
+	/**
+	 * Layer 0 of the override store, one entry for each active usage 0..255, in 16 cfgReadKeys frames. Only layer 0
+	 * has a bulk read; readKey reads layers 1 and 2.
+	 */
+	readLayer(layer: 0, signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>>;
+	/** The entry for the key whose active usage is `usage`, on `layer`, in one cfgReadKey frame. */
+	readKey(layer: Layer, usage: Usage, signal: AbortSignal): Promise<OverrideEntry>;
 	setKey(write: KeyWrite): Promise<void>;
 	setOsMode(mode: OsMode): Promise<void>;
+}
+
+const OVERRIDES_PER_FRAME = 16;
+
+const entryAt = (reply: InReport, i: number) => parseOverrideEntry(viewOf(reply).getUint16(PAYLOAD_OFFSET + 2 * i, true));
+
+async function readLayer(ch: Channel, signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>> {
+	const entries = new Map<number, OverrideEntry>();
+	for (let frame = 0; frame <= COMMANDS.cfgReadKeys.arg.low.max; frame++) {
+		const reply = await transmit(ch, "cfgReadKeys", { arg: frame }, signal);
+		for (let i = 0; i < OVERRIDES_PER_FRAME; i++) entries.set(frame * OVERRIDES_PER_FRAME + i, entryAt(reply, i));
+	}
+	return entries;
 }
 
 function configChannel(ch: Channel): ConfigChannel {
@@ -778,7 +800,8 @@ function configChannel(ch: Channel): ConfigChannel {
 		return notImplemented(what);
 	};
 	return {
-		readLayer: async (layer) => gated(["cfgReadKeys"], `readLayer(${layer})`),
+		readLayer: (_layer, signal) => readLayer(ch, signal),
+		readKey: async (layer, usage, signal) => entryAt(await transmit(ch, "cfgReadKey", { arg: (layer << 8) | usage }, signal), 0),
 		setKey: async (write) => gated(["cfgSelectLayer", "cfgSetKey"], `setKey(${write.layer}, ${write.key}, ${write.usage})`),
 		setOsMode: async (mode) => gated(["cfgSetOsMode"], `setOsMode(${mode})`),
 	};
