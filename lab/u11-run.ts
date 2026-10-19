@@ -25,7 +25,11 @@ export const U11_PRECONDITIONS = [
 	{ key: "keyboardFree", label: "No other app holds the keyboard" },
 	{ key: "osModeNotSwapped", label: "The board's OS key mode is Windows (Fn+Q) or Mac (Fn+W), not the Caps/Ctrl swap (Fn+E), so usage 0x39 is the physical Caps Lock" },
 	{ key: "noHostRemap", label: "Neither macOS Modifier Keys nor Karabiner remaps Caps Lock or Left Control" },
-	{ key: "noSavingKeys", label: "I will press no Fn or Pn combination during the run: the OS mode, Win lock, layout, LED, and recording keys save the store" },
+	{
+		key: "noSavingKeys",
+		label:
+			"During the run I will press only Caps Lock. Each of these saves the profile to flash and spoils the power-cycle phase: Pn+R (reset this layer), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
+	},
 	{ key: "bluetoothReady", label: "The batteries are in and the board is paired with this computer over Bluetooth" },
 ] as const;
 
@@ -70,14 +74,14 @@ export const U11_STEPS: readonly U11Step[] = [
 	{
 		kind: "user",
 		id: "keylog-usb",
-		label: "Over USB, press Caps Lock on the TAB 60 two or three times.",
+		label: "Over USB, press Caps Lock on the TAB 60 two or three times, and no other key.",
 		question: "Did Caps Lock act as Left Control, with the keylog showing ControlLeft and no CapsLock?",
 		keylog: TYPES_CONTROL,
 	},
 	{
 		kind: "user",
 		id: "keylog-bluetooth",
-		label: "Unplug USB. Switch the board to Bluetooth; the batteries keep it running. Press Caps Lock two or three times. Then plug USB back in.",
+		label: "Unplug USB. Switch the board to Bluetooth; the batteries keep it running. Press Caps Lock two or three times, and no other key. Then plug USB back in.",
 		question: "Over Bluetooth, did Caps Lock act as Left Control, with the keylog showing ControlLeft and no CapsLock?",
 		keylog: TYPES_CONTROL,
 	},
@@ -100,7 +104,7 @@ export const U11_STEPS: readonly U11Step[] = [
 	{
 		kind: "user",
 		id: "keylog-after-power",
-		label: "Press Caps Lock on the TAB 60 two or three times.",
+		label: "Press Caps Lock on the TAB 60 two or three times, and no other key.",
 		question: "Did Caps Lock act as Caps Lock again, with the keylog showing CapsLock and no ControlLeft?",
 		keylog: TYPES_CAPS_LOCK,
 	},
