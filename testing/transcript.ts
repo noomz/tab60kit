@@ -73,6 +73,8 @@ export type TranscriptEntry =
 	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
 	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
 	| { readonly t: number; readonly kind: "precondition"; readonly key: string; readonly met: boolean }
+	/** The user finished a step of a guided lab run: their yes or no, and each key code the page logged during it. */
+	| { readonly t: number; readonly kind: "attest"; readonly step: string; readonly answer: boolean; readonly keys: readonly string[] }
 	| { readonly t: number; readonly kind: "lost" | "closed"; readonly mode?: Mode };
 
 const WRITE_CMD = 0x1f;
@@ -179,6 +181,12 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 			const { met } = value;
 			if (typeof met !== "boolean") fail(where, "met is not a boolean");
 			return { t, kind, key: string(value, "key", where), met };
+		}
+		case "attest": {
+			const { answer, keys } = value;
+			if (typeof answer !== "boolean") fail(where, "answer is not a boolean");
+			if (!Array.isArray(keys) || !keys.every((key) => typeof key === "string")) fail(where, "keys is not an array of strings");
+			return { t, kind, step: string(value, "step", where), answer, keys };
 		}
 		case "lost":
 		case "closed": {

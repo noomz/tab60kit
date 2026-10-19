@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'self'; connect-src 'none'; script-src 'self'; object-src 'none'; base-uri 'none'"
+		/>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>tab60kit lab U11</title>
+		<script type="module" src="./u11.js"></script>
+	</head>
+	<body>
+		<h1>tab60kit lab: U11 one key write and a power cycle</h1>
+		<p id="about"></p>
+		<fieldset id="preconditions">
+			<legend>Before Start</legend>
+		</fieldset>
+		<p>
+			<button id="start" type="button" disabled>Start</button>
+			<button id="pick" type="button" hidden>Pick the TAB 60</button>
+			<button id="download" type="button" disabled>Download transcript</button>
+		</p>
+		<section id="step" hidden>
+			<h2>Your step</h2>
+			<p id="step-label"></p>
+			<p>Keylog: <output id="keylog"></output></p>
+			<p>
+				<button id="simulate" type="button" hidden>Press Caps Lock on the fake board</button>
+			</p>
+			<p id="step-question"></p>
+			<p>
+				<button id="yes" type="button">Yes</button>
+				<button id="no" type="button">No</button>
+			</p>
+		</section>
+		<p id="summary"></p>
+		<ol id="outcomes"></ol>
+		<pre id="log"></pre>
+	</body>
+</html>
