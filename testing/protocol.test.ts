@@ -16,6 +16,7 @@ import {
 	clears,
 	connect,
 	labClearance,
+	overrideValueWord,
 	parseOverrideEntry,
 } from "../core/protocol";
 import { usage } from "../core/keymap";
@@ -197,6 +198,56 @@ test("a config read skips a reply whose bytes 2..3 do not echo its argument", as
 test("a config read throws on a word that fits no entry", async () => {
 	const { session } = await u10Session([report(`52200400${words(0x0404)}`)]);
 	await expect(session.config.readKey(0, usage(0x04), live)).rejects.toBeInstanceOf(RangeError);
+});
+
+const u11 = labClearance(["readMode", "readBlInfo", "cfgReadKey", "gateQuery", "gateOpen", "gateClose", "cfgWriteKey"], "protocol test");
+
+async function u11Session(replies: InReport[]) {
+	const app = new ScriptedLink("app", [...appAttach(), ...replies]);
+	const session = await connect(ctx(new ScriptedPort([app]), undefined, u11), { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	return { app, session };
+}
+
+test("the gate and the key write are gated by G1 before anything leaves", async () => {
+	const { app, session } = await u10Session([]);
+	await expect(session.config.queryGate(live)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.openGate(live)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.closeGate(live)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.writeKey(0, usage(0x39), { kind: "default" }, live)).rejects.toBeInstanceOf(NotCleared);
+	expect(app.sent).toHaveLength(2);
+});
+
+test("queryGate sends 41 FF 00 00 and reads the gate byte from byte 1 and the timer from bytes 2..3", async () => {
+	const { app, session } = await u11Session([report("41000000"), report("4101e803")]);
+	expect(await session.config.queryGate(live)).toEqual({ gate: 0, timer: 0 });
+	expect(await session.config.queryGate(live)).toEqual({ gate: 0x01, timer: 1000 });
+	expect(app.sent.slice(2).map(toHex)).toEqual([frame("41ff"), frame("41ff")]);
+});
+
+test("openGate sends 41 80 00 00 and closeGate 41 00 00 00, each waiting for its echo", async () => {
+	const { app, session } = await u11Session([report("41800000"), report("41ff0000"), report("41000000")]);
+	await session.config.openGate(live);
+	await session.config.closeGate(live);
+	expect(app.sent.slice(2).map(toHex)).toEqual([frame("4180"), frame("4100")]);
+	expect(app.replies).toHaveLength(0);
+});
+
+test("writeKey sends layer << 8 | usage and the u16 LE value, and returns the entry read back in bytes 4..5", async () => {
+	const { app, session } = await u11Session([report(`51203900${words(0x00e0)}`), report(`51203900${words(0x00ff)}`)]);
+	expect(await session.config.writeKey(0, usage(0x39), { kind: "override", code: 0xe0, flags: 0 }, live)).toEqual({ kind: "override", code: 0xe0, flags: 0 });
+	expect(await session.config.writeKey(0, usage(0x39), { kind: "default" }, live)).toEqual({ kind: "default" });
+	expect(app.sent.slice(2).map(toHex)).toEqual(["51203900e000".padEnd(128, "0"), "51203900ff00".padEnd(128, "0")]);
+});
+
+test("writeKey on a closed gate throws DeviceRefused with the error marker", async () => {
+	const { session } = await u11Session([report("ffaa000051203900")]);
+	await expect(session.config.writeKey(0, usage(0x39), { kind: "override", code: 0xe0, flags: 0 }, live)).rejects.toBeInstanceOf(DeviceRefused);
+});
+
+test("overrideValueWord maps default to 0x00FF and a code to itself, and refuses 0x03, 0xFF, and non-bytes", () => {
+	expect([overrideValueWord({ kind: "default" }), overrideValueWord({ kind: "override", code: 0xe0, flags: 0 }), overrideValueWord({ kind: "override", code: 0, flags: 0 })]).toEqual([0x00ff, 0x00e0, 0x0000]);
+	for (const code of [0x03, 0xff, 0x100, -1, 1.5]) expect(() => overrideValueWord({ kind: "override", code, flags: 0 })).toThrow(RangeError);
 });
 
 test("a probe that reads the other mode's byte throws ModeDisagrees", async () => {

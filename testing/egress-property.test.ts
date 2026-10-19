@@ -34,14 +34,18 @@ function hasExpectedLayout(payload: Uint8Array): boolean {
 }
 
 /**
- * The largest argument bytes 2..3 may carry, from the U10 static read: 0x52/0x21 takes a frame index 0..15 (the board
- * uses only its low nibble), 0x52/0x20 takes layer << 8 | usage with layers 0..2, and every other row takes none.
+ * The largest argument bytes 2..3 may carry, from the U10 and U11 static reads: 0x52/0x21 takes a frame index 0..15
+ * (the board uses only its low nibble), 0x52/0x20 and 0x51/0x20 take layer << 8 | usage with layers 0..2, and every
+ * other row takes none.
  */
 function maxArg(cmd: number, sub: number): number {
 	if (cmd === 0x52 && sub === 0x21) return 0x0f;
-	if (cmd === 0x52 && sub === 0x20) return 0x2ff;
+	if ((cmd === 0x52 || cmd === 0x51) && sub === 0x20) return 0x2ff;
 	return 0;
 }
+
+/** The user's U11 ruling: 0x51/0x20 carries a u16 value in bytes 4..5 with flags 0, so its high byte is 0. */
+const KEY_WRITE_VALUE_MAX = 0x00ff;
 
 const inside = (offset: number, length: number) => Number.isInteger(offset) && offset >= 0 && length >= 1 && offset + length <= WINDOW_BYTES;
 
@@ -108,6 +112,11 @@ function problemWith(c: Case, passed: Extract<EgressVerdict, { ok: true }>): str
 			cursor = c.cursor + sub;
 		}
 		if (!inside(offset, length)) return `addresses outside the window: offset 0x${offset.toString(16)}, length 0x${length.toString(16)}`;
+	}
+	if (cmd === 0x51 && sub === 0x20) {
+		payloadBytes = 2;
+		const value = view.getUint16(4, true);
+		if (value > KEY_WRITE_VALUE_MAX) return `writes value 0x${value.toString(16)}, which has flags set`;
 	}
 	if (frame.subarray(4 + payloadBytes).some((byte) => byte !== 0)) return "carries a byte past its payload";
 	if (!Object.is(passed.cursor, cursor)) return `leaves the cursor at ${passed.cursor}, not ${cursor}`;
@@ -278,6 +287,7 @@ test("100,000 random frames and contexts: every frame the audit passes names a r
 			const sub = typeof spec.sub === "number" ? spec.sub : spec.sub === "length" ? 1 : spec.sub.first + r.below(spec.sub.count);
 			frame = frameOf(spec.cmd, sub);
 			if (r.chance(0.5)) new DataView(frame.buffer).setUint16(2, r.pick([0, 1, 0x0f, 0x10, 0x3f, 0x00ff, 0x0100, 0x02ff, 0x0300, r.below(0x1_0000)]), true);
+			if (spec.value !== null && r.chance(0.7)) new DataView(frame.buffer).setUint16(4, r.pick([0x00e0, 0x00ff, 0x0100, 0x01e0, 0x02e0, 0x03ff, r.below(0x1_0000)]), true);
 		} else {
 			const made = addressed(r);
 			frame = made.frame;
@@ -306,7 +316,7 @@ test("100,000 random frames and contexts: every frame the audit passes names a r
 	console.log(`U4 audit property: passed ${JSON.stringify(Object.fromEntries(passed))}, refused ${JSON.stringify(Object.fromEntries(refused))}`);
 	expect(COMMAND_NAMES.filter((name) => (passed.get(name) ?? 0) < 100)).toEqual([]);
 	expect(
-		["bad-length", "unknown-command", "not-requested", "not-cleared", "wrong-mode", "arg-not-allowed", "payload-overrun", "no-window", "outside-window", "unaligned-erase", "no-write-cursor"].filter(
+		["bad-length", "unknown-command", "not-requested", "not-cleared", "wrong-mode", "arg-not-allowed", "value-not-allowed", "payload-overrun", "no-window", "outside-window", "unaligned-erase", "no-write-cursor"].filter(
 			(code) => (refused.get(code) ?? 0) < 100,
 		),
 	).toEqual([]);

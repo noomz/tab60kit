@@ -18,7 +18,7 @@
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
 import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, windowFor } from "./flashmap";
-import type { KeyWrite, Layer, OsMode, Usage } from "./keymap";
+import type { Layer, OsMode, Usage } from "./keymap";
 import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
 
@@ -85,19 +85,21 @@ export interface CommandSpec {
 	readonly modes: readonly Mode[];
 	readonly effect: Effect;
 	/**
-	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument. write-ack: 0x1E 0x02
-	 * then the u32 next offset. none: the board resets instead.
+	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument. echo-cmd: byte 0
+	 * repeats cmd and bytes 1..3 carry an answer. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets
+	 * instead.
 	 */
-	readonly reply: "echo" | "echo-arg" | "write-ack" | "none";
+	readonly reply: "echo" | "echo-arg" | "echo-cmd" | "write-ack" | "none";
 	readonly timeoutMs: number;
 	readonly address: Addressing;
 	/**
-	 * How many bytes from byte 4 the frame carries: 0 unaddressed, 8 for a range, 4 for set-cursor, and "sub" for WRITE,
-	 * whose sub byte is its length. The config write rows stay at 0 until U11 settles their formats, so no config payload
-	 * can pass before then.
+	 * How many bytes from byte 4 the frame carries: 0 unaddressed, 8 for a range, 4 for set-cursor, 2 for a row with a
+	 * `value`, and "sub" for WRITE, whose sub byte is its length.
 	 */
 	readonly payloadBytes: number | "sub";
 	readonly arg: ArgRule;
+	/** What request bytes 4..5 may carry, read as a u16 LE value with the same byte bounds as `arg`. null: no value. */
+	readonly value: ArgRule | null;
 	/** The editor capability this command is part of. keymap.ts derives its locks from this field. */
 	readonly unlocks: "keymap-read" | "keymap-write" | "os-mode" | null;
 	readonly evidence: Evidence;
@@ -109,6 +111,8 @@ const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "202
 /** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
 const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
 const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
+/** The user's G1 ruling on docs/app-firmware.md: the three gate rows and the single key write. No capture yet. */
+const REVIEWED_FOR_U11 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-19" } as const;
 
 /**
  * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
@@ -133,6 +137,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
 		maturity: CONFIRMED_BY_U1,
@@ -148,6 +153,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
 		maturity: CONFIRMED_BY_U1,
@@ -164,6 +170,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:132-135; R4 app handler 0x767A" },
 		maturity: CONFIRMED_BY_U1,
@@ -180,6 +187,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
 		maturity: CONFIRMED_BY_U1,
@@ -195,6 +203,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
 		maturity: CONFIRMED_BY_U1,
@@ -210,6 +219,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
 		maturity: CONFIRMED_BY_U1,
@@ -225,6 +235,7 @@ export const COMMANDS = {
 		address: "range",
 		payloadBytes: 8,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
 		maturity: REVIEWED_FOR_U5,
@@ -240,6 +251,7 @@ export const COMMANDS = {
 		address: "range",
 		payloadBytes: 8,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
 		maturity: CONFIRMED_BY_U1,
@@ -255,6 +267,7 @@ export const COMMANDS = {
 		address: "range",
 		payloadBytes: 8,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:237-250 (the vendor updater checks the sum only)" },
 		maturity: UNREVIEWED,
@@ -270,6 +283,7 @@ export const COMMANDS = {
 		address: "set-cursor",
 		payloadBytes: 4,
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
 		maturity: REVIEWED_FOR_U5,
@@ -285,6 +299,7 @@ export const COMMANDS = {
 		address: "at-cursor",
 		payloadBytes: "sub",
 		arg: NO_ARG,
+		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
 		maturity: REVIEWED_FOR_U5,
@@ -301,6 +316,7 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		/** Frame a covers active usages 16a to 16a + 15. The board uses only arg & 0xF, so 16 and up would alias. */
 		arg: { high: { min: 0, max: 0 }, low: { min: 0, max: 15 } },
+		value: null,
 		unlocks: "keymap-read",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x21 at 0x809E..0x80DE; accessor sub_5E98 mode 3 at 0x5F0E" },
 		maturity: CONFIRMED_BY_U10,
@@ -317,39 +333,80 @@ export const COMMANDS = {
 		payloadBytes: 0,
 		/** layer << 8 | active usage. sub_5E98 bounds the index at 0x2FF, so layers 0 to 2. */
 		arg: { high: { min: 0, max: 2 }, low: { min: 0, max: 0xff } },
+		value: null,
 		unlocks: "keymap-read",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x20 at 0x807C..0x809A; accessor sub_5E98 mode 3 at 0x5F0E" },
 		maturity: CONFIRMED_BY_U10,
 	},
-	cfgSelectLayer: {
-		label: "Select layer (cmd 0x51/0x30)",
-		cmd: 0x51,
-		sub: 0x30,
+	gateQuery: {
+		label: "Query the host-config gate (cmd 0x41, byte 1 = 0xFF)",
+		cmd: 0x41,
+		sub: 0xff,
 		modes: ["app"],
-		effect: "sram-write",
-		reply: "echo",
+		effect: "read",
+		/** Byte 1 is the gate byte 0x200006FA and bytes 2..3 the u16 timer at 0x200006F8, so only byte 0 repeats. */
+		reply: "echo-cmd",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: "keymap-write",
-		evidence: { source: "app-disassembly", at: "R4 0x7EB2, index < 4; format INFERRED" },
-		maturity: UNREVIEWED,
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE (no gate); 0xFF reads only, 0x7CB0 and 0x7CCE..0x7CD4" },
+		maturity: REVIEWED_FOR_U11,
 	},
-	cfgSetKey: {
-		label: "Set key (cmd 0x51/0xA8)",
-		cmd: 0x51,
-		sub: 0xa8,
+	gateOpen: {
+		label: "Open the host-config gate without config mode (cmd 0x41, byte 1 = 0x80)",
+		cmd: 0x41,
+		/** Bit 7 alone passes the 0x81 mask cmd 0x51 tests and skips config mode (bit 0), whose exit reloads flash. */
+		sub: 0x80,
 		modes: ["app"],
 		effect: "sram-write",
-		reply: "echo",
+		reply: "echo-arg",
+		timeoutMs: 500,
+		address: "none",
+		payloadBytes: 0,
+		/** Bytes 2..3 become the gate timer; 0 never expires (0x8484). */
+		arg: NO_ARG,
+		value: null,
+		unlocks: "keymap-write",
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE..0x7D08, sole store to 0x200006FA at 0x7CBE; bit 0 clear skips sub_721C and the 0x7CD6 reload" },
+		maturity: REVIEWED_FOR_U11,
+	},
+	gateClose: {
+		label: "Close the host-config gate (cmd 0x41, byte 1 = 0x00)",
+		cmd: 0x41,
+		sub: 0x00,
+		modes: ["app"],
+		effect: "sram-write",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: "keymap-write",
-		evidence: { source: "app-disassembly", at: "R4 0x7EB2, per-layer per-key entry at 0x20000750; format INFERRED" },
-		maturity: UNREVIEWED,
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE..0x7D08; after 0x80 the old bit 0 is clear, so 0x7CD6 reloads nothing" },
+		maturity: REVIEWED_FOR_U11,
+	},
+	cfgWriteKey: {
+		label: "Write one key override (cmd 0x51/0x20)",
+		cmd: 0x51,
+		sub: 0x20,
+		modes: ["app"],
+		effect: "sram-write",
+		/** Bytes 0..3 repeat; bytes 4..5 are the entry read back, as cmd 0x52/0x20 returns it. */
+		reply: "echo-arg",
+		timeoutMs: 500,
+		address: "none",
+		payloadBytes: 2,
+		/** layer << 8 | active usage, layers 0 to 2, as cfgReadKey. */
+		arg: { high: { min: 0, max: 2 }, low: { min: 0, max: 0xff } },
+		/** flags << 8 | code with flags 0 only: a plain usage, or 0x00FF for no override. Flags 1 to 3 are function codes or dead keys. */
+		value: { high: { min: 0, max: 0 }, low: { min: 0, max: 0xff } },
+		unlocks: "keymap-write",
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x51 entry 0x7EB2 refuses unless [0x200006FA] & 0x81; sub 0x20 at 0x7F34..0x7F4A calls sub_5E98, RAM only, no save; reply via the 0x52 read at 0x7FE4" },
+		maturity: REVIEWED_FOR_U11,
 	},
 	cfgSetOsMode: {
 		label: "Set OS mode (cmd 0x51/0x00)",
@@ -362,6 +419,7 @@ export const COMMANDS = {
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
+		value: null,
 		unlocks: "os-mode",
 		evidence: { source: "app-disassembly", at: "R4 0x7EF2 cmp r7,#5 then strb to 0x2000000F" },
 		maturity: UNREVIEWED,
@@ -462,6 +520,8 @@ export type EgressRefusal =
 	| { readonly code: "wrong-mode"; readonly command: CommandName; readonly mode: Mode }
 	/** Bytes 2..3, as a u16 LE, outside what the row's `arg` allows. */
 	| { readonly code: "arg-not-allowed"; readonly command: CommandName; readonly arg: number }
+	/** Bytes 4..5, as a u16 LE, outside what the row's `value` allows. */
+	| { readonly code: "value-not-allowed"; readonly command: CommandName; readonly value: number }
 	/** `at` is the first nonzero byte past the payload the command's row declares. */
 	| { readonly code: "payload-overrun"; readonly at: number }
 	| { readonly code: "no-window"; readonly command: CommandName }
@@ -501,7 +561,7 @@ const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
 
 const within = (bounds: ByteBounds, byte: number) => byte >= bounds.min && byte <= bounds.max;
 
-/** Whether bytes 2..3, read as a u16 LE, are an argument `rule` allows. */
+/** Whether a u16 LE field, bytes 2..3 or a row's value in bytes 4..5, is one `rule` allows. */
 export function argAllowed(rule: ArgRule, arg: number): boolean {
 	return within(rule.high, arg >>> 8) && within(rule.low, arg & 0xff);
 }
@@ -537,6 +597,8 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 	if (!spec.modes.includes(ctx.mode)) return refuse({ code: "wrong-mode", command, mode: ctx.mode });
 	const arg = view.getUint16(2, true);
 	if (!argAllowed(spec.arg, arg)) return refuse({ code: "arg-not-allowed", command, arg });
+	const value = view.getUint16(PAYLOAD_OFFSET, true);
+	if (spec.value !== null && !argAllowed(spec.value, value)) return refuse({ code: "value-not-allowed", command, value });
 	const payloadEnd = PAYLOAD_OFFSET + (spec.payloadBytes === "sub" ? sub : spec.payloadBytes);
 	const overrun = frame.findIndex((byte, at) => at >= payloadEnd && byte !== 0);
 	if (overrun !== -1) return refuse({ code: "payload-overrun", at: overrun });
@@ -641,7 +703,7 @@ function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cur
 		const next = view.getUint32(4, true);
 		return next === cursor ? { kind: "ack" } : { kind: "refused", detail: next };
 	}
-	const echoed = spec.reply === "echo-arg" ? 4 : 2;
+	const echoed = spec.reply === "echo-arg" ? 4 : spec.reply === "echo-cmd" ? 1 : 2;
 	return sent.subarray(0, echoed).every((byte, at) => reply[at] === byte) ? { kind: "ack" } : { kind: "stale" };
 }
 
@@ -763,7 +825,10 @@ async function restartToApp(ch: Channel): Promise<void> {
 	}
 }
 
-/** The two flag bits the store keeps per cell. Their meaning is OPEN (U11). */
+/**
+ * The two flag bits the store keeps per cell (U11 research, Q3): 0 a plain HID usage, 1 a function code (profile, OS
+ * mode, LED, some of which save flash), 2 and 3 a dead key in V1.01.13.
+ */
 export type OverrideFlags = 0 | 1 | 2 | 3;
 
 /**
@@ -781,6 +846,20 @@ const ABSENT_WORD = 0x0003;
 const DEFAULT_WORD = 0x00ff;
 
 /**
+ * What cfgWriteKey may store: no override, or a plain code with flags 0. A code of 0x03 would read back as absent, and
+ * sub_5E98 refuses it; 0xFF is the default.
+ */
+export type OverrideValue = { readonly kind: "default" } | { readonly kind: "override"; readonly code: number; readonly flags: 0 };
+
+/** The u16 cfgWriteKey carries in bytes 4..5. Throws RangeError on a code that is not 0x00..0xFE or is 0x03. */
+export function overrideValueWord(value: OverrideValue): number {
+	if (value.kind === "default") return DEFAULT_WORD;
+	const { code } = value;
+	if (!Number.isInteger(code) || code < 0 || code >= DEFAULT_WORD || code === ABSENT_WORD) throw new RangeError(`override code ${code} is not 0x00..0xFE without 0x03`);
+	return code;
+}
+
+/**
  * Decodes one u16 the board returns for an entry (U10 research, 0x807C..0x80DE and sub_5E98 mode 3 at 0x5F0E):
  * 0x0003 absent, 0x00FF default, otherwise flags << 8 | code. Throws RangeError on a word that fits none of them:
  * flags above 3, which the firmware masks to 2 bits, or a code of 0xFF with flags set, which it reports as 0x00FF.
@@ -796,10 +875,16 @@ export function parseOverrideEntry(word: number): OverrideEntry {
 	return { kind: "override", code, flags: flags as OverrideFlags };
 }
 
+/** What the gate query reports: the gate byte at 0x200006FA and the timer at 0x200006F8. 0 is closed at boot. */
+export interface GateState {
+	readonly gate: number;
+	readonly timer: number;
+}
+
 /**
  * The live config channel (app mode). Each method throws NotCleared, before anything leaves, unless the clearance
  * clears its commands. The reads return the per-key override store, not the active keymap, which no command returns
- * (U10 research). Writes wait for U11.
+ * (U10 research). A write lands in RAM only and needs the gate open; a power cycle restores the saved store (U11).
  */
 export interface ConfigChannel {
 	/**
@@ -809,7 +894,16 @@ export interface ConfigChannel {
 	readLayer0(signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>>;
 	/** The entry for the key whose active usage is `usage`, on `layer`, in one cfgReadKey frame. */
 	readKey(layer: Layer, usage: Usage, signal: AbortSignal): Promise<OverrideEntry>;
-	setKey(write: KeyWrite): Promise<void>;
+	queryGate(signal: AbortSignal): Promise<GateState>;
+	/** Sets the gate byte to 0x80: cmd 0x51 accepted, no config mode, no timer. */
+	openGate(signal: AbortSignal): Promise<void>;
+	/** Sets the gate byte to 0. After openGate this reloads nothing, so RAM writes stay until a power cycle. */
+	closeGate(signal: AbortSignal): Promise<void>;
+	/**
+	 * Writes the entry for the key whose active usage is `usage`, on `layer`, in one cfgWriteKey frame, and returns the
+	 * entry the board reads back. DeviceRefused when the gate is closed or no key has that usage.
+	 */
+	writeKey(layer: Layer, usage: Usage, value: OverrideValue, signal: AbortSignal): Promise<OverrideEntry>;
 	setOsMode(mode: OsMode): Promise<void>;
 }
 
@@ -834,7 +928,21 @@ function configChannel(ch: Channel): ConfigChannel {
 	return {
 		readLayer0: (signal) => readLayer0(ch, signal),
 		readKey: async (layer, usage, signal) => entryAt(await transmit(ch, "cfgReadKey", { arg: (layer << 8) | usage }, signal), 0),
-		setKey: async (write) => gated(["cfgSelectLayer", "cfgSetKey"], `setKey(${write.layer}, ${write.key}, ${write.usage})`),
+		queryGate: async (signal) => {
+			const view = viewOf(await transmit(ch, "gateQuery", {}, signal));
+			return { gate: view.getUint8(1), timer: view.getUint16(2, true) };
+		},
+		openGate: async (signal) => {
+			await transmit(ch, "gateOpen", {}, signal);
+		},
+		closeGate: async (signal) => {
+			await transmit(ch, "gateClose", {}, signal);
+		},
+		writeKey: async (layer, usage, value, signal) => {
+			const payload = new Uint8Array(2);
+			new DataView(payload.buffer).setUint16(0, overrideValueWord(value), true);
+			return entryAt(await transmit(ch, "cfgWriteKey", { arg: (layer << 8) | usage, payload }, signal), 0);
+		},
 		setOsMode: async (mode) => gated(["cfgSetOsMode"], `setOsMode(${mode})`),
 	};
 }
