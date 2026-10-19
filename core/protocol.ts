@@ -774,7 +774,7 @@ export interface ConfigChannel {
 	 * Layer 0 of the override store, one entry for each active usage 0..255, in 16 cfgReadKeys frames. Only layer 0
 	 * has a bulk read; readKey reads layers 1 and 2.
 	 */
-	readLayer(layer: 0, signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>>;
+	readLayer0(signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>>;
 	/** The entry for the key whose active usage is `usage`, on `layer`, in one cfgReadKey frame. */
 	readKey(layer: Layer, usage: Usage, signal: AbortSignal): Promise<OverrideEntry>;
 	setKey(write: KeyWrite): Promise<void>;
@@ -785,7 +785,7 @@ const OVERRIDES_PER_FRAME = 16;
 
 const entryAt = (reply: InReport, i: number) => parseOverrideEntry(viewOf(reply).getUint16(PAYLOAD_OFFSET + 2 * i, true));
 
-async function readLayer(ch: Channel, signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>> {
+async function readLayer0(ch: Channel, signal: AbortSignal): Promise<ReadonlyMap<number, OverrideEntry>> {
 	const entries = new Map<number, OverrideEntry>();
 	for (let frame = 0; frame <= COMMANDS.cfgReadKeys.arg.low.max; frame++) {
 		const reply = await transmit(ch, "cfgReadKeys", { arg: frame }, signal);
@@ -800,7 +800,7 @@ function configChannel(ch: Channel): ConfigChannel {
 		return notImplemented(what);
 	};
 	return {
-		readLayer: (_layer, signal) => readLayer(ch, signal),
+		readLayer0: (signal) => readLayer0(ch, signal),
 		readKey: async (layer, usage, signal) => entryAt(await transmit(ch, "cfgReadKey", { arg: (layer << 8) | usage }, signal), 0),
 		setKey: async (write) => gated(["cfgSelectLayer", "cfgSetKey"], `setKey(${write.layer}, ${write.key}, ${write.usage})`),
 		setOsMode: async (mode) => gated(["cfgSetOsMode"], `setOsMode(${mode})`),

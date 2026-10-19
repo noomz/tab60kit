@@ -26,7 +26,7 @@ export async function readStore(port: DevicePort, clearance: Clearance, signal: 
 	try {
 		if ("refusal" in session) throw new Error(`attach refused: ${session.refusal.code}`);
 		const entries: StoreRead["entries"][number][] = [];
-		for (const [k, entry] of await session.config.readLayer(0, signal)) entries.push({ layer: 0, usage: k, entry });
+		for (const [k, entry] of await session.config.readLayer0(signal)) entries.push({ layer: 0, usage: k, entry });
 		for (const layer of [1, 2] as const) {
 			for (const k of presentUsages()) entries.push({ layer, usage: k, entry: await session.config.readKey(layer, usage(k), signal) });
 		}

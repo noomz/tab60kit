@@ -266,7 +266,7 @@ export function planKeymap(
  * The apply job, a convergence like the flash job but in SRAM.
  * TODO:
  *   session = start, or connect { modes: ["app"], reason: "connect" }    (update mode has no config channel)
- *   for each layer in doc: observed = config.readLayer(layer)
+ *   for each layer in doc: observed = layer 0 ? config.readLayer0() : config.readKey(layer, ...) per usage
  *   writes = planKeymap(doc, observed)
  *   for each write: config.setKey(write); progress(applying-keymap i of n)
  *   if doc.osMode !== null: config.setOsMode(doc.osMode)

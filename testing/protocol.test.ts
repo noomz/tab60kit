@@ -146,7 +146,7 @@ test("the config channel is gated by G1 before anything else happens", async () 
 	const app = new ScriptedLink("app", appAttach());
 	const session = await connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	await expect(session.config.readLayer(0, live)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.readLayer0(live)).rejects.toBeInstanceOf(NotCleared);
 	await expect(session.config.readKey(1, usage(0x04), live)).rejects.toBeInstanceOf(NotCleared);
 	await expect(session.config.setOsMode(1)).rejects.toBeInstanceOf(NotCleared);
 	expect(app.sent).toHaveLength(2);
@@ -162,10 +162,10 @@ async function u10Session(replies: InReport[]) {
 	return { app, session };
 }
 
-test("readLayer(0) sends frames 0 to 15 of 0x52/0x21 and maps usage 16a + i to word i of frame a", async () => {
+test("readLayer0 sends frames 0 to 15 of 0x52/0x21 and maps usage 16a + i to word i of frame a", async () => {
 	const replies = Array.from({ length: 16 }, (_, a) => report(`5221${a.toString(16).padStart(2, "0")}00` + (a === 2 ? words(0x00ff, 0x0003, 0x0129) : words(...Array(16).fill(0x0003)))));
 	const { app, session } = await u10Session(replies);
-	const entries = await session.config.readLayer(0, live);
+	const entries = await session.config.readLayer0(live);
 	expect(app.sent.slice(2).map(toHex)).toEqual(Array.from({ length: 16 }, (_, a) => `5221${a.toString(16).padStart(2, "0")}00`.padEnd(128, "0")));
 	expect(entries.size).toBe(256);
 	expect([entries.get(0x20), entries.get(0x21), entries.get(0x22), entries.get(0x23), entries.get(0x00), entries.get(0xff)]).toEqual([
