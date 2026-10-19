@@ -1,6 +1,7 @@
 /**
  * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec, R4's app command
- * map, and the U10 static read of the override store (docs/app-firmware.md) in executable form. Every behavior
+ * map, and the U10 and U11 static reads of the override store and its gate (docs/app-firmware.md,
+ * docs/app-firmware.md) in executable form. Every behavior
  * it models is INFERRED until a hardware transcript (U1, U7, U10) confirms it; when the two disagree, the transcript
  * wins and this file changes.
  *
@@ -73,7 +74,9 @@ export type Violation =
 	/** A config command (0x40 and up) sent during a flash job, or any command in a mode that lacks it. */
 	| { readonly kind: "wrong-mode"; readonly cmd: number; readonly sub: number; readonly mode: Mode }
 	/** An update-mode command this fake does not model: CRC, which no clearance sends yet. */
-	| { readonly kind: "not-modeled"; readonly cmd: number; readonly sub: number };
+	| { readonly kind: "not-modeled"; readonly cmd: number; readonly sub: number }
+	/** A frame the user's U11 ruling forbids: a gate byte other than 0x00, 0x80, or 0xFF, or a key write with flags set. */
+	| { readonly kind: "unsafe-config"; readonly cmd: number; readonly sub: number; readonly value: number };
 
 /** One output report the board received, stamped with the fake's clock. */
 export interface Received {
@@ -124,6 +127,16 @@ const NO_OVERRIDE = 0xff;
 /** What sub_5E98 returns for a usage no cell holds; the 0x52 handler sends 0x0003 in its place. */
 const NO_SUCH_KEY = 0x01ff;
 const ABSENT = 0x0003;
+/** cmd 0x41: byte 1 0xFF queries; any other value becomes the gate byte at 0x200006FA. */
+const GATE_QUERY = 0xff;
+const SAFE_GATES: readonly number[] = [0x00, 0x80];
+/** Gate bits: cmd 0x51 runs only under 0x81; bit 0 is config mode, whose exit reloads the saved store; bit 6 drops replies. */
+const GATE_OPEN_MASK = 0x81;
+const GATE_CONFIG_MODE = 0x01;
+const GATE_SILENT = 0x40;
+/** sub_5E98's bounds on a write: the index at 0x2FF, the value at 0x3FF and never 3. */
+const MAX_KEY_INDEX = 0x2ff;
+const MAX_KEY_VALUE = 0x3ff;
 
 /** Virtual time each command costs, and each erased page on top: rough, so gaps and waits are not all zero. */
 const COMMAND_MS = 1;
@@ -269,6 +282,14 @@ export class FakeTab60 {
 	/** The override store at SRAM 0x20000D24: usage byte per cell for layers 0..2, and the two flag bits per cell (unpacked). */
 	readonly #overrides = new Uint8Array(KEY_LAYERS * KEY_CELLS).fill(NO_OVERRIDE);
 	readonly #overrideFlags = new Uint8Array(KEY_LAYERS * KEY_CELLS);
+	/** The store as the profile block on SPI flash holds it, which boot loads into SRAM. No host frame this fake models saves. */
+	readonly #savedOverrides: Uint8Array;
+	readonly #savedFlags: Uint8Array;
+	/** The gate byte 0x200006FA and the u16 timer 0x200006F8, zero at boot. The fake never counts the timer down. */
+	#gate = 0;
+	#gateTimer = 0;
+	/** The active keymap at SRAM 0x20000590 for the board's OS key mode. */
+	readonly #active: Uint8Array;
 	/** The reverse map at 0x200005E0 that sub_91EC builds from the active keymap: usage to the lowest cell holding it, 0xFF for none. */
 	readonly #reverse: Uint8Array;
 	readonly #violations: Violation[] = [];
@@ -291,11 +312,14 @@ export class FakeTab60 {
 			this.#overrides[2 * KEY_CELLS + cell] = FACTORY_LAYER2[i + 1]!;
 			this.#overrideFlags[2 * KEY_CELLS + cell] = FACTORY_FLAGS;
 		}
-		this.#reverse = reverseOf(activeKeymap(options.osKeyMode ?? 0x10));
+		this.#active = activeKeymap(options.osKeyMode ?? 0x10);
+		this.#reverse = reverseOf(this.#active);
 		for (const { layer, cell, usage, flags } of options.overrides ?? []) {
 			this.#overrides[layer * KEY_CELLS + cell] = usage;
 			this.#overrideFlags[layer * KEY_CELLS + cell] = flags;
 		}
+		this.#savedOverrides = this.#overrides.slice();
+		this.#savedFlags = this.#overrideFlags.slice();
 		const page = options.versionBlock ?? syntheticVersionBlock();
 		const official = bytesSummingTo(target.imageBytes, target.wireSum32);
 		const untrusted = bytesSummingTo(target.imageBytes, target.wireSum32 + 1);
@@ -343,6 +367,22 @@ export class FakeTab60 {
 
 	get received(): readonly Received[] {
 		return this.#received;
+	}
+
+	/** USB unplugged with no batteries in, then plugged back: SRAM is gone, and boot loads the saved store with the gate closed. */
+	powerCycle(): void {
+		this.#reset(this.#bootMode());
+	}
+
+	/**
+	 * The usage a press of matrix cell `cell` on the base layer sends (sub_505C, sub_6FE4): a flags-0 override the RAM
+	 * store holds, else the active keymap's usage. null for an override with flags set, which is a function code or a
+	 * dead key.
+	 */
+	baseLayerPress(cell: number): number | null {
+		const byte = this.#overrides[cell]!;
+		if (byte === NO_OVERRIDE) return this.#active[cell]!;
+		return this.#overrideFlags[cell] === 0 ? byte : null;
 	}
 
 	/** Where the board would go on its next reset, and what its 180-byte version block holds. */
@@ -486,6 +526,39 @@ export class FakeTab60 {
 		if (cmd === 0x12 && sub === 0x02) return reply(Uint8Array.of(mode === "app" ? 1 : 0));
 		if (cmd === 0x12 && sub >= 0x20 && sub < 0x20 + (mode === "app" ? VERSION_PAGE_PARTS_APP : VERSION_PAGE_PARTS_IAP)) return versionPagePart(sub - 0x20);
 		if (mode === "app" && cmd === 0x11 && sub === 0x00) return this.#reset("iap");
+		if (mode === "app" && cmd === 0x41) {
+			const timer = (bytes[2] ?? 0) | ((bytes[3] ?? 0) << 8);
+			if (sub === GATE_QUERY) {
+				const out = new Uint8Array(REPORT_BYTES);
+				out[0] = cmd;
+				out[1] = this.#gate;
+				new DataView(out.buffer).setUint16(2, this.#gateTimer, true);
+				socket.report(out);
+				return;
+			}
+			if (!SAFE_GATES.includes(sub)) this.#violations.push({ kind: "unsafe-config", cmd, sub, value: sub });
+			if ((this.#gate & GATE_CONFIG_MODE) !== 0 && (sub & GATE_CONFIG_MODE) === 0) this.#loadSavedStore();
+			this.#gate = sub;
+			this.#gateTimer = timer;
+			if ((this.#gate & GATE_SILENT) !== 0) return;
+			return reply(new Uint8Array(0));
+		}
+		if (mode === "app" && cmd === 0x51 && (this.#gate & GATE_OPEN_MASK) === 0) return refuse();
+		if (mode === "app" && cmd === 0x51 && sub === 0x20) {
+			const index = (bytes[2] ?? 0) | ((bytes[3] ?? 0) << 8);
+			const value = (bytes[4] ?? 0) | ((bytes[5] ?? 0) << 8);
+			if (value >>> 8 !== 0) this.#violations.push({ kind: "unsafe-config", cmd, sub, value });
+			if (index > MAX_KEY_INDEX || value > MAX_KEY_VALUE || value === ABSENT) return refuse();
+			const cell = this.#reverse[index & 0xff]!;
+			if (cell === 0xff) return refuse();
+			const at = (index >> 8) * KEY_CELLS + cell;
+			this.#overrides[at] = value & 0xff;
+			if ((value & 0xff) !== NO_OVERRIDE) this.#overrideFlags[at] = value >>> 8;
+			if ((this.#gate & GATE_SILENT) !== 0) return;
+			const payload = new Uint8Array(2);
+			new DataView(payload.buffer).setUint16(0, this.#overrideEntry(index), true);
+			return reply(payload);
+		}
 		if (mode === "app" && cmd === 0x52 && (sub === 0x20 || sub === 0x21)) {
 			const arg = (bytes[2] ?? 0) | ((bytes[3] ?? 0) << 8);
 			const words = sub === 0x20 ? (arg <= 0x2ff ? [arg] : null) : arg <= 0x3f ? Array.from({ length: 16 }, (_, i) => (arg & 0xf) * 16 + i) : null;
@@ -612,9 +685,18 @@ export class FakeTab60 {
 		return magic && fixed ? "app" : "iap";
 	}
 
-	/** An MCU reset: SRAM, and with it the write address, is gone. */
+	/** sub_4470: the profile block back from flash over the RAM store, dropping every unsaved write. */
+	#loadSavedStore(): void {
+		this.#overrides.set(this.#savedOverrides);
+		this.#overrideFlags.set(this.#savedFlags);
+	}
+
+	/** An MCU reset: SRAM, and with it the write address, the gate, and every unsaved store write, is gone. */
 	#reset(into: Mode): void {
 		this.#cursor = null;
+		this.#gate = 0;
+		this.#gateTimer = 0;
+		this.#loadSavedStore();
 		this.#reenumerate(into);
 	}
 

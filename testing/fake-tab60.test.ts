@@ -295,3 +295,91 @@ test("a seeded override reads as flags << 8 | usage on its layer only", async ()
 	expect((await ask("52200400"))[0]?.slice(0, 12)).toBe(`52200400${F}`);
 	expect((await ask("52210000"))[0]?.slice(8, 28)).toBe(`${F}${A}${A}${A}${F}`);
 });
+
+const capsLockToCtrl = "51203900e000";
+const capsLockDefault = "51203900ff00";
+
+test("the gate boots closed: a query reads 41 00 00 00 and every 0x51 frame gets the error marker without writing", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	expect(await ask("41ff0000")).toEqual(["41000000".padEnd(128, "0")]);
+	expect(await ask(capsLockToCtrl)).toEqual(["ffaa000051203900".padEnd(128, "0")]);
+	expect(await ask("51210000")).toEqual(["ffaa000051210000".padEnd(128, "0")]);
+	expect(await ask("52203900")).toEqual(["52203900ff00".padEnd(128, "0")]);
+	expect(board.baseLayerPress(4)).toBe(0x39);
+	expect(board.violations).toEqual([]);
+});
+
+test("41 80 opens the gate with an echo, the query reports 0x80, and 41 00 closes it again", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	expect(await ask("41800000")).toEqual(["41800000".padEnd(128, "0")]);
+	expect(await ask("41ff0000")).toEqual(["41800000".padEnd(128, "0")]);
+	expect(await ask("41000000")).toEqual(["41000000".padEnd(128, "0")]);
+	expect(await ask("41ff0000")).toEqual(["41000000".padEnd(128, "0")]);
+	expect(board.violations).toEqual([]);
+});
+
+test("under an open gate 0x51/0x20 writes the RAM store, replies with the read-back, and a close keeps the write", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	await ask("41800000");
+	expect(await ask(capsLockToCtrl)).toEqual(["51203900e000".padEnd(128, "0")]);
+	expect(await ask("52203900")).toEqual(["52203900e000".padEnd(128, "0")]);
+	expect(board.baseLayerPress(4)).toBe(0xe0);
+	await ask("41000000");
+	expect(await ask("52203900")).toEqual(["52203900e000".padEnd(128, "0")]);
+	await ask("41800000");
+	expect(await ask(capsLockDefault)).toEqual(["51203900ff00".padEnd(128, "0")]);
+	expect(await ask("52203900")).toEqual(["52203900ff00".padEnd(128, "0")]);
+	expect(board.baseLayerPress(4)).toBe(0x39);
+	expect(board.violations).toEqual([]);
+});
+
+test("a key write the board's bounds refuse, or for a usage no key holds, gets the error marker and changes nothing", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	await ask("41800000");
+	expect(await ask("51200300e000")).toEqual(["ffaa000051200300".padEnd(128, "0")]);
+	expect(await ask("51203903e000")).toEqual(["ffaa000051203903".padEnd(128, "0")]);
+	expect(await ask("512039000300")).toEqual(["ffaa000051203900".padEnd(128, "0")]);
+	expect(await ask("52203900")).toEqual(["52203900ff00".padEnd(128, "0")]);
+	expect(board.violations).toEqual([]);
+});
+
+test("a power cycle drops the unsaved write, closes the gate, and boot reads the saved store back", async () => {
+	const board = new FakeTab60({ starting: "official-image", target, overrides: [{ layer: 1, cell: 5, usage: 0x29, flags: 0 }] });
+	const before = tap(board);
+	await before.ask("41800000");
+	await before.ask(capsLockToCtrl);
+	await before.ask("51200401e100");
+	expect(await before.ask("52200401")).toEqual(["52200401e100".padEnd(128, "0")]);
+	expect(board.baseLayerPress(4)).toBe(0xe0);
+	board.powerCycle();
+	expect(before.detached()).toBe(1);
+	await board.whenIn(["app"], new AbortController().signal);
+	const after = tap(board);
+	expect(await after.ask("41ff0000")).toEqual(["41000000".padEnd(128, "0")]);
+	expect(await after.ask("52203900")).toEqual(["52203900ff00".padEnd(128, "0")]);
+	expect(await after.ask("52200401")).toEqual(["522004012900".padEnd(128, "0")]);
+	expect(board.baseLayerPress(4)).toBe(0x39);
+	expect(await after.ask(capsLockToCtrl)).toEqual(["ffaa000051203900".padEnd(128, "0")]);
+});
+
+test("leaving config mode (gate bit 0) reloads the saved store, and the frames the U11 ruling forbids are recorded", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	expect(await ask("41010000")).toEqual(["41010000".padEnd(128, "0")]);
+	await ask(capsLockToCtrl);
+	expect(await ask("52203900")).toEqual(["52203900e000".padEnd(128, "0")]);
+	await ask("41000000");
+	expect(await ask("52203900")).toEqual(["52203900ff00".padEnd(128, "0")]);
+	expect(await ask("41c00000")).toEqual([]);
+	expect(await ask("51203900e001")).toEqual([]);
+	expect(board.baseLayerPress(4)).toBeNull();
+	expect(board.violations).toEqual([
+		{ kind: "unsafe-config", cmd: 0x41, sub: 0x01, value: 0x01 },
+		{ kind: "unsafe-config", cmd: 0x41, sub: 0xc0, value: 0xc0 },
+		{ kind: "unsafe-config", cmd: 0x51, sub: 0x20, value: 0x01e0 },
+	]);
+});
