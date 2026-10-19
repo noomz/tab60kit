@@ -16,7 +16,9 @@ import {
 	clears,
 	connect,
 	labClearance,
+	parseOverrideEntry,
 } from "../core/protocol";
+import { usage } from "../core/keymap";
 import { BL_INFO_HEX } from "./fixtures";
 import { ScriptedLink, ScriptedPort, fromHex, report, scriptedClock, toHex } from "./scripted";
 
@@ -145,9 +147,56 @@ test("the config channel is gated by G1 before anything else happens", async () 
 	const app = new ScriptedLink("app", appAttach());
 	const session = await connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" });
 	if ("refusal" in session) throw new Error(session.refusal.code);
-	await expect(session.config.readLayer(0)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.readLayer0(live)).rejects.toBeInstanceOf(NotCleared);
+	await expect(session.config.readKey(1, usage(0x04), live)).rejects.toBeInstanceOf(NotCleared);
 	await expect(session.config.setOsMode(1)).rejects.toBeInstanceOf(NotCleared);
 	expect(app.sent).toHaveLength(2);
+});
+
+const u10 = labClearance(["readMode", "readBlInfo", "cfgReadKeys", "cfgReadKey"], "protocol test");
+const words = (...w: number[]) => w.map((word) => (word & 0xff).toString(16).padStart(2, "0") + (word >>> 8).toString(16).padStart(2, "0")).join("");
+
+async function u10Session(replies: InReport[]) {
+	const app = new ScriptedLink("app", [...appAttach(), ...replies]);
+	const session = await connect(ctx(new ScriptedPort([app]), undefined, u10), { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	return { app, session };
+}
+
+test("readLayer0 sends frames 0 to 15 of 0x52/0x21 and maps usage 16a + i to word i of frame a", async () => {
+	const replies = Array.from({ length: 16 }, (_, a) => report(`5221${a.toString(16).padStart(2, "0")}00` + (a === 2 ? words(0x00ff, 0x0003, 0x0129) : words(...Array(16).fill(0x0003)))));
+	const { app, session } = await u10Session(replies);
+	const entries = await session.config.readLayer0(live);
+	expect(app.sent.slice(2).map(toHex)).toEqual(Array.from({ length: 16 }, (_, a) => `5221${a.toString(16).padStart(2, "0")}00`.padEnd(128, "0")));
+	expect(entries.size).toBe(256);
+	expect([entries.get(0x20), entries.get(0x21), entries.get(0x22), entries.get(0x23), entries.get(0x00), entries.get(0xff)]).toEqual([
+		{ kind: "default" },
+		{ kind: "absent" },
+		{ kind: "override", code: 0x29, flags: 1 },
+		// 0x0000 is an override to code 0, not "absent".
+		{ kind: "override", code: 0x00, flags: 0 },
+		{ kind: "absent" },
+		{ kind: "absent" },
+	]);
+});
+
+test("readKey sends layer << 8 | usage in bytes 2..3 and parses word 0", async () => {
+	const { app, session } = await u10Session([report(`5220e502${words(0x02e4)}`)]);
+	expect(await session.config.readKey(2, usage(0xe5), live)).toEqual({ kind: "override", code: 0xe4, flags: 2 });
+	expect(toHex(app.sent[2]!)).toBe("5220e502".padEnd(128, "0"));
+});
+
+test("a config read skips a reply whose bytes 2..3 do not echo its argument", async () => {
+	const { app, session } = await u10Session([report(`52200401${words(0x0005)}`), report(`52200402${words(0x00ff)}`)]);
+	expect(await session.config.readKey(2, usage(0x04), live)).toEqual({ kind: "default" });
+	expect(app.replies).toHaveLength(0);
+	const lone = await u10Session([report(`52200401${words(0x0005)}`)]);
+	await expect(lone.session.config.readKey(2, usage(0x04), live)).rejects.toBeInstanceOf(LinkTimeout);
+});
+
+test("a config read throws on a word that fits no entry", async () => {
+	const { session } = await u10Session([report(`52200400${words(0x0404)}`)]);
+	await expect(session.config.readKey(0, usage(0x04), live)).rejects.toBeInstanceOf(RangeError);
 });
 
 test("a probe that reads the other mode's byte throws ModeDisagrees", async () => {
@@ -362,4 +411,24 @@ test("the audit refuses pairs the registry does not list", () => {
 	expect(audit(frame("1223"), "readVersionPage", "app")).toBe("unknown-command");
 	expect(audit(frame("12ff"), "readVersionPage", "app")).toBe("unknown-command");
 	expect(audit(frame("1002"), "readMode", "app")).toBe("unknown-command");
+});
+
+test("parseOverrideEntry reads absent, default, and flags << 8 | code, with any code byte below 0xFF", () => {
+	expect([0x0003, 0x00ff, 0x0004, 0x0204, 0x03e7, 0x0103, 0x00f0, 0x03e8, 0x02fe].map(parseOverrideEntry)).toEqual([
+		{ kind: "absent" },
+		{ kind: "default" },
+		{ kind: "override", code: 0x04, flags: 0 },
+		{ kind: "override", code: 0x04, flags: 2 },
+		{ kind: "override", code: 0xe7, flags: 3 },
+		{ kind: "override", code: 0x03, flags: 1 },
+		{ kind: "override", code: 0xf0, flags: 0 },
+		{ kind: "override", code: 0xe8, flags: 3 },
+		{ kind: "override", code: 0xfe, flags: 2 },
+	]);
+});
+
+test("parseOverrideEntry throws on flags above 3, on code 0xFF with flags set, and on a non-u16", () => {
+	for (const word of [0x0400, 0x0404, 0xff04, 0x01ff, 0x03ff, 0x10000, -1, 1.5]) {
+		expect(() => parseOverrideEntry(word)).toThrow(RangeError);
+	}
 });

@@ -127,13 +127,17 @@ check("udev rule: R3's rule byte for byte", () =>
 	),
 );
 
-// G1 today, shipped: nothing unlocked, and each config command says what it lacks.
+// G1 today, shipped: the two confirmed reads unlock reading; each unreviewed config command says what it lacks.
 const caps = capabilities(SHIPPED);
-check("shipped caps: nothing unlocked", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [false, false, false]));
-check("shipped caps: four config commands blocked", () => assert.equal(caps.blockedBy.length, 4));
-check("shipped caps: each blocked line asks for review and a capture", () =>
-	assert.ok(caps.blockedBy.every((line) => line.includes("needs review and a capture")), caps.blockedBy.join("; ")),
+check("shipped caps: reading only", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, false, false]));
+check("shipped caps: each unreviewed config command is blocked with what it lacks", () =>
+	assert.deepEqual(
+		caps.blockedBy.map((line) => line.replace(/^.*: /, "")),
+		Array(3).fill("needs review and a capture on this board (gate G1)"),
+	),
 );
+const u10Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "readMode", "readBlInfo"], "U10"));
+check("U10 lab caps: the two reads unlock reading and nothing else", () => assert.deepEqual([u10Caps.canRead, u10Caps.canWrite, u10Caps.canSetOsMode], [true, false, false]));
 
 // G1 as maturity.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
@@ -152,14 +156,18 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
 const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
 const REVIEWED_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "write"];
-const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgReadReverseMap", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
+const U10_ROWS: readonly CommandName[] = ["cfgReadKeys", "cfgReadKey"];
+const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
 check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
 check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
 check("clearance: a lab session for the reviewed erase, set write address, and write rows", () => assert.equal(labClearance(REVIEWED_ROWS, "U5").kind, "lab"));
-check("clearance: the shipped build sends exactly the seven U1 rows and refuses erase, crc, set write address, write, and every config row", () =>
+check("clearance: a lab session for the two confirmed override-store reads and the U1 rows an app session needs", () =>
+	assert.equal(labClearance([...U10_ROWS, "readMode", "readBlInfo"], "U10").kind, "lab"),
+);
+check("clearance: the shipped build sends exactly the seven U1 rows and the two U10 reads, and refuses erase, crc, set write address, write, and every config write", () =>
 	assert.deepEqual(
 		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
-		{ sends: new Set(U1_ROWS), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
+		{ sends: new Set([...U1_ROWS, ...U10_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
 	),
 );
 for (const name of UNREVIEWED_ROWS) {
@@ -174,7 +182,28 @@ const captures = new Set(
 		return maturity.level === "confirmed" ? [maturity.capture] : [];
 	}),
 );
-check(`capture: every confirmed row cites ${CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE])));
+const U10_CAPTURE = "fixtures/u10-macos.json";
+const U10_TRANSCRIPT = "testing/fixtures/tab60kit-u10-2026-10-19T08-46-35-778Z.json";
+check(`capture: every confirmed row cites ${CAPTURE} or ${U10_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE])));
+check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
+	assert.deepEqual(
+		U10_ROWS.map((name) => {
+			const maturity: Maturity = COMMANDS[name].maturity;
+			return maturity.level === "confirmed" ? maturity.capture : maturity.level;
+		}),
+		[U10_CAPTURE, U10_CAPTURE],
+	),
+);
+check(`capture: ${U10_CAPTURE} holds board run 3 byte for byte, in Mac mode with one approved difference, and every check passes`, () => {
+	const fixture: { transcriptFile: string; transcript: unknown; osKeyMode: string; approvedDifferences: unknown[]; checks: { pass: boolean }[] } = JSON.parse(
+		readFileSync(join(import.meta.dir, "..", U10_CAPTURE), "utf8"),
+	);
+	assert.equal(fixture.transcriptFile, U10_TRANSCRIPT);
+	assert.deepEqual(fixture.transcript, JSON.parse(readFileSync(join(import.meta.dir, "..", U10_TRANSCRIPT), "utf8")));
+	assert.equal(fixture.osKeyMode, "mac");
+	assert.equal(fixture.approvedDifferences.length, 1);
+	assert.ok(fixture.checks.length === 7 && fixture.checks.every((c) => c.pass), "every U10 check passes");
+});
 check(`capture: ${CAPTURE} exists, holds the 2026-10-12 transcript byte for byte, and its verdict passes the frames gate and checks 2 to 9`, () => {
 	const path = join(import.meta.dir, "..", CAPTURE);
 	assert.ok(existsSync(path), `${CAPTURE} is missing`);
@@ -284,7 +313,16 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["WRITE 52 bytes at the image start", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x234 }],
 	["WRITE past the window end", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x1ce00 - 10 }), { refused: "outside-window" }],
 	["a 63-byte frame", audited(frame(0x12, 0x02, 0, 0, 63), "readMode"), { refused: "bad-length" }],
-	["READ MODE with 0xBEEF in the crc16 field", audited(poke(poke(frame(0x12, 0x02), 2, 0xef), 3, 0xbe), "readMode", app), { refused: "crc16-field" }],
+	["READ MODE with 0xBEEF in bytes 2..3", audited(poke(poke(frame(0x12, 0x02), 2, 0xef), 3, 0xbe), "readMode", app), { refused: "arg-not-allowed" }],
+	["SUM with 0x0001 in bytes 2..3", audited(poke(frame(0x1d, 0x01, 0x200, 34_268), 2, 0x01), "sum"), { refused: "arg-not-allowed" }],
+	["layer-0 overrides, frame 0", audited(frame(0x52, 0x21), "cfgReadKeys", app), { ok: "cfgReadKeys", cursor: null }],
+	["layer-0 overrides, frame 15", audited(poke(frame(0x52, 0x21), 2, 0x0f), "cfgReadKeys", app), { ok: "cfgReadKeys", cursor: null }],
+	["layer-0 overrides, frame 16, which the board aliases to frame 0", audited(poke(frame(0x52, 0x21), 2, 0x10), "cfgReadKeys", app), { refused: "arg-not-allowed" }],
+	["layer-0 overrides with a high argument byte", audited(poke(frame(0x52, 0x21), 3, 0x01), "cfgReadKeys", app), { refused: "arg-not-allowed" }],
+	["one override, layer 2 usage 0xFF", audited(poke(poke(frame(0x52, 0x20), 2, 0xff), 3, 0x02), "cfgReadKey", app), { ok: "cfgReadKey", cursor: null }],
+	["one override, layer 3", audited(poke(frame(0x52, 0x20), 3, 0x03), "cfgReadKey", app), { refused: "arg-not-allowed" }],
+	["layer-0 overrides in update mode", audited(frame(0x52, 0x21), "cfgReadKeys", iap), { refused: "wrong-mode" }],
+	["the deleted 0x51/0x11 reverse-map read", audited(frame(0x51, 0x11), "cfgReadKey", app), { refused: "unknown-command" }],
 	["RESET to IAP carrying a payload byte", audited(poke(frame(0x11, 0x00), 4, 0xde), "resetToIap", app), { refused: "payload-overrun" }],
 	["READ VERSION PAGE with junk in its last byte", audited(poke(frame(0x12, 0x20), 63, 0x01), "readVersionPage", app), { refused: "payload-overrun" }],
 	["SUM with a byte past its range", audited(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), "sum"), { refused: "payload-overrun" }],
@@ -323,5 +361,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 3 + UNREVIEWED_ROWS.length} clearance, 2 capture, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 4 + UNREVIEWED_ROWS.length} clearance, 2 capture, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

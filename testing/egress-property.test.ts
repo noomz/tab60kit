@@ -33,6 +33,16 @@ function hasExpectedLayout(payload: Uint8Array): boolean {
 	);
 }
 
+/**
+ * The largest argument bytes 2..3 may carry, from the U10 static read: 0x52/0x21 takes a frame index 0..15 (the board
+ * uses only its low nibble), 0x52/0x20 takes layer << 8 | usage with layers 0..2, and every other row takes none.
+ */
+function maxArg(cmd: number, sub: number): number {
+	if (cmd === 0x52 && sub === 0x21) return 0x0f;
+	if (cmd === 0x52 && sub === 0x20) return 0x2ff;
+	return 0;
+}
+
 const inside = (offset: number, length: number) => Number.isInteger(offset) && offset >= 0 && length >= 1 && offset + length <= WINDOW_BYTES;
 
 function namesRow(spec: CommandSpec, cmd: number, sub: number): boolean {
@@ -71,7 +81,8 @@ function problemWith(c: Case, passed: Extract<EgressVerdict, { ok: true }>): str
 	if (passed.command !== c.requested) return `is ${passed.command}, and ${c.requested} was requested`;
 	if (!c.cleared.has(passed.command)) return `is ${passed.command}, which is not cleared`;
 	if (!spec.modes.includes(c.mode)) return `is ${passed.command}, which the ${c.mode} link may not send`;
-	if (view.getUint16(2, true) !== 0) return "carries a nonzero crc16 field";
+	const arg = view.getUint16(2, true);
+	if (arg > maxArg(cmd, sub)) return `carries 0x${arg.toString(16)} in bytes 2..3`;
 
 	let payloadBytes = 0;
 	let cursor = c.cursor;
@@ -266,6 +277,7 @@ test("100,000 random frames and contexts: every frame the audit passes names a r
 		if (spec.address === "none") {
 			const sub = typeof spec.sub === "number" ? spec.sub : spec.sub === "length" ? 1 : spec.sub.first + r.below(spec.sub.count);
 			frame = frameOf(spec.cmd, sub);
+			if (r.chance(0.5)) new DataView(frame.buffer).setUint16(2, r.pick([0, 1, 0x0f, 0x10, 0x3f, 0x00ff, 0x0100, 0x02ff, 0x0300, r.below(0x1_0000)]), true);
 		} else {
 			const made = addressed(r);
 			frame = made.frame;
@@ -294,7 +306,7 @@ test("100,000 random frames and contexts: every frame the audit passes names a r
 	console.log(`U4 audit property: passed ${JSON.stringify(Object.fromEntries(passed))}, refused ${JSON.stringify(Object.fromEntries(refused))}`);
 	expect(COMMAND_NAMES.filter((name) => (passed.get(name) ?? 0) < 100)).toEqual([]);
 	expect(
-		["bad-length", "unknown-command", "not-requested", "not-cleared", "wrong-mode", "crc16-field", "payload-overrun", "no-window", "outside-window", "unaligned-erase", "no-write-cursor"].filter(
+		["bad-length", "unknown-command", "not-requested", "not-cleared", "wrong-mode", "arg-not-allowed", "payload-overrun", "no-window", "outside-window", "unaligned-erase", "no-write-cursor"].filter(
 			(code) => (refused.get(code) ?? 0) < 100,
 		),
 	).toEqual([]);

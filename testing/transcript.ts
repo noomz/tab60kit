@@ -11,7 +11,7 @@ import { type Sha256, sha256Literal } from "../core/units";
 
 /**
  * What the page records about the session: the tool commit, user agent, platform, page URL, the `?fake` mode, and the
- * three precondition keys (lab/u1-state.ts PRECONDITIONS).
+ * page's precondition keys (lab/u1-state.ts `preconditionsFor`).
  */
 export interface Environment extends Readonly<Record<string, string>> {
 	/** "no" for the real WebHID, otherwise the page's ?fake mode. tools/u1-verdict.ts accepts only "no". */

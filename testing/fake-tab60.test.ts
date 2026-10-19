@@ -241,3 +241,57 @@ test("update-mode-damaged-image holds a valid page over an image that misses the
 	expect((await board.bootTarget()).mode).toBe("app");
 	expect(await ask(`1d010000${u32(0x200)}${u32(target.imageBytes)}`)).not.toEqual([`1d010000${u32(target.wireSum32)}`.padEnd(128, "0")]);
 });
+
+const word = (w: number) => (w & 0xff).toString(16).padStart(2, "0") + (w >>> 8).toString(16).padStart(2, "0");
+const F = word(0x00ff);
+const A = word(0x0003);
+
+test("a store as the reset leaves it answers 0x52/0x21 on layer 0 with 0x00FF for usages in the active keymap and 0x0003 for the rest", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	expect(await ask("52210000")).toEqual([`52210000${F}${A}${A}${A}${F.repeat(12)}`.padEnd(128, "0")]);
+	expect(await ask("52210d00")).toEqual([`52210d00${A.repeat(8)}${F}${F}${A.repeat(6)}`.padEnd(128, "0")]);
+	expect(await ask("52211300")).toEqual([`52211300${F.repeat(10)}${A.repeat(6)}`.padEnd(128, "0")]);
+	expect(board.violations).toEqual([]);
+});
+
+test("0x52/0x20 reads one entry of layers 0 to 2, layer 2 holds the factory pairs, and the Fn and Pn markers replace the ROM usages 0xE7 and 0x65", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	const entry = async (arg: string) => (await ask(`5220${arg}`))[0]?.slice(0, 12);
+	const read: (string | undefined)[] = [];
+	for (const arg of ["0402", "d800", "d902", "e700", "6501", "e800"]) read.push(await entry(arg));
+	expect(read).toEqual([
+		`52200402${word(0x0192)}`,
+		`5220d800${F}`,
+		`5220d902${F}`,
+		`5220e700${A}`,
+		`52206501${A}`,
+		`5220e800${A}`,
+	]);
+});
+
+test("in OS key mode 0x20 Alt and GUI swap, 0xE6 gives way to the Fn marker, and layer 2 reads the factory entry of the swapped cell", async () => {
+	const board = new FakeTab60({ starting: "official-image", target, osKeyMode: 0x20 });
+	const { ask } = tap(board);
+	const entry = async (arg: string) => (await ask(`5220${arg}`))[0]?.slice(8, 12);
+	const read: (string | undefined)[] = [];
+	for (const arg of ["e600", "e700", "e202", "e302", "2902"]) read.push(await entry(arg));
+	expect(read).toEqual([A, F, word(0x0160), word(0x0130), word(0x0170)]);
+});
+
+test("an argument past the read's bound gets the error marker with the request's bytes 0..3", async () => {
+	const board = new FakeTab60({ starting: "official-image", target });
+	const { ask } = tap(board);
+	expect(await ask("52214000")).toEqual(["ffaa000052214000".padEnd(128, "0")]);
+	expect(await ask("52200003")).toEqual(["ffaa000052200003".padEnd(128, "0")]);
+	expect(await ask("52213f00")).toEqual([`52213f00${A.repeat(16)}`.padEnd(128, "0")]);
+});
+
+test("a seeded override reads as flags << 8 | usage on its layer only", async () => {
+	const board = new FakeTab60({ starting: "official-image", target, overrides: [{ layer: 1, cell: 5, usage: 0x29, flags: 2 }] });
+	const { ask } = tap(board);
+	expect((await ask("52200401"))[0]?.slice(0, 12)).toBe(`52200401${word(0x0229)}`);
+	expect((await ask("52200400"))[0]?.slice(0, 12)).toBe(`52200400${F}`);
+	expect((await ask("52210000"))[0]?.slice(8, 28)).toBe(`${F}${A}${A}${A}${F}`);
+});

@@ -1,20 +1,24 @@
 /**
  * Live keymap editing on stock firmware.
  *
- * The board keeps its keymap in SRAM and rebuilds it from ROM at every boot (R4: the app has no flash-write
- * path). So the host document is the copy that persists, and applying it is another convergence: read what the
- * board holds, write the difference, read back. The board forgets the edits on any MCU reset. On 2x AAA power an
- * unplug may not reset the MCU (open question in design.md).
+ * The board rebuilds its active keymap from ROM at every boot and applies a per-key override store on top. R4 said
+ * the app has no flash-write path; the U10 static read found a serial-flash save of the block that holds the store,
+ * so whether overrides survive a battery pull is open for U11. The host document is the user's intent, and applying
+ * it is another convergence: read what the board holds, write the difference, read back.
  *
- * Every config command is unreviewed under G1. `capabilities(clearance)` derives what is unlocked from COMMANDS and
- * the same `clears` the egress audit uses, so the editor's locks and the wire gate cannot disagree.
+ * Under G1 the two override reads are reviewed and the config writes unreviewed. `capabilities(clearance)` derives
+ * what is unlocked from COMMANDS and the same `clears` the egress audit uses, so the editor's locks and the wire gate
+ * cannot disagree.
  */
 import type { Job } from "./job";
-import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, clears, gateMessage } from "./protocol";
+import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, type OverrideEntry, clears, gateMessage } from "./protocol";
 import { type Brand, notImplemented } from "./units";
 
-/** R4: the layer index is checked below 4. Which index is the base layer is settled by U10. */
-export type Layer = 0 | 1 | 2 | 3;
+/**
+ * A key layer of the override store. sub_5E98 bounds its index at 0x2FF (layer << 8 | usage), and the reset clears
+ * 3 x (80 + 20) bytes, so there are three (U10 research, VERIFIED). Layer 0 is the base layer, INFERRED.
+ */
+export type Layer = 0 | 1 | 2;
 
 /** Index into the 80-byte matrix keymap the firmware copies from ROM 0xB205 at boot. Built only by `keyId`. */
 export type KeyId = Brand<number, "KeyId">;
@@ -73,7 +77,7 @@ export interface KeyCap {
  *
  * Cells with a usage that are not caps on this ANSI board: 53 (0x32, ISO #), 57 (0x35, Grave), 71 (0x64, ISO \), and
  * 79 (0xC9). The firmware rewrites 0xC9 to Space at 0x5AB4, so cell 79 is a second Space switch position. OPEN: the
- * physical Space switch is on cell 72 or on cell 79; U10 settles it on hardware.
+ * physical Space switch is on cell 72 or on cell 79. The override read cannot tell, because both usages read "default".
  */
 export const TAB60_KEYS: readonly KeyCap[] = [
 	{ id: keyId(0), row: 0, x: 0, width: 1, defaultUsage: usage(0x29), legend: "Esc" },
@@ -139,6 +143,105 @@ export const TAB60_KEYS: readonly KeyCap[] = [
 	{ id: keyId(63), row: 4, x: 13.75, width: 1.25, defaultUsage: usage(0xe4), legend: "Ctrl" },
 ];
 
+/** Matrix cells that hold a usage in ROM but are not caps on the ANSI board (see TAB60_KEYS). Every other non-cap cell holds 0x00. */
+export const NON_CAP_CELLS: readonly { readonly cell: KeyId; readonly usage: Usage; readonly what: string }[] = [
+	{ cell: keyId(53), usage: usage(0x32), what: "ISO #" },
+	{ cell: keyId(57), usage: usage(0x35), what: "Grave" },
+	{ cell: keyId(71), usage: usage(0x64), what: "ISO \\" },
+	{ cell: keyId(79), usage: usage(0xc9), what: "second Space position" },
+];
+
+/** The markers sub_5F4C writes at boot into the cells SRAM 0x20000E50/51 name, whose defaults are Fn and Pn. */
+export const LAYER_KEY_MARKERS: readonly { readonly cell: KeyId; readonly usage: Usage; readonly what: string }[] = [
+	{ cell: keyId(60), usage: usage(0xd8), what: "Fn" },
+	{ cell: keyId(54), usage: usage(0xd9), what: "Pn" },
+];
+
+/** The 80-byte ROM keymap at flash 0xB205 as TAB60_KEYS and NON_CAP_CELLS describe it. `bun run real-image` checks it byte for byte. */
+export function romKeymap(): readonly Usage[] {
+	const cells = Array.from({ length: 80 }, () => usage(0));
+	for (const { id, defaultUsage } of TAB60_KEYS) cells[id] = defaultUsage;
+	for (const nonCap of NON_CAP_CELLS) cells[nonCap.cell] = nonCap.usage;
+	return cells;
+}
+
+/**
+ * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Fn+Q, Fn+W, and Fn+E (factory codes
+ * 0x13D, 0x13E, 0x13F) set 0x10, 0x20, and 0x40. sub_5F4C swaps usages in the active keymap per mode with the pairs
+ * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not R4's OsMode (0x2000000F): that
+ * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the user's report.
+ */
+export type OsKeyMode = "windows" | "mac" | "caps-ctrl";
+
+export const OS_KEY_MODES: Readonly<Record<OsKeyMode, { readonly byte: 0x10 | 0x20 | 0x40; readonly swaps: readonly (readonly [Usage, Usage])[] }>> = {
+	windows: { byte: 0x10, swaps: [] },
+	mac: { byte: 0x20, swaps: [[usage(0xe2), usage(0xe3)], [usage(0xe3), usage(0xe2)], [usage(0xe6), usage(0xe7)], [usage(0xe7), usage(0xe6)]] },
+	"caps-ctrl": { byte: 0x40, swaps: [[usage(0x39), usage(0xe0)], [usage(0xe0), usage(0x39)]] },
+};
+
+/**
+ * The 31 (usage, code) pairs at ROM 0xB2D6 that sub_4540 writes to layer 2 with flags 1 whenever the store resets
+ * (sub_44A4). `bun run real-image` checks them byte for byte, and the 0xD8 after them.
+ */
+export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: number }[] = (
+	[
+		[0x29, 0x70], [0x1e, 0xa0], [0x1f, 0xa1], [0x20, 0xa2], [0x21, 0x82], [0x22, 0x83], [0x26, 0xac], [0x27, 0xad],
+		[0x2d, 0xa8], [0x2e, 0xa9], [0xe2, 0x30], [0x2b, 0x35], [0x31, 0x36], [0x0d, 0x31], [0x0e, 0x32], [0x0f, 0x33],
+		[0x33, 0x34], [0x11, 0x10], [0x10, 0x11], [0x36, 0x12], [0x37, 0x13], [0xe0, 0x5f], [0xe5, 0x68], [0xe3, 0x60],
+		[0x14, 0x3d], [0x1a, 0x3e], [0x08, 0x3f], [0x04, 0x92], [0x16, 0x93], [0x1d, 0x90], [0x1b, 0x91],
+	] as const
+).map(([k, code]) => ({ usage: usage(k), code }));
+const FACTORY_FLAGS = 1;
+
+/** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
+function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
+	const reverse = new Map<number, number>();
+	for (let cell = cells.length - 1; cell >= 0; cell--) reverse.set(cells[cell]!, cell);
+	return reverse;
+}
+
+/** The active keymap in the US layout: the ROM cells, the mode's swaps (sub_5368), then the Fn and Pn markers. */
+export function activeKeymap(mode: OsKeyMode, rom: readonly number[] = romKeymap()): readonly number[] {
+	const cells = [...rom];
+	const before = reverseMap(rom);
+	for (const [from, to] of OS_KEY_MODES[mode].swaps) {
+		const cell = before.get(from);
+		if (cell !== undefined) cells[cell] = to;
+	}
+	for (const marker of LAYER_KEY_MARKERS) cells[marker.cell] = marker.usage;
+	return cells;
+}
+
+/** The usages some cell of the active keymap holds in `mode`, ascending: the ones a read reports present. */
+export function presentUsages(mode: OsKeyMode): readonly number[] {
+	return [...new Set(activeKeymap(mode))].sort((a, b) => a - b);
+}
+
+/**
+ * What a read of each layer returns, for usages 0..255, from a store the reset left as it is (U10 board run 1). The
+ * reset writes FACTORY_LAYER2 by cell under the "windows" keymap; the board now runs in `mode`, and a read finds the
+ * cell by its active usage. So in "mac", usage 0xE2 reads the entry written for 0xE3. Layers 0 and 1 hold no overrides.
+ */
+export function predictLayers(mode: OsKeyMode): ReadonlyMap<Layer, ReadonlyMap<number, OverrideEntry>> {
+	const atReset = reverseMap(activeKeymap("windows"));
+	const layer2 = new Map<number, OverrideEntry>();
+	for (const { usage: k, code } of FACTORY_LAYER2) {
+		const cell = atReset.get(k);
+		if (cell !== undefined) layer2.set(cell, { kind: "override", code, flags: FACTORY_FLAGS });
+	}
+	const now = reverseMap(activeKeymap(mode));
+	const read = (store: ReadonlyMap<number, OverrideEntry>) =>
+		new Map(Array.from({ length: 256 }, (_, k): [number, OverrideEntry] => {
+			const cell = now.get(k);
+			return [k, cell === undefined ? { kind: "absent" } : (store.get(cell) ?? { kind: "default" })];
+		}));
+	return new Map<Layer, ReadonlyMap<number, OverrideEntry>>([
+		[0, read(new Map())],
+		[1, read(new Map())],
+		[2, read(layer2)],
+	]);
+}
+
 export interface ConfigCapabilities {
 	readonly canRead: boolean;
 	readonly canWrite: boolean;
@@ -168,8 +271,8 @@ const ascending = (a: number, b: number) => a - b;
 
 /**
  * Pure diff: the overrides whose usage differs from what the board reports, by layer and then key. A cell without an
- * override is left alone, because the defaults above the base layer are unknown (U10 settles which index is the
- * base). A layer missing from `observed` gets every override written.
+ * override is left alone, because the defaults above the base layer are unknown. A layer missing from `observed` gets
+ * every override written.
  */
 export function planKeymap(
 	doc: KeymapDoc,
@@ -191,7 +294,7 @@ export function planKeymap(
  * The apply job, a convergence like the flash job but in SRAM.
  * TODO:
  *   session = start, or connect { modes: ["app"], reason: "connect" }    (update mode has no config channel)
- *   for each layer in doc: observed = config.readLayer(layer)
+ *   for each layer in doc: observed = layer 0 ? config.readLayer0() : config.readKey(layer, ...) per usage
  *   writes = planKeymap(doc, observed)
  *   for each write: config.setKey(write); progress(applying-keymap i of n)
  *   if doc.osMode !== null: config.setOsMode(doc.osMode)
@@ -207,7 +310,7 @@ export function applyKeymap(doc: KeymapDoc): Job {
 const FORMAT = "tab60kit-keymap";
 const VERSION = 1;
 const FIELDS = ["format", "version", "osMode", "overrides"] as const;
-const LAYERS: readonly string[] = ["0", "1", "2", "3"];
+const LAYERS: readonly string[] = ["0", "1", "2"];
 const CAP_IDS: ReadonlySet<number> = new Set(TAB60_KEYS.map((cap) => cap.id));
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -236,7 +339,7 @@ export function parseKeymapDoc(json: unknown): KeymapDoc | { readonly error: str
 	const overrides = new Map<Layer, ReadonlyMap<KeyId, Usage>>();
 	for (const layer of Object.keys(json.overrides)) {
 		const path = `$.overrides.${layer}`;
-		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 3");
+		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 2");
 		const keys = json.overrides[layer];
 		if (!isObject(keys)) return error(path, "is not an object");
 		const layerMap = new Map<KeyId, Usage>();

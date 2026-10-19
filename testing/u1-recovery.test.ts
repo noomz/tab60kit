@@ -446,7 +446,7 @@ test("the audit refuses junk in bytes 2..63 of the U1 frames", () => {
 		return verdict.ok ? "ok" : verdict.refusal.code;
 	};
 	const junk = (head: string) => `${head}dead${"ab".repeat(60)}`;
-	expect([refusal(junk("1100"), "resetToIap", "app"), refusal(junk("1202"), "readMode", "app"), refusal(junk("1220"), "readVersionPage", "iap")]).toEqual(["crc16-field", "crc16-field", "crc16-field"]);
+	expect([refusal(junk("1100"), "resetToIap", "app"), refusal(junk("1202"), "readMode", "app"), refusal(junk("1220"), "readVersionPage", "iap")]).toEqual(["arg-not-allowed", "arg-not-allowed", "arg-not-allowed"]);
 	const past = (head: string) => `${head}0000${"ab".repeat(60)}`;
 	expect([refusal(past("1100"), "resetToIap", "app"), refusal(past("1202"), "readMode", "app"), refusal(past("1220"), "readVersionPage", "iap")]).toEqual(["payload-overrun", "payload-overrun", "payload-overrun"]);
 	expect([refusal("1100", "resetToIap", "app"), refusal("1202", "readMode", "app"), refusal("1220", "readVersionPage", "iap")]).toEqual(["ok", "ok", "ok"]);

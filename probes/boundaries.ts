@@ -76,6 +76,16 @@ independence("fake-board-independence", "testing/fake-tab60.ts", ["core/port.ts"
 independence("u1-checks-independence", "lab/u1-checks.ts", ["core/device.ts", "core/firmware.ts", "core/updater.ts", "core/port.ts", "core/units.ts"]);
 independence("u1-frames-independence", "lab/u1-frames.ts", ["core/port.ts", "core/units.ts"]);
 
+// keymap.ts takes the registry from protocol.ts at runtime, so protocol.ts may take only types back. Under
+// verbatimModuleSyntax an `import { type X }` still loads the module, so only `import type` and `export type` count.
+{
+	const text = readFileSync(join(root, "core/protocol.ts"), "utf8");
+	const problems = [...text.matchAll(/(?:^|\n)\s*((?:import|export)\b[^'";]*?["']\.\/keymap(?:\.ts)?["'])/g)]
+		.map(([, statement = ""]) => statement.replace(/\s+/g, " "))
+		.filter((statement) => !/^(?:import|export) type\b/.test(statement));
+	report("protocol-keymap-types-only", problems.map((statement) => `core/protocol.ts: ${statement}`), "core/protocol.ts imports only types from core/keymap.ts");
+}
+
 // The package exports "." (core/index.ts) and "./port" (core/port.ts). A relative path reaches any file, so web/
 // names the core only by package: UI files import @tab60kit/core, the WebHID shell may add @tab60kit/core/port, and
 // relative imports stay inside web/. Nothing in web/ then reaches lab/, testing/, tools/, or a core internal.
