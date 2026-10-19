@@ -1,5 +1,7 @@
 /**
  * Plan U9's check on the vendor's own exe: every TAB60_KEYS `defaultUsage` against the ROM keymap at flash 0xB205.
+ * Plan U10's: the clean-store prediction from the table against one computed from the ROM bytes alone, frame by frame,
+ * in the reply format of predict.py.
  * The exe goes through core's own extractor (`readUpdater`, U3), which holds the image in wire form; `xorWords` gives
  * the plain image, the bytes R2's decoder writes. The exe is never committed, so this runs locally, not in `check`.
  *
@@ -7,7 +9,7 @@
  */
 import { readFileSync } from "node:fs";
 import { CATALOG, imageBytes, readUpdater, sha256, xorWords } from "../core/firmware";
-import { TAB60_KEYS } from "../core/keymap";
+import { NON_CAP_CELLS, type OverrideEntry, TAB60_KEYS, activeKeymap, predictCleanLayer, romKeymap } from "../core/keymap";
 import { parseMaav102 } from "../core/updater";
 
 const exePath = process.env.TAB60_EXE;
@@ -25,13 +27,16 @@ const hex = (n: number) => `0x${n.toString(16).padStart(2, "0")}`;
 
 /** R4: the firmware copies the 80-byte matrix keymap from here at boot. */
 const KEYMAP_FLASH = 0xb205;
-/** Matrix cells that hold a usage but are not caps on the ANSI board (see TAB60_KEYS), with their ROM bytes. */
-const NOT_CAPS: readonly [cell: number, usage: number, what: string][] = [
-	[53, 0x32, "ISO #"],
-	[57, 0x35, "Grave"],
-	[71, 0x64, "ISO \\"],
-	[79, 0xc9, "second Space position"],
+/** sub_5F4C's Fn and Pn markers and their default cells, written out here so the ROM-side prediction owes nothing to keymap.ts. */
+const ROM_MARKERS: readonly [cell: number, usage: number][] = [
+	[0x3c, 0xd8],
+	[0x36, 0xd9],
 ];
+const ABSENT = 0x0003;
+const DEFAULT = 0x00ff;
+const wordOf = (entry: OverrideEntry | undefined) => (entry?.kind === "default" ? DEFAULT : entry?.kind === "absent" ? ABSENT : -1);
+const replyHex = (a: number, words: readonly number[]) =>
+	`52 21 ${a.toString(16).padStart(2, "0")} 00 ${words.flatMap((w) => [w & 0xff, w >>> 8]).map((b) => b.toString(16).padStart(2, "0")).join(" ")}`;
 
 const [entry] = CATALOG;
 if (entry === undefined) throw new Error("the catalog is empty");
@@ -53,9 +58,23 @@ if (admission?.kind === "admitted" && base !== null) {
 		const byte = rom[cap.id];
 		check(byte === cap.defaultUsage, `cell ${cap.id} ${cap.legend}: table ${hex(cap.defaultUsage)}, ROM ${byte === undefined ? "none" : hex(byte)}`);
 	}
-	for (const [cell, want, what] of NOT_CAPS) {
+	for (const { cell, usage: want, what } of NON_CAP_CELLS) {
 		const byte = rom[cell];
 		check(byte === want, `cell ${cell} (${what}, not a cap): ROM ${byte === undefined ? "none" : hex(byte)}, expected ${hex(want)}`);
+	}
+	const table = romKeymap();
+	const differ = table.flatMap((want, cell) => (rom[cell] === want ? [] : [cell]));
+	check(differ.length === 0, `romKeymap() equals all 80 ROM bytes${differ.length === 0 ? "" : `; cells ${differ.join(", ")} differ`}`);
+
+	const fromRom = Array.from(rom);
+	for (const [cell, marker] of ROM_MARKERS) fromRom[cell] = marker;
+	const present = new Set(fromRom);
+	const predicted = predictCleanLayer(activeKeymap());
+	for (let a = 0; a < 16; a++) {
+		const usages = Array.from({ length: 16 }, (_, i) => 16 * a + i);
+		const want = usages.map((k) => (present.has(k) ? DEFAULT : ABSENT));
+		const got = usages.map((k) => wordOf(predicted.get(k)));
+		check(got.every((w, i) => w === want[i]), `clean layer 0, frame ${a}: ${replyHex(a, got)}${got.every((w, i) => w === want[i]) ? "" : `; ROM says ${replyHex(a, want)}`}`);
 	}
 }
 

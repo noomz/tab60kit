@@ -174,6 +174,44 @@ export const TAB60_KEYS: readonly KeyCap[] = [
 	{ id: keyId(63), row: 4, x: 13.75, width: 1.25, defaultUsage: usage(0xe4), legend: "Ctrl" },
 ];
 
+/** Matrix cells that hold a usage in ROM but are not caps on the ANSI board (see TAB60_KEYS). Every other non-cap cell holds 0x00. */
+export const NON_CAP_CELLS: readonly { readonly cell: KeyId; readonly usage: Usage; readonly what: string }[] = [
+	{ cell: keyId(53), usage: usage(0x32), what: "ISO #" },
+	{ cell: keyId(57), usage: usage(0x35), what: "Grave" },
+	{ cell: keyId(71), usage: usage(0x64), what: "ISO \\" },
+	{ cell: keyId(79), usage: usage(0xc9), what: "second Space position" },
+];
+
+/** The markers sub_5F4C writes at boot into the cells SRAM 0x20000E50/51 name, whose defaults are Fn and Pn. */
+export const LAYER_KEY_MARKERS: readonly { readonly cell: KeyId; readonly usage: Usage; readonly what: string }[] = [
+	{ cell: keyId(60), usage: usage(0xd8), what: "Fn" },
+	{ cell: keyId(54), usage: usage(0xd9), what: "Pn" },
+];
+
+/** The 80-byte ROM keymap at flash 0xB205 as TAB60_KEYS and NON_CAP_CELLS describe it. `bun run real-image` checks it byte for byte. */
+export function romKeymap(): readonly Usage[] {
+	const cells = Array.from({ length: 80 }, () => usage(0));
+	for (const { id, defaultUsage } of TAB60_KEYS) cells[id] = defaultUsage;
+	for (const nonCap of NON_CAP_CELLS) cells[nonCap.cell] = nonCap.usage;
+	return cells;
+}
+
+/** The active keymap boot builds from `rom` in the US layout: the ROM cells, then the Fn and Pn markers. */
+export function activeKeymap(rom: readonly number[] = romKeymap()): readonly number[] {
+	const cells = [...rom];
+	for (const marker of LAYER_KEY_MARKERS) cells[marker.cell] = marker.usage;
+	return cells;
+}
+
+/**
+ * What a read of a layer returns from a store at its reset value (every byte 0xFF), for usages 0..255: "default" for
+ * each usage some cell of `active` holds, "absent" for every other. It is the same on all three layers.
+ */
+export function predictCleanLayer(active: readonly number[]): ReadonlyMap<number, OverrideEntry> {
+	const present = new Set(active);
+	return new Map(Array.from({ length: 256 }, (_, k): [number, OverrideEntry] => [k, present.has(k) ? { kind: "default" } : { kind: "absent" }]));
+}
+
 export interface ConfigCapabilities {
 	readonly canRead: boolean;
 	readonly canWrite: boolean;

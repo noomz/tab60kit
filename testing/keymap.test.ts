@@ -2,7 +2,7 @@
 // testing/real-image.ts (CI has no vendor bytes); these tests check its shape. The generators are seeded, as in
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
-import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, keyId, parseKeymapDoc, parseOverrideEntry, planKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, activeKeymap, keyId, parseKeymapDoc, parseOverrideEntry, planKeymap, predictCleanLayer, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -201,4 +201,22 @@ test("parseOverrideEntry throws on a word that fits no entry", () => {
 	for (const word of [0x0400, 0x0404, 0xff04, 0x01ff, 0x03ff, 0x00e8, 0x10000, -1, 1.5]) {
 		expect(() => parseOverrideEntry(word)).toThrow(RangeError);
 	}
+});
+
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+/** docs/app-firmware.md "OS key mode", from predict.py over the V1.01.13 image. */
+const CLEAN_PRESENT = [0x00, ...range(0x04, 0x39), 0x64, 0xc9, 0xd8, 0xd9, ...range(0xe0, 0xe6)];
+
+test("a clean store predicts 0x00FF for exactly the usages predict.py finds in the active keymap, and 0x0003 for the rest", () => {
+	const predicted = predictCleanLayer(activeKeymap());
+	expect([...predicted.keys()]).toEqual(range(0, 255));
+	expect([...predicted].filter(([, entry]) => entry.kind === "default").map(([k]) => k)).toEqual(CLEAN_PRESENT);
+	expect([...predicted].filter(([, entry]) => entry.kind !== "default").every(([, entry]) => entry.kind === "absent")).toBe(true);
+});
+
+test("the active keymap is the ROM keymap with Fn (cell 60) and Pn (cell 54) replaced by the markers 0xD8 and 0xD9", () => {
+	const rom = romKeymap();
+	const active = activeKeymap();
+	expect([rom.length, rom[60], rom[54], active[60], active[54]]).toEqual([80, 0xe7, 0x65, 0xd8, 0xd9]);
+	expect(active.filter((cell, at) => cell !== rom[at])).toEqual([0xd9, 0xd8]);
 });
