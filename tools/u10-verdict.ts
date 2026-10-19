@@ -1,13 +1,15 @@
 /**
  * Plan U10's verdict on a saved lab/u10 transcript. It decodes every cfgReadKeys and cfgReadKey reply from the
- * transcript's own frames, with its own byte rules, and compares each entry with `predictLayers`; the
- * page's results are never read. Only a full PASS writes the capture that moves both reads to "confirmed".
+ * transcript's own frames, with its own byte rules, and compares each entry with `predictLayers` for the board's OS key
+ * mode; the page's results are never read. A difference passes only when the approved list names it (layer, usage,
+ * and the entry read), and an approval that matches nothing fails, so the list cannot go stale. Only a full PASS
+ * writes the capture that moves both reads to "confirmed".
  *
- * Run: bun tools/u10-verdict.ts <transcript.json> [--out fixtures/u10-macos.json]
+ * Run: bun tools/u10-verdict.ts <transcript.json> --os-mode mac --expect fixtures/u10-expected-diffs.json [--out fixtures/u10-macos.json]
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { type Layer, type OsKeyMode, predictLayers, presentUsages } from "../core/keymap";
+import { type Layer, OS_KEY_MODES, type OsKeyMode, predictLayers, presentUsages } from "../core/keymap";
 import type { OverrideEntry } from "../core/protocol";
 import { describeEntry, framesOutsideU10, u10Preconditions } from "../lab/u10-run";
 import { type Environment, type Transcript, type TranscriptEntry, parseTranscript } from "../testing/transcript";
@@ -24,8 +26,53 @@ export interface U10Fixture {
 	readonly evaluatedAt: string;
 	readonly transcriptFile: string;
 	readonly environment: Environment;
+	readonly osKeyMode: OsKeyMode;
+	readonly approvedDifferences: readonly ApprovedDifference[];
 	readonly checks: readonly U10Check[];
 	readonly transcript: Transcript;
+}
+
+/** A difference from the prediction the user accepted, with why. `read` is the entry as the verdict prints it. */
+export interface ApprovedDifference {
+	readonly layer: Layer;
+	readonly usage: number;
+	readonly read: string;
+	readonly reason: string;
+}
+
+const APPROVAL_FIELDS = ["layer", "usage", "read", "reason"];
+const ENTRY_TEXT = /^(absent|default|override 0x[0-9a-f]{2} flags [0-3])$/;
+const USAGE_TEXT = /^0x[0-9a-f]{2}$/;
+
+/** Boundary parse of the --expect file: an array of approvals, every field required, no extras, no repeated (layer, usage). */
+export function parseApprovedDifferences(json: unknown): readonly ApprovedDifference[] | { readonly error: string } {
+	if (!Array.isArray(json)) return { error: "$ is not an array" };
+	const approved: ApprovedDifference[] = [];
+	for (const [i, item] of json.entries()) {
+		const at = `$[${i}]`;
+		if (typeof item !== "object" || item === null || Array.isArray(item)) return { error: `${at} is not an object` };
+		const fields = item as Record<string, unknown>;
+		const extra = Object.keys(fields).find((key) => !APPROVAL_FIELDS.includes(key));
+		if (extra !== undefined) return { error: `${at}.${extra} is not an approval field` };
+		const { layer, usage, read, reason } = fields;
+		if (layer !== 0 && layer !== 1 && layer !== 2) return { error: `${at}.layer is ${JSON.stringify(layer)}, not 0, 1, or 2` };
+		if (typeof usage !== "string" || !USAGE_TEXT.test(usage)) return { error: `${at}.usage is ${JSON.stringify(usage)}, not a string like "0x29"` };
+		if (typeof read !== "string" || !ENTRY_TEXT.test(read)) return { error: `${at}.read is ${JSON.stringify(read)}, not "absent", "default", or "override 0xNN flags F"` };
+		if (typeof reason !== "string" || reason.trim() === "") return { error: `${at}.reason is missing or empty` };
+		const k = Number.parseInt(usage, 16);
+		if (approved.some((other) => other.layer === layer && other.usage === k)) return { error: `${at} repeats layer ${layer} usage ${usage}` };
+		approved.push({ layer, usage: k, read, reason });
+	}
+	return approved;
+}
+
+/** --os-mode: a mode name, or the byte 0x2000102B holds (16, 32, 64, or 0x10, 0x20, 0x40). */
+export function parseOsKeyMode(text: string): OsKeyMode | null {
+	const modes = Object.keys(OS_KEY_MODES) as OsKeyMode[];
+	const named = modes.find((mode) => mode === text);
+	if (named !== undefined) return named;
+	const byte = /^(0x[0-9a-f]+|[0-9]+)$/i.test(text) ? Number(text) : Number.NaN;
+	return modes.find((mode) => OS_KEY_MODES[mode].byte === byte) ?? null;
 }
 
 const READ_KEYS = "5221";
@@ -68,15 +115,25 @@ function exchanges(entries: readonly TranscriptEntry[], cmdSub: string): readonl
 	return found;
 }
 
-function compare(predictions: ReturnType<typeof predictLayers>, layer: number, usage: number, read: OverrideEntry | string): string | null {
+interface Difference {
+	readonly layer: number;
+	readonly usage: number;
+	readonly read: string;
+	readonly line: string;
+}
+
+function compare(predictions: ReturnType<typeof predictLayers>, layer: number, usage: number, read: OverrideEntry | string): Difference | null {
 	const predicted = predictions.get(layer as Layer)?.get(usage);
 	const got = typeof read === "string" ? read : describeEntry(read);
-	return got === describeEntry(predicted) ? null : `layer ${layer} usage ${hex2(usage)}: predicted ${describeEntry(predicted)}, read ${got}`;
+	return got === describeEntry(predicted) ? null : { layer, usage, read: got, line: `layer ${layer} usage ${hex2(usage)}: predicted ${describeEntry(predicted)}, read ${got}` };
 }
+
+const approves = (approval: ApprovedDifference, diff: Difference) => approval.layer === diff.layer && approval.usage === diff.usage && approval.read === diff.read;
+const describeApproval = ({ layer, usage, read }: ApprovedDifference) => `layer ${layer} usage ${hex2(usage)} read ${read}`;
 
 const check = (title: string, problems: readonly string[], ok: string): U10Check => ({ title, pass: problems.length === 0, detail: problems.length === 0 ? ok : problems.join("; ") });
 
-export function evaluateU10(transcript: Transcript, mode: OsKeyMode): readonly U10Check[] {
+export function evaluateU10(transcript: Transcript, mode: OsKeyMode, approved: readonly ApprovedDifference[]): readonly U10Check[] {
 	const { entries } = transcript;
 	const predictions = predictLayers(mode);
 	const layer0 = exchanges(entries, READ_KEYS);
@@ -88,7 +145,7 @@ export function evaluateU10(transcript: Transcript, mode: OsKeyMode): readonly U
 		...layer0.filter(({ reply }) => reply === null).map(({ out }) => `no reply echoes ${out.slice(0, 8)}`),
 	];
 
-	const layer0Diffs: string[] = [];
+	const layer0Diffs: Difference[] = [];
 	let decoded = 0;
 	for (const { out, reply } of layer0) {
 		if (reply === null) continue;
@@ -98,7 +155,6 @@ export function evaluateU10(transcript: Transcript, mode: OsKeyMode): readonly U
 			if (diff !== null) layer0Diffs.push(diff);
 		}
 	}
-	if (decoded !== 256) layer0Diffs.push(`decoded ${decoded} entries, not 256`);
 
 	const coverage: string[] = [];
 	for (const layer of [1, 2]) {
@@ -112,49 +168,78 @@ export function evaluateU10(transcript: Transcript, mode: OsKeyMode): readonly U
 		const diff = compare(predictions, argOf(out) >> 8, argOf(out) & 0xff, decode(wordAt(reply, 0)));
 		return diff === null ? [] : [diff];
 	});
+	const unapproved = (diffs: readonly Difference[]) => diffs.filter((diff) => !approved.some((approval) => approves(approval, diff))).map(({ line }) => line);
+	const asPredicted = (count: string, diffs: readonly Difference[]) => {
+		const accepted = approved.filter((approval) => diffs.some((diff) => approves(approval, diff)));
+		return `${count} as predicted${accepted.length === 0 ? "" : `, except the approved ${accepted.map(describeApproval).join("; ")}`}`;
+	};
+	const stale = approved.filter((approval) => ![...layer0Diffs, ...singleDiffs].some((diff) => approves(approval, diff)));
 
 	const unmet = u10Preconditions.unmetPreconditions(transcript);
 	return [
 		check("Every frame sent is one of the four U10 rows", framesOutsideU10(entries).map((hex) => `frame outside the U10 rows: ${hex}`), `${entries.filter((entry) => entry.kind === "out").length} frames, all U10 rows`),
 		check("Layer 0 is 16 cfgReadKeys frames with arguments 0 to 15, each answered with bytes 0..3 echoed", layer0Shape, "16 frames, arguments 0 to 15, all echoed"),
-		check("Every layer 0 entry equals the prediction", layer0Diffs, "256 entries as predicted"),
+		check(`Every layer 0 entry equals the prediction for OS key mode ${mode}, or an approved difference`, [...unapproved(layer0Diffs), ...(decoded === 256 ? [] : [`decoded ${decoded} entries, not 256`])], asPredicted("256 entries", layer0Diffs)),
 		check("cfgReadKey reads every present usage on layers 1 and 2, each answered with bytes 0..3 echoed", singleShape, `${single.length} frames cover ${presentUsages(mode).length} usages on both layers, all echoed`),
-		check("Every layer 1 and 2 entry equals the prediction", singleDiffs, `${single.length} entries as predicted`),
+		check(`Every layer 1 and 2 entry equals the prediction for OS key mode ${mode}, or an approved difference`, unapproved(singleDiffs), asPredicted(`${single.length} entries`, singleDiffs)),
+		check("Every approved difference occurs in the read", stale.map((approval) => `approved but not read: ${describeApproval(approval)}`), `${approved.length} approved, all read`),
 		check("The preconditions were ticked before the first frame and held for the run", unmet.map((label) => `not met: ${label}`), "all ticked before the first frame, none changed"),
 	];
 }
 
 interface Args {
 	readonly transcriptFile: string;
+	readonly mode: OsKeyMode;
+	readonly expectFile: string;
 	readonly out: string | null;
 }
+
+const USAGE = "usage: bun tools/u10-verdict.ts <transcript.json> --os-mode windows|mac|caps-ctrl|0x10|0x20|0x40 --expect <approved.json> [--out fixtures/u10-macos.json]";
 
 function parseArgs(argv: readonly string[]): Args | string {
 	let transcriptFile: string | null = null;
 	let out: string | null = null;
+	let modeText: string | null = null;
+	let expectFile: string | null = null;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i]!;
 		if (arg === "--out") out = argv[++i] ?? "";
+		else if (arg === "--os-mode") modeText = argv[++i] ?? "";
+		else if (arg === "--expect") expectFile = argv[++i] ?? "";
 		else if (arg.startsWith("-")) return `unknown option ${arg}`;
 		else if (transcriptFile === null) transcriptFile = arg;
 		else return `unexpected argument ${arg}`;
 	}
 	if (transcriptFile === null) return "no transcript file";
 	if (out === "") return "--out needs a path";
-	return { transcriptFile, out };
+	if (modeText === null) return "--os-mode is required: the board's OS key mode decides the prediction";
+	const mode = parseOsKeyMode(modeText);
+	if (mode === null) return `--os-mode ${modeText || '""'} is not windows, mac, caps-ctrl, 0x10, 0x20, or 0x40`;
+	if (expectFile === null || expectFile === "") return "--expect is required: a JSON list of approved differences, [] for none";
+	return { transcriptFile, mode, expectFile, out };
 }
 
 export function verdictMain(argv: readonly string[]): number {
 	const args = parseArgs(argv);
 	if (typeof args === "string") {
-		console.error(`${args}\nusage: bun tools/u10-verdict.ts <transcript.json> [--out fixtures/u10-macos.json]`);
+		console.error(`${args}\n${USAGE}`);
 		return 2;
 	}
 	let transcript: Transcript;
+	let approved: readonly ApprovedDifference[] | { readonly error: string };
 	try {
 		transcript = parseTranscript(JSON.parse(readFileSync(args.transcriptFile, "utf8")));
 	} catch (error) {
 		console.error(`${args.transcriptFile}: ${error instanceof Error ? error.message : String(error)}`);
+		return 2;
+	}
+	try {
+		approved = parseApprovedDifferences(JSON.parse(readFileSync(args.expectFile, "utf8")));
+	} catch (error) {
+		approved = { error: error instanceof Error ? error.message : String(error) };
+	}
+	if ("error" in approved) {
+		console.error(`${args.expectFile}: ${approved.error}. Wrote nothing.`);
 		return 2;
 	}
 	const refusal = notRealBoardCleanBuild(transcript.environment);
@@ -162,8 +247,15 @@ export function verdictMain(argv: readonly string[]): number {
 		console.error(`${refusal}. Wrote nothing.`);
 		return 2;
 	}
-	const checks = evaluateU10(transcript, "windows");
+	const recorded = transcript.environment.osKeyMode;
+	if (recorded !== undefined && recorded !== args.mode) {
+		console.error(`environment.osKeyMode is "${recorded}", but --os-mode says ${args.mode}. Wrote nothing.`);
+		return 2;
+	}
+	const checks = evaluateU10(transcript, args.mode, approved);
 	for (const [key, value] of Object.entries(transcript.environment)) console.log(`environment ${key}: ${value}`);
+	console.log(`os key mode: ${args.mode} (0x${OS_KEY_MODES[args.mode].byte.toString(16)})${recorded === undefined ? ", from --os-mode; the transcript records none" : ""}`);
+	for (const approval of approved) console.log(`approved: ${describeApproval(approval)}, because ${approval.reason}`);
 	for (const { title, pass, detail } of checks) console.log(`${pass ? "PASS" : "FAIL"} ${title}\n     ${detail}`);
 	const passed = checks.every(({ pass }) => pass);
 	if (!passed) {
@@ -171,7 +263,16 @@ export function verdictMain(argv: readonly string[]): number {
 		return 1;
 	}
 	if (args.out !== null) {
-		const fixture: U10Fixture = { format: "tab60kit-u10-verdict/1", evaluatedAt: new Date().toISOString(), transcriptFile: args.transcriptFile, environment: transcript.environment, checks, transcript };
+		const fixture: U10Fixture = {
+			format: "tab60kit-u10-verdict/1",
+			evaluatedAt: new Date().toISOString(),
+			transcriptFile: args.transcriptFile,
+			environment: transcript.environment,
+			osKeyMode: args.mode,
+			approvedDifferences: approved,
+			checks,
+			transcript,
+		};
 		mkdirSync(dirname(args.out), { recursive: true });
 		writeFileSync(args.out, `${JSON.stringify(fixture, null, "\t")}\n`);
 		console.log(`wrote ${args.out}`);

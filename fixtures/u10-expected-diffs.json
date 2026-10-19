@@ -1,0 +1,8 @@
+[
+	{
+		"layer": 2,
+		"usage": "0x29",
+		"read": "default",
+		"reason": "the factory table at ROM 0xB2D6 writes Esc = 0x70 flags 1 on layer 2, but board run 1 reads no override; the user says \"Fn+Esc = tilde\" (Fn+Esc types grave), and the static read does not explain either (docs/app-firmware.md, \"The Esc pair\")"
+	}
+]
