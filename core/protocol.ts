@@ -62,6 +62,21 @@ export interface SubRange {
 	readonly count: number;
 }
 
+/** Inclusive bounds for one byte. */
+export interface ByteBounds {
+	readonly min: number;
+	readonly max: number;
+}
+
+/**
+ * What request bytes 2..3 may carry, read as the u16 LE argument the app firmware takes (U10 research, 0x7BA6
+ * `ldrh r5,[r4,#2]`): bounds for its high byte and for its low byte.
+ */
+export interface ArgRule {
+	readonly high: ByteBounds;
+	readonly low: ByteBounds;
+}
+
 export interface CommandSpec {
 	readonly label: string;
 	readonly cmd: number;
@@ -69,16 +84,20 @@ export interface CommandSpec {
 	readonly sub: number | SubRange | "length";
 	readonly modes: readonly Mode[];
 	readonly effect: Effect;
-	/** echo: bytes 0..1 repeat cmd and sub. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets instead. */
-	readonly reply: "echo" | "write-ack" | "none";
+	/**
+	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument. write-ack: 0x1E 0x02
+	 * then the u32 next offset. none: the board resets instead.
+	 */
+	readonly reply: "echo" | "echo-arg" | "write-ack" | "none";
 	readonly timeoutMs: number;
 	readonly address: Addressing;
 	/**
 	 * How many bytes from byte 4 the frame carries: 0 unaddressed, 8 for a range, 4 for set-cursor, and "sub" for WRITE,
-	 * whose sub byte is its length. The config rows stay at 0 until U10 and U11 settle their formats, so no config payload
+	 * whose sub byte is its length. The config write rows stay at 0 until U11 settles their formats, so no config payload
 	 * can pass before then.
 	 */
 	readonly payloadBytes: number | "sub";
+	readonly arg: ArgRule;
 	/** The editor capability this command is part of. keymap.ts derives its locks from this field. */
 	readonly unlocks: "keymap-read" | "keymap-write" | "os-mode" | null;
 	readonly evidence: Evidence;
@@ -89,6 +108,14 @@ const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
 /** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
 const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
+/** The two override-store reads, reviewed for the U10 lab session. */
+const REVIEWED_FOR_U10 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-19" } as const;
+
+/**
+ * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
+ * which U1 captured on this board; the app treats the field as an argument, and these rows take none.
+ */
+const NO_ARG = { high: { min: 0, max: 0 }, low: { min: 0, max: 0 } } as const satisfies ArgRule;
 
 /**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
@@ -106,6 +133,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
 		maturity: CONFIRMED_BY_U1,
@@ -120,6 +148,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
 		maturity: CONFIRMED_BY_U1,
@@ -135,6 +164,7 @@ export const COMMANDS = {
 		timeoutMs: 1_000,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:132-135; R4 app handler 0x767A" },
 		maturity: CONFIRMED_BY_U1,
@@ -150,6 +180,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
 		maturity: CONFIRMED_BY_U1,
@@ -164,6 +195,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
 		maturity: CONFIRMED_BY_U1,
@@ -178,6 +210,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
 		maturity: CONFIRMED_BY_U1,
@@ -192,6 +225,7 @@ export const COMMANDS = {
 		timeoutMs: 15_000,
 		address: "range",
 		payloadBytes: 8,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
 		maturity: REVIEWED_FOR_U5,
@@ -206,6 +240,7 @@ export const COMMANDS = {
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
 		maturity: CONFIRMED_BY_U1,
@@ -220,6 +255,7 @@ export const COMMANDS = {
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "pok3rtool", at: "cykb.py:237-250 (the vendor updater checks the sum only)" },
 		maturity: UNREVIEWED,
@@ -234,6 +270,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "set-cursor",
 		payloadBytes: 4,
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
 		maturity: REVIEWED_FOR_U5,
@@ -248,23 +285,42 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "at-cursor",
 		payloadBytes: "sub",
+		arg: NO_ARG,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
 		maturity: REVIEWED_FOR_U5,
 	},
-	cfgReadReverseMap: {
-		label: "Read reverse keymap (cmd 0x51/0x11)",
-		cmd: 0x51,
-		sub: 0x11,
+	cfgReadKeys: {
+		label: "Read 16 layer-0 key overrides (cmd 0x52/0x21)",
+		cmd: 0x52,
+		sub: 0x21,
 		modes: ["app"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		/** Frame a covers active usages 16a to 16a + 15. The board uses only arg & 0xF, so 16 and up would alias. */
+		arg: { high: { min: 0, max: 0 }, low: { min: 0, max: 15 } },
 		unlocks: "keymap-read",
-		evidence: { source: "app-disassembly", at: "R4 sub_7B90 case 0x51 at 0x7EB2; format INFERRED" },
-		maturity: UNREVIEWED,
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x21 at 0x809E..0x80DE; accessor sub_5E98 mode 3 at 0x5F0E" },
+		maturity: REVIEWED_FOR_U10,
+	},
+	cfgReadKey: {
+		label: "Read one key override (cmd 0x52/0x20)",
+		cmd: 0x52,
+		sub: 0x20,
+		modes: ["app"],
+		effect: "read",
+		reply: "echo-arg",
+		timeoutMs: 500,
+		address: "none",
+		payloadBytes: 0,
+		/** layer << 8 | active usage. sub_5E98 bounds the index at 0x2FF, so layers 0 to 2. */
+		arg: { high: { min: 0, max: 2 }, low: { min: 0, max: 0xff } },
+		unlocks: "keymap-read",
+		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x52 entry 0x7FEC (no host-config gate); sub 0x20 at 0x807C..0x809A; accessor sub_5E98 mode 3 at 0x5F0E" },
+		maturity: REVIEWED_FOR_U10,
 	},
 	cfgSelectLayer: {
 		label: "Select layer (cmd 0x51/0x30)",
@@ -276,6 +332,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "R4 0x7EB2, index < 4; format INFERRED" },
 		maturity: UNREVIEWED,
@@ -290,6 +347,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "R4 0x7EB2, per-layer per-key entry at 0x20000750; format INFERRED" },
 		maturity: UNREVIEWED,
@@ -304,6 +362,7 @@ export const COMMANDS = {
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
+		arg: NO_ARG,
 		unlocks: "os-mode",
 		evidence: { source: "app-disassembly", at: "R4 0x7EF2 cmp r7,#5 then strb to 0x2000000F" },
 		maturity: UNREVIEWED,
@@ -402,7 +461,8 @@ export type EgressRefusal =
 	| { readonly code: "not-requested"; readonly decoded: CommandName; readonly requested: CommandName }
 	| { readonly code: "not-cleared"; readonly command: CommandName }
 	| { readonly code: "wrong-mode"; readonly command: CommandName; readonly mode: Mode }
-	| { readonly code: "crc16-field"; readonly got: number }
+	/** Bytes 2..3, as a u16 LE, outside what the row's `arg` allows. */
+	| { readonly code: "arg-not-allowed"; readonly command: CommandName; readonly arg: number }
 	/** `at` is the first nonzero byte past the payload the command's row declares. */
 	| { readonly code: "payload-overrun"; readonly at: number }
 	| { readonly code: "no-window"; readonly command: CommandName }
@@ -437,16 +497,15 @@ export type EgressVerdict =
 	  }
 	| { readonly ok: false; readonly refusal: EgressRefusal };
 
-/**
- * The crc16 field, request bytes 2..3 (R1 "Packet framing"). pok3rtool sends 0x0000, VERIFIED in its source, and
- * works on sibling CYKB bootloaders; the app echoes the field and never checks it (R4 "Key concepts"). What the
- * vendor updater sends there is unread, and nobody will read it for U1. In a reply the field plays no part in
- * matching: the transcript keeps it, and tools/u1-verdict.ts reports a nonzero value as a finding.
- */
-const CRC16_FIELD = 0x0000;
-
 const PAYLOAD_OFFSET = 4;
 const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
+
+const within = (bounds: ByteBounds, byte: number) => byte >= bounds.min && byte <= bounds.max;
+
+/** Whether bytes 2..3, read as a u16 LE, are an argument `rule` allows. */
+export function argAllowed(rule: ArgRule, arg: number): boolean {
+	return within(rule.high, arg >>> 8) && within(rule.low, arg & 0xff);
+}
 
 function matchesSub(spec: CommandSpec, sub: number): boolean {
 	if (spec.sub === "length") return sub >= 1 && sub <= EXPECTED_LAYOUT.writeChunkBytes;
@@ -477,8 +536,8 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 	if (!ctx.cleared(command)) return refuse({ code: "not-cleared", command });
 	const spec: CommandSpec = COMMANDS[command];
 	if (!spec.modes.includes(ctx.mode)) return refuse({ code: "wrong-mode", command, mode: ctx.mode });
-	const field = view.getUint16(2, true);
-	if (field !== CRC16_FIELD) return refuse({ code: "crc16-field", got: field });
+	const arg = view.getUint16(2, true);
+	if (!argAllowed(spec.arg, arg)) return refuse({ code: "arg-not-allowed", command, arg });
 	const payloadEnd = PAYLOAD_OFFSET + (spec.payloadBytes === "sub" ? sub : spec.payloadBytes);
 	const overrun = frame.findIndex((byte, at) => at >= payloadEnd && byte !== 0);
 	if (overrun !== -1) return refuse({ code: "payload-overrun", at: overrun });
@@ -530,9 +589,10 @@ interface Channel {
 	cursor: number | null;
 }
 
-/** What a request adds to its command: the part of a range command, and the payload. */
+/** What a request adds to its command: the part of a range command, the u16 argument in bytes 2..3, and the payload. */
 interface Request {
 	readonly part?: number;
+	readonly arg?: number;
 	readonly payload?: Uint8Array;
 }
 
@@ -545,6 +605,8 @@ const payloadOf = (reply: InReport) => reply.subarray(PAYLOAD_OFFSET);
 function encode(name: CommandName, request: Request): Uint8Array {
 	const spec: CommandSpec = COMMANDS[name];
 	const payload = request.payload ?? new Uint8Array(0);
+	const arg = request.arg ?? 0;
+	if (!Number.isInteger(arg) || arg < 0 || arg > 0xffff) throw new RangeError(`${name}: argument ${arg} is not a u16`);
 	const maxPayload = spec.sub === "length" ? EXPECTED_LAYOUT.writeChunkBytes : MAX_PAYLOAD_BYTES;
 	if (payload.length > maxPayload) throw new RangeError(`${name}: ${payload.length} payload bytes, at most ${maxPayload}`);
 	let sub: number;
@@ -565,7 +627,7 @@ function encode(name: CommandName, request: Request): Uint8Array {
 	const view = new DataView(frame.buffer);
 	view.setUint8(0, spec.cmd);
 	view.setUint8(1, sub);
-	view.setUint16(2, CRC16_FIELD, true);
+	view.setUint16(2, arg, true);
 	frame.set(payload, PAYLOAD_OFFSET);
 	return frame;
 }
@@ -580,7 +642,8 @@ function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cur
 		const next = view.getUint32(4, true);
 		return next === cursor ? { kind: "ack" } : { kind: "refused", detail: next };
 	}
-	return reply[0] === sent[0] && reply[1] === sent[1] ? { kind: "ack" } : { kind: "stale" };
+	const echoed = spec.reply === "echo-arg" ? 4 : 2;
+	return sent.subarray(0, echoed).every((byte, at) => reply[at] === byte) ? { kind: "ack" } : { kind: "stale" };
 }
 
 type SilentCommand = { [K in CommandName]: (typeof COMMANDS)[K]["reply"] extends "none" ? K : never }[CommandName];
@@ -715,7 +778,7 @@ function configChannel(ch: Channel): ConfigChannel {
 		return notImplemented(what);
 	};
 	return {
-		readLayer: async (layer) => gated(["cfgReadReverseMap"], `readLayer(${layer})`),
+		readLayer: async (layer) => gated(["cfgReadKeys"], `readLayer(${layer})`),
 		setKey: async (write) => gated(["cfgSelectLayer", "cfgSetKey"], `setKey(${write.layer}, ${write.key}, ${write.usage})`),
 		setOsMode: async (mode) => gated(["cfgSetOsMode"], `setOsMode(${mode})`),
 	};
