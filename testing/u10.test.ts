@@ -2,9 +2,10 @@ import { expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OS_KEY_MODES, type OsKeyMode, presentUsages } from "../core/keymap";
 import { NotCleared, SHIPPED } from "../core/protocol";
 import { U1_EXPECTED } from "../lab/u1-job";
-import { U10_PRECONDITIONS, diffAgainstPrediction, framesOutsideU10, presentUsages, readStore, u10Clearance, u10Preconditions } from "../lab/u10-run";
+import { U10_PRECONDITIONS, diffAgainstPrediction, framesOutsideU10, readStore, u10Clearance, u10Preconditions } from "../lab/u10-run";
 import { verdictMain } from "../tools/u10-verdict";
 import { startWebHidLab } from "../web/webhid-port";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
@@ -14,8 +15,8 @@ import { type Transcript, type TranscriptEntry, recording } from "./transcript";
 const live = new AbortController().signal;
 
 /** What lab/u10.ts does on the page: one Read, recorded through the same WebHID shell. */
-async function readOnFake(overrides: FakeOptions["overrides"] = [], clearance = u10Clearance()) {
-	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 }, overrides });
+async function readOnFake(overrides: FakeOptions["overrides"] = [], clearance = u10Clearance(), mode: OsKeyMode = "windows") {
+	const board = new FakeTab60({ starting: "official-image", target: { imageBytes: U1_EXPECTED.imageBytes, wireSum32: U1_EXPECTED.imageSum32 }, overrides, osKeyMode: OS_KEY_MODES[mode].byte });
 	const entries: TranscriptEntry[] = [];
 	const { port, chooser } = startWebHidLab(new FakeHid(board, { rowAppearsInOpenChooser: ["app"], isActive: () => true }), new FakeLocks(), {
 		wrap: (link) => recording(link, (entry) => entries.push(entry)),
@@ -23,7 +24,7 @@ async function readOnFake(overrides: FakeOptions["overrides"] = [], clearance = 
 	});
 	const clicker = setInterval(() => chooser.needsClick !== null && chooser.pick(), 1);
 	try {
-		const read = await port.exclusive(() => readStore(port, clearance, live)).then(
+		const read = await port.exclusive(() => readStore(port, clearance, mode, live)).then(
 			(store) => ({ ok: true, store }) as const,
 			(error: unknown) => ({ ok: false, error }) as const,
 		);
@@ -36,29 +37,45 @@ async function readOnFake(overrides: FakeOptions["overrides"] = [], clearance = 
 
 const hex2 = (n: number) => n.toString(16).padStart(2, "0");
 
-test("a clean board reads exactly as predicted, with only the attach reads and the two 0x52 reads on the wire", async () => {
-	const { read, sent, entries, board } = await readOnFake();
+test("a board with the factory store reads exactly as predicted in each OS key mode, with only the attach reads and the two 0x52 reads on the wire", async () => {
+	for (const mode of Object.keys(OS_KEY_MODES) as OsKeyMode[]) {
+		const { read, sent, entries, board } = await readOnFake([], u10Clearance(), mode);
+		if (!read.ok) throw read.error;
+		const { store } = read;
+		const present = presentUsages(mode);
+		expect(present).toHaveLength(66);
+		expect(store.entries).toHaveLength(256 + 2 * 66);
+		expect({ mode, diffs: diffAgainstPrediction(store, mode) }).toEqual({ mode, diffs: [] });
+		expect(store.entries.filter(({ entry }) => entry.kind === "override")).toHaveLength(31);
+		expect(framesOutsideU10(entries)).toEqual([]);
+		expect(sent.map((frame) => frame.slice(0, 8))).toEqual([
+			"12020000",
+			"12000000",
+			...Array.from({ length: 16 }, (_, a) => `5221${hex2(a)}00`),
+			...[1, 2].flatMap((layer) => present.map((k) => `5220${hex2(k)}0${layer}`)),
+		]);
+		expect(sent.every((frame) => /^0*$/.test(frame.slice(8)))).toBe(true);
+		expect(board.violations).toEqual([]);
+	}
+});
+
+test("a Mac board read against the Windows prediction differs at the swapped modifiers", async () => {
+	const { read } = await readOnFake([], u10Clearance(), "mac");
 	if (!read.ok) throw read.error;
-	const { store } = read;
-	const present = presentUsages();
-	expect(present).toHaveLength(66);
-	expect(store.entries).toHaveLength(256 + 2 * 66);
-	expect(diffAgainstPrediction(store)).toEqual([]);
-	expect(framesOutsideU10(entries)).toEqual([]);
-	expect(sent.map((frame) => frame.slice(0, 8))).toEqual([
-		"12020000",
-		"12000000",
-		...Array.from({ length: 16 }, (_, a) => `5221${hex2(a)}00`),
-		...[1, 2].flatMap((layer) => present.map((k) => `5220${hex2(k)}0${layer}`)),
+	expect(diffAgainstPrediction(read.store, "windows")).toEqual([
+		"layer 0 usage 0xe6: predicted default, read absent",
+		"layer 0 usage 0xe7: predicted absent, read default",
+		"layer 1 usage 0xe7: predicted absent, read default",
+		"layer 2 usage 0xe2: predicted override 0x30 flags 1, read override 0x60 flags 1",
+		"layer 2 usage 0xe3: predicted override 0x60 flags 1, read override 0x30 flags 1",
+		"layer 2 usage 0xe7: predicted absent, read default",
 	]);
-	expect(sent.every((frame) => /^0*$/.test(frame.slice(8)))).toBe(true);
-	expect(board.violations).toEqual([]);
 });
 
 test("a seeded override on layer 1 is the one difference the page shows", async () => {
 	const { read } = await readOnFake([{ layer: 1, cell: 5, usage: 0x29, flags: 2 }]);
 	if (!read.ok) throw read.error;
-	expect(diffAgainstPrediction(read.store)).toEqual(["layer 1 usage 0x04: predicted default, read override 0x29 flags 2"]);
+	expect(diffAgainstPrediction(read.store, "windows")).toEqual(["layer 1 usage 0x04: predicted default, read override 0x29 flags 2"]);
 });
 
 test("the shipped clearance reads nothing past the attach", async () => {
@@ -134,8 +151,8 @@ test("the U10 verdict decodes a seeded override from the frames and fails naming
 	const { code, written, fails } = await runVerdict(await savedTranscript([{ layer: 0, cell: 7, usage: 0x1d, flags: 1 }, { layer: 2, cell: 5, usage: 0x29, flags: 2 }]));
 	expect({ code, written }).toEqual({ code: 1, written: null });
 	expect(fails).toEqual([
-		"FAIL Every layer 0 entry equals the clean prediction\n     layer 0 usage 0x1d: predicted default, read override 0x1d flags 1",
-		"FAIL Every layer 1 and 2 entry equals the clean prediction\n     layer 2 usage 0x04: predicted default, read override 0x29 flags 2",
+		"FAIL Every layer 0 entry equals the prediction\n     layer 0 usage 0x1d: predicted default, read override 0x1d flags 1",
+		"FAIL Every layer 1 and 2 entry equals the prediction\n     layer 2 usage 0x04: predicted override 0x92 flags 1, read override 0x29 flags 2",
 	]);
 });
 
@@ -150,7 +167,7 @@ test("the U10 verdict fails a stray frame, a reply that does not echo the argume
 		[
 			"an unechoed reply",
 			{ ...clean, entries: unechoed },
-			["FAIL Layer 0 is 16 cfgReadKeys frames with arguments 0 to 15, each answered with bytes 0..3 echoed\n     no reply echoes 52210000", "FAIL Every layer 0 entry equals the clean prediction\n     decoded 240 entries, not 256"],
+			["FAIL Layer 0 is 16 cfgReadKeys frames with arguments 0 to 15, each answered with bytes 0..3 echoed\n     no reply echoes 52210000", "FAIL Every layer 0 entry equals the prediction\n     decoded 240 entries, not 256"],
 		],
 		[
 			"a missing layer 2 read",

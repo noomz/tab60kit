@@ -103,9 +103,9 @@ try {
 		ui.summary.textContent = "Reading...";
 		ui.diffs.replaceChildren();
 		void port
-			.exclusive(() => readStore(port, clearance, new AbortController().signal))
+			.exclusive(() => readStore(port, clearance, "windows", new AbortController().signal))
 			.then((read) => {
-				const diffs = diffAgainstPrediction(read);
+				const diffs = diffAgainstPrediction(read, "windows");
 				const stray = framesOutsideU10(entries);
 				const layer0 = read.entries.filter((entry) => entry.layer === 0).length;
 				ui.summary.textContent =

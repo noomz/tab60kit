@@ -57,7 +57,9 @@ export interface FakeOptions {
 	readonly clock?: "real" | "virtual";
 	/** The order the IAP erases the pages of one ERASE, which R1 does not document. Default "descending", the order that punishes one ERASE over the whole window. */
 	readonly eraseOrder?: "descending" | "ascending";
-	/** Entries of the key override store at the start, by layer and matrix cell. Every other cell holds 0xFF, its reset value. */
+	/** SRAM 0x2000102B, the OS key mode the active keymap is built for: 0x10 (default), 0x20, or 0x40. */
+	readonly osKeyMode?: 0x10 | 0x20 | 0x40;
+	/** Entries of the key override store, by layer and matrix cell, written over the store the reset leaves (0xFF, plus the factory layer 2). */
 	readonly overrides?: readonly { readonly layer: 0 | 1 | 2; readonly cell: number; readonly usage: number; readonly flags: 0 | 1 | 2 | 3 }[];
 }
 
@@ -105,6 +107,12 @@ const ROM_KEYMAP = Uint8Array.from(
 	["291e2b143904e11d1f201a0816071b06", "21221517090a190523241c180b0d1110", "25260c120e0f3637272d132f333438e5", "2e2a30312832650000350000e70000e4", "00000000000000642c00e3e0e200e6c9"].join("").match(/../g) ?? [],
 	(byte) => parseInt(byte, 16),
 );
+const hexBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (byte) => parseInt(byte, 16));
+/** The (usage, code) pairs at ROM 0xB2D6 that sub_4540 writes to layer 2 with flags 1 after the reset clears the store. */
+const FACTORY_LAYER2 = hexBytes("29701ea01fa120a22182228326ac27ad2da82ea9e2302b3531360d310e320f3333341110101136123713e05fe568e360143d1a3e083f049216931d901b91");
+const FACTORY_FLAGS = 1;
+/** The usage swaps sub_5F4C applies per OS key mode: ROM 0xAA25 for 0x20, ROM 0xAA21 for 0x40. */
+const KEY_MODE_SWAPS: Readonly<Record<0x10 | 0x20 | 0x40, Uint8Array>> = { 0x10: hexBytes(""), 0x20: hexBytes("e2e3e3e2e6e7e7e6"), 0x40: hexBytes("39e0e039") };
 /** sub_5F4C writes the Fn and Pn markers into the cells SRAM 0x20000E50/51 name, 0x3C and 0x36 by default. */
 const MARKERS: readonly [cell: number, usage: number][] = [
 	[0x3c, 0xd8],
@@ -120,6 +128,26 @@ const ABSENT = 0x0003;
 /** Virtual time each command costs, and each erased page on top: rough, so gaps and waits are not all zero. */
 const COMMAND_MS = 1;
 const ERASE_PAGE_MS = 10;
+
+/** sub_91EC: usage to the lowest cell holding it, 0xFF for none. */
+function reverseOf(active: Uint8Array): Uint8Array {
+	const reverse = new Uint8Array(256).fill(0xff);
+	for (let cell = KEY_CELLS - 1; cell >= 0; cell--) reverse[active[cell]!] = cell;
+	return reverse;
+}
+
+/** sub_5314, then sub_5F4C: the ROM keymap, the mode's swaps looked up in the reverse map of the ROM keymap, then the markers. */
+function activeKeymap(mode: 0x10 | 0x20 | 0x40): Uint8Array {
+	const active = Uint8Array.from(ROM_KEYMAP);
+	const before = reverseOf(ROM_KEYMAP);
+	const swaps = KEY_MODE_SWAPS[mode];
+	for (let i = 0; i < swaps.length; i += 2) {
+		const cell = before[swaps[i]!]!;
+		if (cell !== 0xff) active[cell] = swaps[i + 1]!;
+	}
+	for (const [cell, marker] of MARKERS) active[cell] = marker;
+	return active;
+}
 
 export function blInfoBlock(fields: { readonly fwOffset?: number; readonly fwPages?: number; readonly pageSize?: number; readonly bootPid?: number } = {}): Uint8Array {
 	const block = new Uint8Array(BL_INFO_BYTES);
@@ -255,10 +283,15 @@ export class FakeTab60 {
 		this.#slowSkip = options.slowOnce?.skip ?? 0;
 		this.clock = options.clock === "virtual" ? new VirtualClock() : realClock;
 		this.#flash.set(options.blInfo ?? blInfoBlock(), BL_INFO_ADDR);
-		const active = Uint8Array.from(ROM_KEYMAP);
-		for (const [cell, marker] of MARKERS) active[cell] = marker;
-		this.#reverse = new Uint8Array(256).fill(0xff);
-		for (let cell = KEY_CELLS - 1; cell >= 0; cell--) this.#reverse[active[cell]!] = cell;
+		// sub_4540 writes the factory pairs by cell under mode 0x10; the board then runs in its saved mode.
+		const atReset = reverseOf(activeKeymap(0x10));
+		for (let i = 0; i < FACTORY_LAYER2.length; i += 2) {
+			const cell = atReset[FACTORY_LAYER2[i]!]!;
+			if (cell === 0xff) continue;
+			this.#overrides[2 * KEY_CELLS + cell] = FACTORY_LAYER2[i + 1]!;
+			this.#overrideFlags[2 * KEY_CELLS + cell] = FACTORY_FLAGS;
+		}
+		this.#reverse = reverseOf(activeKeymap(options.osKeyMode ?? 0x10));
 		for (const { layer, cell, usage, flags } of options.overrides ?? []) {
 			this.#overrides[layer * KEY_CELLS + cell] = usage;
 			this.#overrideFlags[layer * KEY_CELLS + cell] = flags;

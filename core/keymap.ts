@@ -165,20 +165,81 @@ export function romKeymap(): readonly Usage[] {
 	return cells;
 }
 
-/** The active keymap boot builds from `rom` in the US layout: the ROM cells, then the Fn and Pn markers. */
-export function activeKeymap(rom: readonly number[] = romKeymap()): readonly number[] {
+/**
+ * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Fn+Q, Fn+W, and Fn+E (factory codes
+ * 0x13D, 0x13E, 0x13F) set 0x10, 0x20, and 0x40. sub_5F4C swaps usages in the active keymap per mode with the pairs
+ * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not R4's OsMode (0x2000000F): that
+ * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the user's report.
+ */
+export type OsKeyMode = "windows" | "mac" | "caps-ctrl";
+
+export const OS_KEY_MODES: Readonly<Record<OsKeyMode, { readonly byte: 0x10 | 0x20 | 0x40; readonly swaps: readonly (readonly [Usage, Usage])[] }>> = {
+	windows: { byte: 0x10, swaps: [] },
+	mac: { byte: 0x20, swaps: [[usage(0xe2), usage(0xe3)], [usage(0xe3), usage(0xe2)], [usage(0xe6), usage(0xe7)], [usage(0xe7), usage(0xe6)]] },
+	"caps-ctrl": { byte: 0x40, swaps: [[usage(0x39), usage(0xe0)], [usage(0xe0), usage(0x39)]] },
+};
+
+/**
+ * The 31 (usage, code) pairs at ROM 0xB2D6 that sub_4540 writes to layer 2 with flags 1 whenever the store resets
+ * (sub_44A4). `bun run real-image` checks them byte for byte, and the 0xD8 after them.
+ */
+export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: number }[] = (
+	[
+		[0x29, 0x70], [0x1e, 0xa0], [0x1f, 0xa1], [0x20, 0xa2], [0x21, 0x82], [0x22, 0x83], [0x26, 0xac], [0x27, 0xad],
+		[0x2d, 0xa8], [0x2e, 0xa9], [0xe2, 0x30], [0x2b, 0x35], [0x31, 0x36], [0x0d, 0x31], [0x0e, 0x32], [0x0f, 0x33],
+		[0x33, 0x34], [0x11, 0x10], [0x10, 0x11], [0x36, 0x12], [0x37, 0x13], [0xe0, 0x5f], [0xe5, 0x68], [0xe3, 0x60],
+		[0x14, 0x3d], [0x1a, 0x3e], [0x08, 0x3f], [0x04, 0x92], [0x16, 0x93], [0x1d, 0x90], [0x1b, 0x91],
+	] as const
+).map(([k, code]) => ({ usage: usage(k), code }));
+const FACTORY_FLAGS = 1;
+
+/** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
+function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
+	const reverse = new Map<number, number>();
+	for (let cell = cells.length - 1; cell >= 0; cell--) reverse.set(cells[cell]!, cell);
+	return reverse;
+}
+
+/** The active keymap in the US layout: the ROM cells, the mode's swaps (sub_5368), then the Fn and Pn markers. */
+export function activeKeymap(mode: OsKeyMode, rom: readonly number[] = romKeymap()): readonly number[] {
 	const cells = [...rom];
+	const before = reverseMap(rom);
+	for (const [from, to] of OS_KEY_MODES[mode].swaps) {
+		const cell = before.get(from);
+		if (cell !== undefined) cells[cell] = to;
+	}
 	for (const marker of LAYER_KEY_MARKERS) cells[marker.cell] = marker.usage;
 	return cells;
 }
 
+/** The usages some cell of the active keymap holds in `mode`, ascending: the ones a read reports present. */
+export function presentUsages(mode: OsKeyMode): readonly number[] {
+	return [...new Set(activeKeymap(mode))].sort((a, b) => a - b);
+}
+
 /**
- * What a read of a layer returns from a store at its reset value (every byte 0xFF), for usages 0..255: "default" for
- * each usage some cell of `active` holds, "absent" for every other. It is the same on all three layers.
+ * What a read of each layer returns, for usages 0..255, from a store the reset left as it is (U10 board run 1). The
+ * reset writes FACTORY_LAYER2 by cell under the "windows" keymap; the board now runs in `mode`, and a read finds the
+ * cell by its active usage. So in "mac", usage 0xE2 reads the entry written for 0xE3. Layers 0 and 1 hold no overrides.
  */
-export function predictCleanLayer(active: readonly number[]): ReadonlyMap<number, OverrideEntry> {
-	const present = new Set(active);
-	return new Map(Array.from({ length: 256 }, (_, k): [number, OverrideEntry] => [k, present.has(k) ? { kind: "default" } : { kind: "absent" }]));
+export function predictLayers(mode: OsKeyMode): ReadonlyMap<Layer, ReadonlyMap<number, OverrideEntry>> {
+	const atReset = reverseMap(activeKeymap("windows"));
+	const layer2 = new Map<number, OverrideEntry>();
+	for (const { usage: k, code } of FACTORY_LAYER2) {
+		const cell = atReset.get(k);
+		if (cell !== undefined) layer2.set(cell, { kind: "override", code, flags: FACTORY_FLAGS });
+	}
+	const now = reverseMap(activeKeymap(mode));
+	const read = (store: ReadonlyMap<number, OverrideEntry>) =>
+		new Map(Array.from({ length: 256 }, (_, k): [number, OverrideEntry] => {
+			const cell = now.get(k);
+			return [k, cell === undefined ? { kind: "absent" } : (store.get(cell) ?? { kind: "default" })];
+		}));
+	return new Map<Layer, ReadonlyMap<number, OverrideEntry>>([
+		[0, read(new Map())],
+		[1, read(new Map())],
+		[2, read(layer2)],
+	]);
 }
 
 export interface ConfigCapabilities {

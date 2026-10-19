@@ -1,9 +1,9 @@
 /**
  * Plan U10's hardware read, DOM-free so testing/u10.test.ts runs it against the fake board. One Connect in normal mode,
- * layer 0 of the override store in 16 frames, then layers 1 and 2 one entry at a time for each usage the clean-store
- * prediction marks present. Each entry is compared with that prediction.
+ * layer 0 of the override store in 16 frames, then layers 1 and 2 one entry at a time for each usage present in the
+ * active keymap of the board's OS key mode. Each entry is compared with `predictLayers` for that mode.
  */
-import { type Layer, activeKeymap, predictCleanLayer, usage } from "../core/keymap";
+import { type Layer, type OsKeyMode, predictLayers, presentUsages, usage } from "../core/keymap";
 import type { DevicePort } from "../core/port";
 import { type Clearance, type CommandName, type OverrideEntry, connect, labClearance } from "../core/protocol";
 import type { TranscriptEntry } from "../testing/transcript";
@@ -18,8 +18,8 @@ const U10_PAIRS: readonly string[] = ["1202", "1200", "5221", "5220"];
 export const u10Clearance = (): Clearance => labClearance(U10_ROWS, U10_PURPOSE);
 
 /**
- * What the capture must attest before Read. The battery pull resets the override store, which the clean prediction
- * assumes; another app holding the keyboard could send its own frames between ours.
+ * What the capture must attest before Read. The battery pull clears SRAM, so the board reads its saved block back;
+ * another app holding the keyboard could send its own frames between ours.
  */
 export const U10_PRECONDITIONS = [
 	{ key: "batteryPulled", label: "The batteries were removed and USB unplugged for 10 s, then the board was reconnected over USB" },
@@ -32,26 +32,20 @@ export interface StoreRead {
 	readonly entries: readonly { readonly layer: Layer; readonly usage: number; readonly entry: OverrideEntry }[];
 }
 
-/** Reads layer 0 whole and layers 1 and 2 at the predicted present usages, then closes the session. */
-export async function readStore(port: DevicePort, clearance: Clearance, signal: AbortSignal): Promise<StoreRead> {
+/** Reads layer 0 whole and layers 1 and 2 at the usages present in `mode`, then closes the session. */
+export async function readStore(port: DevicePort, clearance: Clearance, mode: OsKeyMode, signal: AbortSignal): Promise<StoreRead> {
 	const session = await connect({ port, clearance, signal }, { modes: ["app"], reason: "connect" });
 	try {
 		if ("refusal" in session) throw new Error(`attach refused: ${session.refusal.code}`);
 		const entries: StoreRead["entries"][number][] = [];
 		for (const [k, entry] of await session.config.readLayer0(signal)) entries.push({ layer: 0, usage: k, entry });
 		for (const layer of [1, 2] as const) {
-			for (const k of presentUsages()) entries.push({ layer, usage: k, entry: await session.config.readKey(layer, usage(k), signal) });
+			for (const k of presentUsages(mode)) entries.push({ layer, usage: k, entry: await session.config.readKey(layer, usage(k), signal) });
 		}
 		return { entries };
 	} finally {
 		await session.close();
 	}
-}
-
-const PREDICTED = predictCleanLayer(activeKeymap());
-
-export function presentUsages(): readonly number[] {
-	return [...PREDICTED].filter(([, entry]) => entry.kind === "default").map(([k]) => k);
 }
 
 export function describeEntry(entry: OverrideEntry | undefined): string {
@@ -63,11 +57,13 @@ export function describeEntry(entry: OverrideEntry | undefined): string {
 const sameEntry = (a: OverrideEntry | undefined, b: OverrideEntry | undefined) => describeEntry(a) === describeEntry(b);
 const hex = (n: number) => `0x${n.toString(16).padStart(2, "0")}`;
 
-/** One line per entry that differs from the clean prediction, by layer and then usage. */
-export function diffAgainstPrediction(read: StoreRead): readonly string[] {
-	return read.entries
-		.filter(({ usage: k, entry }) => !sameEntry(entry, PREDICTED.get(k)))
-		.map(({ layer, usage: k, entry }) => `layer ${layer} usage ${hex(k)}: predicted ${describeEntry(PREDICTED.get(k))}, read ${describeEntry(entry)}`);
+/** One line per entry that differs from `predictLayers(mode)`, in read order. */
+export function diffAgainstPrediction(read: StoreRead, mode: OsKeyMode): readonly string[] {
+	const predicted = predictLayers(mode);
+	return read.entries.flatMap(({ layer, usage: k, entry }) => {
+		const want = predicted.get(layer)?.get(k);
+		return sameEntry(entry, want) ? [] : [`layer ${layer} usage ${hex(k)}: predicted ${describeEntry(want)}, read ${describeEntry(entry)}`];
+	});
 }
 
 /** Each sent frame whose (cmd, sub) is not one of the U10 rows. The transcript is the capture only when this is empty. */

@@ -2,7 +2,8 @@
 // testing/real-image.ts (CI has no vendor bytes); these tests check its shape. The generators are seeded, as in
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
-import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, activeKeymap, keyId, parseKeymapDoc, planKeymap, predictCleanLayer, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import type { OverrideEntry } from "../core/protocol";
+import { FACTORY_LAYER2, type KeyId, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -188,18 +189,53 @@ test("serialize of a parsed canonical string returns the same string, sorted", (
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 /** docs/app-firmware.md "OS key mode", from predict.py over the V1.01.13 image. */
-const CLEAN_PRESENT = [0x00, ...range(0x04, 0x39), 0x64, 0xc9, 0xd8, 0xd9, ...range(0xe0, 0xe6)];
+const WINDOWS_PRESENT = [0x00, ...range(0x04, 0x39), 0x64, 0xc9, 0xd8, 0xd9, ...range(0xe0, 0xe6)];
+const entriesOf = (layer: ReadonlyMap<number, OverrideEntry> | undefined) => [...(layer ?? new Map<number, OverrideEntry>())];
+const kinds = (layer: ReadonlyMap<number, OverrideEntry> | undefined, kind: OverrideEntry["kind"]) => entriesOf(layer).filter(([, entry]) => entry.kind === kind).map(([k]) => k);
+const overridesOf = (layer: ReadonlyMap<number, OverrideEntry> | undefined) =>
+	Object.fromEntries(entriesOf(layer).flatMap(([k, entry]) => (entry.kind === "override" ? [[k, (entry.flags << 8) | entry.code]] : [])));
 
-test("a clean store predicts 0x00FF for exactly the usages predict.py finds in the active keymap, and 0x0003 for the rest", () => {
-	const predicted = predictCleanLayer(activeKeymap());
-	expect([...predicted.keys()]).toEqual(range(0, 255));
-	expect([...predicted].filter(([, entry]) => entry.kind === "default").map(([k]) => k)).toEqual(CLEAN_PRESENT);
-	expect([...predicted].filter(([, entry]) => entry.kind !== "default").every(([, entry]) => entry.kind === "absent")).toBe(true);
+/** Board run 1 (2026-10-19, Mac mode): the 30 layer 2 overrides it read, as flags << 8 | code by active usage. Esc is the 31st factory pair and read default. */
+const RUN1_LAYER2: Readonly<Record<number, number>> = {
+	0x04: 0x192, 0x08: 0x13f, 0x0d: 0x131, 0x0e: 0x132, 0x0f: 0x133, 0x10: 0x111, 0x11: 0x110, 0x14: 0x13d, 0x16: 0x193, 0x1a: 0x13e,
+	0x1b: 0x191, 0x1d: 0x190, 0x1e: 0x1a0, 0x1f: 0x1a1, 0x20: 0x1a2, 0x21: 0x182, 0x22: 0x183, 0x26: 0x1ac, 0x27: 0x1ad, 0x2b: 0x135,
+	0x2d: 0x1a8, 0x2e: 0x1a9, 0x31: 0x136, 0x33: 0x134, 0x36: 0x112, 0x37: 0x113, 0xe0: 0x15f, 0xe2: 0x160, 0xe3: 0x130, 0xe5: 0x168,
+};
+
+test("in Windows mode every layer reads default for exactly the usages predict.py finds, absent for the rest, and layer 2 holds the factory pairs", () => {
+	const layers = predictLayers("windows");
+	expect([...layers.keys()]).toEqual([0, 1, 2]);
+	for (const layer of [0, 1, 2] as const) {
+		expect([...(layers.get(layer)?.keys() ?? [])]).toEqual(range(0, 255));
+		expect(kinds(layers.get(layer), "absent")).toEqual(range(0, 255).filter((k) => !WINDOWS_PRESENT.includes(k)));
+	}
+	expect(kinds(layers.get(0), "default")).toEqual(WINDOWS_PRESENT);
+	expect(kinds(layers.get(1), "default")).toEqual(WINDOWS_PRESENT);
+	expect(overridesOf(layers.get(2))).toEqual(Object.fromEntries(FACTORY_LAYER2.map(({ usage: k, code }) => [k, 0x100 | code])));
+	expect(presentUsages("windows")).toEqual(WINDOWS_PRESENT);
 });
 
-test("the active keymap is the ROM keymap with Fn (cell 60) and Pn (cell 54) replaced by the markers 0xD8 and 0xD9", () => {
+test("in Mac mode 0xE6 is gone and 0xE7 is present, and layer 2 reads what board run 1 read, plus the Esc pair", () => {
+	const layers = predictLayers("mac");
+	const macPresent = [...WINDOWS_PRESENT.filter((k) => k !== 0xe6), 0xe7];
+	expect(presentUsages("mac")).toEqual(macPresent);
+	expect(kinds(layers.get(0), "default")).toEqual(macPresent);
+	expect(kinds(layers.get(1), "default")).toEqual(macPresent);
+	expect(overridesOf(layers.get(2))).toEqual({ ...RUN1_LAYER2, 0x29: 0x170 });
+});
+
+test("Caps/Ctrl mode swaps where Caps Lock and Left Ctrl read their factory layer 2 entries", () => {
+	const layer2 = predictLayers("caps-ctrl").get(2);
+	expect(presentUsages("caps-ctrl")).toEqual(WINDOWS_PRESENT);
+	expect(overridesOf(layer2)[0x39]).toBe(0x15f);
+	expect(layer2?.get(0xe0)).toEqual({ kind: "default" });
+});
+
+test("the active keymap is the ROM keymap with each mode's swaps, then Fn (cell 60) and Pn (cell 54) replaced by the markers 0xD8 and 0xD9", () => {
 	const rom = romKeymap();
-	const active = activeKeymap();
-	expect([rom.length, rom[60], rom[54], active[60], active[54]]).toEqual([80, 0xe7, 0x65, 0xd8, 0xd9]);
-	expect(active.filter((cell, at) => cell !== rom[at])).toEqual([0xd9, 0xd8]);
+	const changed = (mode: OsKeyMode) => activeKeymap(mode).flatMap((cell, at) => (cell === rom[at] ? [] : [[at, cell]]));
+	expect([rom.length, rom[60], rom[54]]).toEqual([80, 0xe7, 0x65]);
+	expect(changed("windows")).toEqual([[54, 0xd9], [60, 0xd8]]);
+	expect(changed("mac")).toEqual([[54, 0xd9], [60, 0xd8], [74, 0xe2], [76, 0xe3], [78, 0xe7]]);
+	expect(changed("caps-ctrl")).toEqual([[4, 0xe0], [54, 0xd9], [60, 0xd8], [75, 0x39]]);
 });
