@@ -35,7 +35,7 @@ export const U12_PRECONDITIONS = [
 	{
 		key: "noSavingKeys",
 		label:
-			"During the run I will press only the keys the page names. Each of these saves the profile to flash and spoils the battery-pull phase: Pn+R (reset this layer), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
+			"During the run I will press only the keys the page names, each on its own. Each of these saves the profile to flash and spoils the battery-pull phase: Pn+R (resets the whole current profile, all three layers), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Left GUI+Right Alt+Space, Fn+Right Alt held while the board powers on, Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
 	},
 ] as const;
 
@@ -87,7 +87,7 @@ export const U12_STEPS: readonly U12Step[] = [
 	{
 		kind: "user",
 		id: "battery-pull",
-		label: "Unplug USB and take the batteries out. Wait 10 seconds. Plug USB back in with no batteries, and press no key while the board starts.",
+		label: "Unplug USB and take the batteries out. Wait 10 seconds. Plug USB back in with no batteries, and press no key while the board starts (Fn+Right Alt held at power-on saves to flash).",
 		question: "Did you unplug USB with the batteries out for 10 seconds, and press no key since the Apply?",
 		keylog: null,
 	},
