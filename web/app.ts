@@ -117,7 +117,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		const caps = kit.capabilities();
 		const section = element("section");
 		section.append(element("h2", "Keymap"));
-		for (const line of caps.blockedBy) section.append(element("p", line));
+		if (!caps.canWrite) for (const line of caps.blockedBy) section.append(element("p", line));
 		const settings = element("p");
 		settings.append(
 			select("OS key mode", [["", "Choose the mode the board runs in"], ...MODES.map((m): [string, string] => [m, OS_KEY_MODE_NAME[m]])], mode ?? "", (value) => edit(doc, isMode(value) ? value : null)),
