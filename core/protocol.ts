@@ -111,8 +111,7 @@ const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "202
 /** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
 const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
 const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
-/** The user's G1 ruling on docs/app-firmware.md: the three gate rows and the single key write. No capture yet. */
-const REVIEWED_FOR_U11 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-19" } as const;
+const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-24", capture: "fixtures/u11-macos.json" } as const;
 
 /**
  * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
@@ -353,7 +352,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE (no gate); 0xFF reads only, 0x7CB0 and 0x7CCE..0x7CD4" },
-		maturity: REVIEWED_FOR_U11,
+		maturity: CONFIRMED_BY_U11,
 	},
 	gateOpen: {
 		label: "Open the host-config gate without config mode (cmd 0x41, byte 1 = 0x80)",
@@ -371,7 +370,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE..0x7D08, sole store to 0x200006FA at 0x7CBE; bit 0 clear skips sub_721C and the 0x7CD6 reload" },
-		maturity: REVIEWED_FOR_U11,
+		maturity: CONFIRMED_BY_U11,
 	},
 	gateClose: {
 		label: "Close the host-config gate (cmd 0x41, byte 1 = 0x00)",
@@ -387,7 +386,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x41 at 0x7CAE..0x7D08; after 0x80 the old bit 0 is clear, so 0x7CD6 reloads nothing" },
-		maturity: REVIEWED_FOR_U11,
+		maturity: CONFIRMED_BY_U11,
 	},
 	cfgWriteKey: {
 		label: "Write one key override (cmd 0x51/0x20)",
@@ -406,7 +405,7 @@ export const COMMANDS = {
 		value: { high: { min: 0, max: 0 }, low: { min: 0, max: 0xff } },
 		unlocks: "keymap-write",
 		evidence: { source: "app-disassembly", at: "V1.01.13 cmd 0x51 entry 0x7EB2 refuses unless [0x200006FA] & 0x81; sub 0x20 at 0x7F34..0x7F4A calls sub_5E98, RAM only, no save; reply via the 0x52 read at 0x7FE4" },
-		maturity: REVIEWED_FOR_U11,
+		maturity: CONFIRMED_BY_U11,
 	},
 	cfgSetOsMode: {
 		label: "Set OS mode (cmd 0x51/0x00)",

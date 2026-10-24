@@ -127,13 +127,13 @@ check("udev rule: R3's rule byte for byte", () =>
 	),
 );
 
-// G1 today, shipped: the two confirmed reads unlock reading; each config command it cannot send says what it lacks.
+// G1 today, shipped: the confirmed reads, gate, and key write unlock reading and writing; the unreviewed 0x51/0x00 says what it lacks.
 const caps = capabilities(SHIPPED);
-check("shipped caps: reading only", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, false, false]));
-check("shipped caps: the four reviewed U11 rows and the unreviewed 0x51/0x00 are blocked with what each lacks", () =>
+check("shipped caps: reading and writing, not the OS mode", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, true, false]));
+check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lacks", () =>
 	assert.deepEqual(
 		caps.blockedBy.map((line) => line.replace(/^.*: /, "")),
-		[...Array(4).fill("reviewed, needs a capture on this board (gate G1)"), "needs review and a capture on this board (gate G1)"],
+		["needs review and a capture on this board (gate G1)"],
 	),
 );
 const u10Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "readMode", "readBlInfo"], "U10"));
@@ -167,20 +167,11 @@ check("clearance: a lab session for the reviewed erase, set write address, and w
 check("clearance: a lab session for the two confirmed override-store reads and the U1 rows an app session needs", () =>
 	assert.equal(labClearance([...U10_ROWS, "readMode", "readBlInfo"], "U10").kind, "lab"),
 );
-check("clearance: a lab session for the four reviewed U11 rows", () => assert.equal(labClearance(U11_ROWS, "U11").kind, "lab"));
-check("clearance: the shipped build sends exactly the seven U1 rows and the two U10 reads, and refuses erase, crc, set write address, write, and every config write", () =>
+check("clearance: a lab session for the four confirmed U11 rows", () => assert.equal(labClearance(U11_ROWS, "U11").kind, "lab"));
+check("clearance: the shipped build sends exactly the seven U1 rows, the two U10 reads, and the four U11 rows, and refuses erase, crc, set write address, write, and 0x51/0x00", () =>
 	assert.deepEqual(
 		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
-		{ sends: new Set([...U1_ROWS, ...U10_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...U11_ROWS, ...UNREVIEWED_ROWS]) },
-	),
-);
-check("maturity: the four U11 rows are reviewed by the user's G1 ruling and none is confirmed", () =>
-	assert.deepEqual(
-		U11_ROWS.map((name) => {
-			const maturity: Maturity = COMMANDS[name].maturity;
-			return [name, maturity.level];
-		}),
-		U11_ROWS.map((name) => [name, "reviewed"]),
+		{ sends: new Set([...U1_ROWS, ...U10_ROWS, ...U11_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
 	),
 );
 for (const name of UNREVIEWED_ROWS) {
@@ -197,7 +188,9 @@ const captures = new Set(
 );
 const U10_CAPTURE = "fixtures/u10-macos.json";
 const U10_TRANSCRIPT = "testing/fixtures/tab60kit-u10-2026-10-19T08-46-35-778Z.json";
-check(`capture: every confirmed row cites ${CAPTURE} or ${U10_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE])));
+const U11_CAPTURE = "fixtures/u11-macos.json";
+const U11_TRANSCRIPT = "testing/fixtures/tab60kit-u11-2026-10-24T10-59-37-545Z.json";
+check(`capture: every confirmed row cites ${CAPTURE}, ${U10_CAPTURE}, or ${U11_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE, U11_CAPTURE])));
 check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
 	assert.deepEqual(
 		U10_ROWS.map((name) => {
@@ -207,6 +200,21 @@ check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
 		[U10_CAPTURE, U10_CAPTURE],
 	),
 );
+check(`capture: the U11 gate and key write cite ${U11_CAPTURE}`, () =>
+	assert.deepEqual(
+		U11_ROWS.map((name) => {
+			const maturity: Maturity = COMMANDS[name].maturity;
+			return maturity.level === "confirmed" ? maturity.capture : maturity.level;
+		}),
+		U11_ROWS.map(() => U11_CAPTURE),
+	),
+);
+check(`capture: ${U11_CAPTURE} holds the 2026-10-24 run byte for byte, and all eight checks pass`, () => {
+	const fixture: { transcriptFile: string; transcript: unknown; checks: { pass: boolean }[] } = JSON.parse(readFileSync(join(import.meta.dir, "..", U11_CAPTURE), "utf8"));
+	assert.equal(fixture.transcriptFile, U11_TRANSCRIPT);
+	assert.deepEqual(fixture.transcript, JSON.parse(readFileSync(join(import.meta.dir, "..", U11_TRANSCRIPT), "utf8")));
+	assert.ok(fixture.checks.length === 8 && fixture.checks.every((c) => c.pass), "every U11 check passes");
+});
 check(`capture: ${U10_CAPTURE} holds board run 3 byte for byte, in Mac mode with one approved difference, and every check passes`, () => {
 	const fixture: { transcriptFile: string; transcript: unknown; osKeyMode: string; approvedDifferences: unknown[]; checks: { pass: boolean }[] } = JSON.parse(
 		readFileSync(join(import.meta.dir, "..", U10_CAPTURE), "utf8"),

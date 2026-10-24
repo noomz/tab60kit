@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DeviceRefused, NotCleared, SHIPPED } from "../core/protocol";
+import { DeviceRefused, SHIPPED } from "../core/protocol";
 import { U1_EXPECTED } from "../lab/u1-job";
 import { type Attestation, U11_PRECONDITIONS, U11_STEPS, type UserStep, attestEntry, framesOutsideU11, runU11, u11Clearance, u11Preconditions } from "../lab/u11-run";
 import { verdictMain } from "../tools/u11-verdict";
@@ -96,10 +96,11 @@ test("a key write the board refuses stops the run with DeviceRefused before the 
 	expect(sent.map((frame) => frame.slice(0, 4))).toEqual(["1202", "1200", "41ff", "4180", "5120"]);
 });
 
-test("the shipped clearance stops at the gate query with NotCleared, and nothing past the attach leaves", async () => {
-	const { run, sent } = await runOnFake({}, {}, SHIPPED);
-	expect(run.ok ? null : run.error).toBeInstanceOf(NotCleared);
-	expect(sent.map((frame) => frame.slice(0, 8))).toEqual(ATTACH);
+test("the shipped clearance sends the confirmed U11 rows and passes every step", async () => {
+	const { run, entries } = await runOnFake({}, {}, SHIPPED);
+	if (!run.ok) throw run.error;
+	expect(run.outcomes.map(({ id, pass }) => [id, pass])).toEqual(U11_STEPS.map((step) => [step.id, true]));
+	expect(framesOutsideU11(entries)).toEqual([]);
 });
 
 const ticks = U11_PRECONDITIONS.map(({ key }): TranscriptEntry => ({ t: 0, kind: "precondition", key, met: true }));
