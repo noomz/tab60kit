@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'self'; connect-src 'none'; script-src 'self'; object-src 'none'; base-uri 'none'"
+		/>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>tab60kit lab U12</title>
+		<script type="module" src="./u12.js"></script>
+	</head>
+	<body>
+		<h1>tab60kit lab: U12 keymap apply, reload, and battery pull</h1>
+		<p id="about"></p>
+		<fieldset id="preconditions">
+			<legend>Before Start</legend>
+			<label
+				>The board's OS key mode (Fn+Q Windows, Fn+W Mac, Fn+E Caps/Ctrl swap)
+				<select id="os-key-mode">
+					<option value="" selected>choose</option>
+					<option value="windows">Windows</option>
+					<option value="mac">Mac</option>
+					<option value="caps-ctrl">Caps/Ctrl swap</option>
+				</select>
+			</label>
+		</fieldset>
+		<p>
+			<button id="start" type="button" disabled>Start</button>
+			<button id="reload" type="button" hidden>Reload this page</button>
+			<button id="continue" type="button" hidden>Continue</button>
+			<button id="pick" type="button" hidden>Pick the TAB 60</button>
+			<button id="download" type="button" disabled>Download transcript</button>
+			<button id="discard" type="button" hidden>Discard this run</button>
+		</p>
+		<section id="step" hidden>
+			<h2>Your step</h2>
+			<p id="step-label"></p>
+			<p>Keylog: <output id="keylog"></output></p>
+			<p>
+				<button id="simulate" type="button" hidden>Press the key on the fake board</button>
+			</p>
+			<p id="step-question"></p>
+			<p>
+				<button id="yes" type="button">Yes</button>
+				<button id="no" type="button">No</button>
+			</p>
+		</section>
+		<p id="summary"></p>
+		<ol id="outcomes"></ol>
+		<pre id="log"></pre>
+	</body>
+</html>

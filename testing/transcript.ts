@@ -75,6 +75,8 @@ export type TranscriptEntry =
 	| { readonly t: number; readonly kind: "precondition"; readonly key: string; readonly met: boolean }
 	/** The user finished a step of a guided lab run: their yes or no, and each key code the page logged during it. */
 	| { readonly t: number; readonly kind: "attest"; readonly step: string; readonly answer: boolean; readonly keys: readonly string[] }
+	/** A guided lab run reached `step`: "begin" for a wire step, or what the page found, such as the keymap storage held after a reload. */
+	| { readonly t: number; readonly kind: "mark"; readonly step: string; readonly text: string }
 	| { readonly t: number; readonly kind: "lost" | "closed"; readonly mode?: Mode };
 
 const WRITE_CMD = 0x1f;
@@ -188,6 +190,8 @@ function parseEntry(value: unknown, index: number): TranscriptEntry {
 			if (!Array.isArray(keys) || !keys.every((key) => typeof key === "string")) fail(where, "keys is not an array of strings");
 			return { t, kind, step: string(value, "step", where), answer, keys };
 		}
+		case "mark":
+			return { t, kind, step: string(value, "step", where), text: string(value, "text", where) };
 		case "lost":
 		case "closed": {
 			if (value.mode === undefined) return { t, kind };
