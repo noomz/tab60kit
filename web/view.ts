@@ -6,7 +6,7 @@
 import { type Activity, type BootTarget, type ChipReport, type DeviceWant, type Finding, type JobResult, type KeymapProblem, type OsKeyMode, type StopReason, TAB60_KEYS } from "@tab60kit/core";
 import type { Screen } from "./screens";
 
-export type Action = "connect" | "deep-check" | "pick" | "cancel" | "skip";
+export type Action = "connect" | "deep-check" | "apply" | "pick" | "cancel" | "skip";
 
 export interface FlashRow {
 	readonly region: string;
