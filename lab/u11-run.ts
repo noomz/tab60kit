@@ -28,7 +28,7 @@ export const U11_PRECONDITIONS = [
 	{
 		key: "noSavingKeys",
 		label:
-			"During the run I will press only Caps Lock. Each of these saves the profile to flash and spoils the power-cycle phase: Pn+R (reset this layer), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
+			"During the run I will press only Caps Lock. Each of these saves the profile to flash and spoils the power-cycle phase: Pn+R (resets the whole current profile, all three layers), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Left GUI+Right Alt+Space, Fn+Right Alt held while the board powers on, Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
 	},
 	{ key: "bluetoothReady", label: "The batteries are in and the board is paired with this computer over Bluetooth" },
 ] as const;
@@ -95,7 +95,7 @@ export const U11_STEPS: readonly U11Step[] = [
 	{
 		kind: "user",
 		id: "power-cycle",
-		label: "Unplug USB and take the batteries out. Wait 10 seconds. Plug USB back in with no batteries, and press no key while the board starts.",
+		label: "Unplug USB and take the batteries out. Wait 10 seconds. Plug USB back in with no batteries, and press no key while the board starts (Fn+Right Alt held at power-on saves to flash).",
 		question: "Did you unplug USB with the batteries out for 10 seconds, and press no key since the write?",
 		keylog: null,
 	},
