@@ -4,7 +4,7 @@
  * Once a board was read, the Board, result, and Stopped screens carry the keymap editor below the flash map.
  */
 import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, canRemap, usage } from "@tab60kit/core";
-import { LAYER_NAME, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, screenFor } from "./screens";
 import { TARGETS, usageName } from "./usages";
@@ -143,6 +143,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 				),
 			);
 			section.append(pick);
+			const note = factoryNote(layer, cap.id);
+			if (note !== null) section.append(element("p", note));
 		}
 		const list = element("ul");
 		for (const row of overrideRows(doc)) {

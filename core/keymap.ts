@@ -218,6 +218,19 @@ export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: nu
 ).map(([k, code]) => ({ usage: usage(k), code }));
 const FACTORY_FLAGS = 1;
 
+/**
+ * The factory function code (flags 1, as flags << 8 | code) that the store reset writes on `key`, or null. The reset
+ * writes FACTORY_LAYER2 by cell under the Windows keymap, so the cell does not move with the OS key mode. Whether the
+ * board still holds it depends on its history (U10 board run 3 found Esc's pair missing), so this is what the reset
+ * leaves, not a read.
+ */
+export function factoryFunction(layer: Layer, key: KeyId): number | null {
+	if (layer !== 2) return null;
+	const atReset = reverseMap(activeKeymap("windows"));
+	const pair = FACTORY_LAYER2.find(({ usage: k }) => atReset.get(k) === key);
+	return pair === undefined ? null : (FACTORY_FLAGS << 8) | pair.code;
+}
+
 /** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
 function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
 	const reverse = new Map<number, number>();

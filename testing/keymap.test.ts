@@ -3,7 +3,7 @@
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
 import type { OverrideEntry } from "../core/protocol";
-import { FACTORY_LAYER2, type KeyId, type KeyWrite, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, canRemap, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import { FACTORY_LAYER2, type KeyId, type KeyWrite, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, canRemap, factoryFunction, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -263,4 +263,12 @@ test("the active keymap is the ROM keymap with each mode's swaps, then Fn (cell 
 	expect(changed("windows")).toEqual([[54, 0xd9], [60, 0xd8]]);
 	expect(changed("mac")).toEqual([[54, 0xd9], [60, 0xd8], [74, 0xe2], [76, 0xe3], [78, 0xe7]]);
 	expect(changed("caps-ctrl")).toEqual([[4, 0xe0], [54, 0xd9], [60, 0xd8], [75, 0x39]]);
+});
+
+test("factoryFunction names the pair the reset writes on each layer 2 cell, by the Windows keymap, and nothing elsewhere", () => {
+	const cells = TAB60_KEYS.flatMap((cap) => (factoryFunction(2, cap.id) === null ? [] : [cap.id]));
+	expect(cells).toHaveLength(FACTORY_LAYER2.length);
+	expect(factoryFunction(2, keyId(3))).toBe(0x13d);
+	expect(factoryFunction(2, keyId(75))).toBe(0x15f);
+	expect(TAB60_KEYS.every((cap) => factoryFunction(0, cap.id) === null && factoryFunction(1, cap.id) === null)).toBe(true);
 });

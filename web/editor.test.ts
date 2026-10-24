@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { keyId, usage } from "@tab60kit/core";
-import { overrideRows, withOverride } from "./editor";
+import { factoryNote, overrideRows, withOverride } from "./editor";
 import { EMPTY_KEYMAP } from "./keymap-store";
 import { TARGETS, usageName } from "./usages";
 
@@ -19,7 +19,7 @@ test("the list names each override by layer, cap, and target, in the board's ord
 	expect(overrideRows(doc).map((row) => row.text)).toEqual([
 		"Layer 0 (base): Esc sends Grave",
 		"Layer 0 (base): Ctrl sends Right",
-		"Layer 2 (hold Pn): Esc sends Grave",
+		"Layer 2 (hold the 0xD9 layer key): Esc sends Grave, replacing factory function 0x170",
 	]);
 });
 
@@ -31,4 +31,11 @@ test("the target table lists each usage once with a distinct KeyboardEvent code,
 	expect(TARGETS.find((t) => t.usage === 0x62)?.code).toBe("Numpad0");
 	expect(TARGETS.find((t) => t.usage === 0x73)?.name).toBe("F24");
 	expect(usageName(usage(0x66))).toBe("usage 0x66");
+});
+
+test("a layer 2 key with a factory function warns that an override removes it until a power loss; other keys do not", () => {
+	expect(factoryNote(2, keyId(3))).toStartWith("This key holds factory function 0x13d on Layer 2");
+	expect(factoryNote(2, keyId(3))).toContain("stays gone until the board loses power");
+	expect(factoryNote(0, keyId(3))).toBeNull();
+	expect(factoryNote(2, keyId(46))).toBeNull();
 });
