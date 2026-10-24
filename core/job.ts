@@ -8,6 +8,7 @@ import type { ChipState } from "./chip";
 import type { CatalogEntry } from "./firmware";
 import type { AppStep, IapStep } from "./flash";
 import type { LayoutRefusal } from "./flashmap";
+import type { KeymapProblem } from "./keymap";
 import { type DeviceWant, LinkLost, LinkTimeout, OsPermissionDenied, PickCancelled } from "./port";
 import { type LinkContext, NotCleared, type Session } from "./protocol";
 import type { Mode } from "./units";
@@ -35,6 +36,8 @@ export type StopReason =
 	| { readonly kind: "busy" }
 	| { readonly kind: "attempts-exhausted"; readonly step: AppStep | IapStep; readonly attempts: number }
 	| { readonly kind: "too-many-link-losses"; readonly losses: number }
+	/** Apply found the board in a state it does not write over, or the board did not take a write (keymap.ts). */
+	| { readonly kind: "keymap"; readonly problem: KeymapProblem }
 	/** The job threw an error that means a bug. The kit rethrows it after setting this state, so the UI never sticks on "working". */
 	| { readonly kind: "error"; readonly message: string };
 

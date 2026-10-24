@@ -3,7 +3,7 @@
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
 import type { OverrideEntry } from "../core/protocol";
-import { FACTORY_LAYER2, type KeyId, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import { FACTORY_LAYER2, type KeyId, type KeyWrite, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, canRemap, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -33,8 +33,9 @@ test("the bottom row reads Ctrl Win Alt Space Alt Fn Pn Ctrl", () => {
 });
 
 type Grid = Map<Layer, Map<KeyId, Usage>>;
+type Board = Map<Layer, Map<KeyId, OverrideEntry>>;
 const LAYERS: readonly Layer[] = [0, 1, 2];
-const CAPS = TAB60_KEYS.map((cap) => cap.id);
+const CAPS = TAB60_KEYS.flatMap((cap) => (canRemap(cap.id) ? [cap.id] : []));
 
 /** mulberry32, as in egress-property.test.ts. */
 function random(seed: number) {
@@ -50,56 +51,79 @@ function random(seed: number) {
 	const chance = (p: number) => next() < p;
 	const pick = <T>(from: readonly T[]): T => from[below(from.length)]!;
 	/** Often a small set of usages, so overrides and observed cells collide. */
-	const anyUsage = () => usage(chance(0.7) ? pick([0x00, 0x04, 0x29, 0xe0, 0xe7]) : below(0xe8));
+	const anyUsage = () => usage(chance(0.7) ? pick([0x00, 0x04, 0x29, 0xe0, 0xe7]) : pick([0x00, 0x01, 0x02, ...Array.from({ length: 0xe4 }, (_, i) => i + 4)]));
 	/** Random cells on random layers; a layer may be present and empty. */
-	const grid = (cells: readonly KeyId[], fill: number): Grid => {
-		const out: Grid = new Map();
+	const layered = <V>(cells: readonly KeyId[], fill: number, value: () => V): Map<Layer, Map<KeyId, V>> => {
+		const out = new Map<Layer, Map<KeyId, V>>();
 		for (const layer of LAYERS) {
 			if (!chance(0.7)) continue;
-			const keys = new Map<KeyId, Usage>();
-			for (const key of cells) if (chance(fill)) keys.set(key, anyUsage());
+			const keys = new Map<KeyId, V>();
+			for (const key of cells) if (chance(fill)) keys.set(key, value());
 			out.set(layer, keys);
 		}
 		return out;
 	};
+	/** What a read returns: often a plain override that collides with the document, sometimes a function code. */
+	const anyEntry = (): OverrideEntry =>
+		pick<() => OverrideEntry>([
+			() => ({ kind: "default" }),
+			() => ({ kind: "absent" }),
+			() => ({ kind: "override", code: anyUsage(), flags: 0 }),
+			() => ({ kind: "override", code: anyUsage(), flags: 0 }),
+			() => ({ kind: "override", code: below(0xff), flags: pick([1, 2, 3] as const) }),
+		])();
+	const grid = (cells: readonly KeyId[], fill: number): Grid => layered(cells, fill, anyUsage);
+	const board = (cells: readonly KeyId[], fill: number): Board => layered(cells, fill, anyEntry);
 	const doc = (): KeymapDoc => ({ overrides: grid(CAPS, pick([0, 0.05, 0.3, 1])), osMode: chance(0.5) ? null : pick([0, 1, 2, 3, 4] as const) });
-	return { below, chance, pick, grid, doc };
+	return { below, chance, pick, grid, board, doc };
 }
 
-const copy = (g: ReadonlyMap<Layer, ReadonlyMap<KeyId, Usage>>): Grid => new Map([...g].map(([layer, keys]) => [layer, new Map(keys)]));
+const entryOf = (value: KeyWrite["value"]): OverrideEntry => (value.kind === "default" ? value : { kind: "override", code: value.code, flags: 0 });
+const isPlain = (entry: OverrideEntry | undefined) => entry?.kind === "override" && entry.flags === 0;
 
-test("planKeymap writes nothing when the board already holds every override", () => {
+test("planKeymap writes nothing when the board holds every override and no plain override the document lacks", () => {
 	const r = random(0x0955_0001);
 	for (let i = 0; i < 1_000; i++) {
 		const doc = r.doc();
-		const observed = r.grid(CAPS, 0.5);
-		for (const [layer, keys] of doc.overrides) observed.set(layer, new Map([...(observed.get(layer) ?? []), ...keys]));
+		const observed = r.board(CAPS, 0.5);
+		for (const [layer, keys] of observed) for (const [key, entry] of keys) if (isPlain(entry) && doc.overrides.get(layer)?.get(key) === undefined) keys.set(key, { kind: "default" });
+		for (const [layer, keys] of doc.overrides) {
+			const held = observed.get(layer) ?? new Map<KeyId, OverrideEntry>();
+			for (const [key, code] of keys) held.set(key, { kind: "override", code, flags: 0 });
+			observed.set(layer, held);
+		}
 		expect(planKeymap(doc, observed)).toEqual([]);
 	}
 });
 
-test("10,000 random documents: applying the writes gives back every override and touches nothing else", () => {
+test("10,000 random documents: the writes give back every override, clear each plain override the document lacks, and touch nothing else", () => {
 	const r = random(0x0955_0002);
 	const MATRIX = Array.from({ length: 80 }, (_, i) => keyId(i));
 	for (let i = 0; i < 10_000; i++) {
 		const doc = r.doc();
-		const observed = r.grid(r.chance(0.5) ? CAPS : MATRIX, r.pick([0, 0.2, 0.9]));
+		const observed = r.board(r.chance(0.5) ? CAPS : MATRIX, r.pick([0, 0.2, 0.9]));
 		const writes = planKeymap(doc, observed);
 		const where = `case ${i}`;
-		const board = copy(observed);
+		const board: Board = new Map([...observed].map(([layer, keys]) => [layer, new Map(keys)]));
 		for (const w of writes) {
-			const keys = board.get(w.layer) ?? new Map<KeyId, Usage>();
-			if (keys.get(w.key) === w.usage) throw new Error(`${where}: a write to layer ${w.layer} key ${w.key} changes nothing`);
-			keys.set(w.key, w.usage);
+			const keys = board.get(w.layer) ?? new Map<KeyId, OverrideEntry>();
+			if (JSON.stringify(keys.get(w.key)) === JSON.stringify(entryOf(w.value))) throw new Error(`${where}: a write to layer ${w.layer} key ${w.key} changes nothing`);
+			if (w.value.kind === "override" && w.value.code !== doc.overrides.get(w.layer)?.get(w.key)) throw new Error(`${where}: layer ${w.layer} key ${w.key} gets a usage the document does not name`);
+			keys.set(w.key, entryOf(w.value));
 			board.set(w.layer, keys);
 		}
 		for (const [layer, keys] of doc.overrides) {
-			for (const [key, want] of keys) if (board.get(layer)?.get(key) !== want) throw new Error(`${where}: layer ${layer} key ${key} reads back wrong`);
+			for (const [key, want] of keys) {
+				const held = board.get(layer)?.get(key);
+				if (!(held?.kind === "override" && held.flags === 0 && held.code === want)) throw new Error(`${where}: layer ${layer} key ${key} reads back wrong`);
+			}
 		}
 		for (const [layer, keys] of board) {
 			for (const [key, held] of keys) {
-				const override = doc.overrides.get(layer)?.get(key);
-				if (override === undefined && observed.get(layer)?.get(key) !== held) throw new Error(`${where}: layer ${layer} key ${key} changed without an override`);
+				if (doc.overrides.get(layer)?.get(key) !== undefined) continue;
+				const before = observed.get(layer)?.get(key);
+				const want = isPlain(before) ? { kind: "default" } : before;
+				if (JSON.stringify(held) !== JSON.stringify(want)) throw new Error(`${where}: layer ${layer} key ${key} without an override reads ${JSON.stringify(held)}`);
 			}
 		}
 		const order = writes.map((w) => w.layer * 80 + w.key);
@@ -147,11 +171,12 @@ test("parseKeymapDoc rejects each malformed field with its path", () => {
 		[canonical({ base: {} }), "$.overrides.base: "],
 		[canonical({ "0": [] as unknown as Record<string, unknown> }), "$.overrides.0: "],
 		[canonical({ "1": 5 as unknown as Record<string, unknown> }), "$.overrides.1: "],
-		...[53, 57, 71, 79, 55, 80, 255].map((cell): [unknown, string] => [canonical({ "0": { [cell]: 4 } }), `$.overrides.0.${cell}: `]),
+		...[53, 57, 71, 79, 55, 80, 255, 60, 54].map((cell): [unknown, string] => [canonical({ "0": { [cell]: 4 } }), `$.overrides.0.${cell}: `]),
 		[canonical({ "0": { "041": 4 } }), "$.overrides.0.041: "],
 		[canonical({ "0": { "4.0": 4 } }), "$.overrides.0.4.0: "],
 		[canonical({ "0": { esc: 4 } }), "$.overrides.0.esc: "],
 		[canonical({ "2": { "4": 0xe8 } }), "$.overrides.2.4: "],
+		[canonical({ "2": { "4": 3 } }), "$.overrides.2.4: "],
 		[canonical({ "2": { "4": -1 } }), "$.overrides.2.4: "],
 		[canonical({ "2": { "4": 4.5 } }), "$.overrides.2.4: "],
 		[canonical({ "2": { "4": "4" } }), "$.overrides.2.4: "],
