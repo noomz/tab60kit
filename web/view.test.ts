@@ -38,3 +38,11 @@ test("a stop names what to do next, and a cancel during the restart says where t
 test("a browser without WebHID gets the gate and no buttons", () => {
 	expect(viewFor({ name: "browser-gate", why: "no-webhid" }, null)).toMatchObject({ title: "Use Chrome or Edge", actions: [] });
 });
+
+test("a Stop during Apply says the writes may be partial and offers Apply again; a closed-gate refusal says to pull the batteries", () => {
+	const partial = viewFor({ name: "stopped", reason: { kind: "cancelled", during: { kind: "applying-keymap", done: 2, total: 5 } }, report: null }, null);
+	expect(partial.lines[0]).toStartWith("Stopped during Apply: some keys may hold the new keymap and others not");
+	expect(partial.lines[0]).toContain("Click Apply again");
+	const held = viewFor({ name: "stopped", reason: { kind: "keymap", problem: { kind: "gate", when: "before", gate: 1 } }, report: null }, null);
+	expect(held.lines[0]).toContain("unplug USB with the batteries out");
+});

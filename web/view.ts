@@ -101,7 +101,7 @@ export const OS_KEY_MODE_NAME: Readonly<Record<OsKeyMode, string>> = {
 	"caps-ctrl": "Caps/Ctrl swap (Fn+E)",
 };
 
-const UNDO = "A power cycle with the batteries out undoes every write Apply made.";
+const UNDO = "Unplugging USB with the batteries out for 10 seconds undoes every write Apply made.";
 const gateByte = (gate: number) => `0x${gate.toString(16).padStart(2, "0")}`;
 const usages = (list: readonly number[]) => list.map(gateByte).join(" ");
 
@@ -111,7 +111,7 @@ function keymapText(problem: KeymapProblem): string {
 			return `The board's keys do not match OS key mode ${OS_KEY_MODE_NAME[problem.mode]}${problem.missing.length > 0 ? `: no key has ${usages(problem.missing)}` : ""}${problem.unexpected.length > 0 ? `${problem.missing.length > 0 ? ", and" : ":"} a key has ${usages(problem.unexpected)}` : ""}. Choose the mode the board runs in and apply again. If Fn or Pn was moved, this editor cannot address the keys. Nothing was written.`;
 		case "gate":
 			return problem.when === "before"
-				? `Another tool holds the board's config gate (it reads ${gateByte(problem.gate)}). Close that tool, unplug the board, plug it back in, and apply again. Nothing was written.`
+				? `Another tool holds the board's config gate (it reads ${gateByte(problem.gate)}). Close that tool, then unplug USB with the batteries out for 10 seconds and plug USB back in, which clears the gate, and apply again. Nothing was written.`
 				: `The board's config gate still reads ${gateByte(problem.gate)} after Apply closed it. ${UNDO}`;
 		case "refused":
 			return `The board refused a write (${problem.message}). ${UNDO}`;
@@ -129,6 +129,9 @@ function keymapText(problem: KeymapProblem): string {
 function stopText(reason: StopReason): string {
 	switch (reason.kind) {
 		case "cancelled":
+			if (reason.during?.kind === "applying-keymap") {
+				return `Stopped during Apply: some keys may hold the new keymap and others not, and the config gate may still be open if the board missed the close. Click Apply again to finish. ${UNDO}`;
+			}
 			return reason.during?.kind === "restarting" && reason.during.into === "iap"
 				? "Stopped. The board may be in update mode: click Connect to see where it is."
 				: "Stopped.";
