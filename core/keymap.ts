@@ -7,7 +7,7 @@
  * The host document is the user's intent, and applying it is another convergence: read what the board holds, write
  * the difference, read back.
  *
- * Under G1 the two override reads are confirmed, the gate rows and the key write reviewed. `capabilities(clearance)` derives
+ * Under G1 the two override reads, the gate rows, and the key write are confirmed. `capabilities(clearance)` derives
  * what is unlocked from COMMANDS and the same `clears` the egress audit uses, so the editor's locks and the wire gate
  * cannot disagree.
  */
@@ -339,10 +339,15 @@ const GATE_OPEN = COMMANDS.gateOpen.sub;
 const describeOverride = (entry: OverrideEntry | OverrideValue): string =>
 	entry.kind === "override" ? `0x${((entry.flags << 8) | entry.code).toString(16).padStart(4, "0")}` : entry.kind;
 
+/** Whether this job may have left the gate at 0x80. A stop after it opened, or found it open, closes it (timer 0 never expires). */
+interface GateHold {
+	open: boolean;
+}
+
 /**
  * One pass on an open normal-mode session: query the gate, read layer 0 and check its presence set against `mode`,
  * read layers 1 and 2 for each remappable cap, write the plan with the gate at 0x80, read every write back, close the
- * gate, and query it. A board that already holds the document gets no write and no gate frame.
+ * gate, and query it. A board that already holds the document, with the gate closed, gets no write and no gate frame.
  */
 async function converge(
 	app: AppSession,
@@ -350,17 +355,18 @@ async function converge(
 	mode: OsKeyMode,
 	signal: AbortSignal,
 	progress: (activity: Activity) => void,
+	hold: GateHold,
 ): Promise<{ readonly writes: number } | { readonly problem: KeymapProblem }> {
 	const { config } = app;
-	if (doc.osMode !== null) await config.setOsMode(doc.osMode);
 	const before = await config.queryGate(signal);
 	if (before.gate !== GATE_CLOSED && before.gate !== GATE_OPEN) return { problem: { kind: "gate", when: "before", gate: before.gate } };
+	hold.open = before.gate === GATE_OPEN;
 	const layer0 = await config.readLayer0(signal);
 	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
 	const want = new Set(presentUsages(mode));
 	const missing = [...want].filter((k) => !present.has(k));
 	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
-	if (missing.length > 0 || unexpected.length > 0) return { problem: { kind: "mode-disagrees", mode, missing, unexpected } };
+	let problem: KeymapProblem | null = missing.length > 0 || unexpected.length > 0 ? { kind: "mode-disagrees", mode, missing, unexpected } : null;
 
 	const active = activeKeymap(mode);
 	const usageOf = (key: KeyId) => {
@@ -368,7 +374,7 @@ async function converge(
 		return usage(active[key]!);
 	};
 	const observed = new Map<Layer, Map<KeyId, OverrideEntry>>();
-	for (const layer of LAYERS) {
+	for (const layer of problem === null ? LAYERS : []) {
 		const keys = new Map<KeyId, OverrideEntry>();
 		for (const { id } of TAB60_KEYS) {
 			if (!canRemap(id)) continue;
@@ -376,11 +382,13 @@ async function converge(
 		}
 		observed.set(layer, keys);
 	}
-	const writes = planKeymap(doc, observed);
-	let problem: KeymapProblem | null = null;
+	const writes = problem === null ? planKeymap(doc, observed) : [];
 	const mismatch = (write: KeyWrite, got: OverrideEntry): KeymapProblem => ({ kind: "read-back", layer: write.layer, key: write.key, want: describeOverride(write.value), got: describeOverride(got) });
 	if (writes.length > 0) {
-		if (before.gate === GATE_CLOSED) await config.openGate(signal);
+		if (!hold.open) {
+			hold.open = true;
+			await config.openGate(signal);
+		}
 		for (const [done, write] of writes.entries()) {
 			progress({ kind: "applying-keymap", done, total: writes.length });
 			const got = await config.writeKey(write.layer, usageOf(write.key), write.value, signal);
@@ -397,8 +405,9 @@ async function converge(
 			}
 		}
 	}
-	if (writes.length > 0 || before.gate !== GATE_CLOSED) {
+	if (hold.open) {
 		await config.closeGate(signal);
+		hold.open = false;
 		const after = await config.queryGate(signal);
 		if (problem === null && after.gate !== GATE_CLOSED) problem = { kind: "gate", when: "after", gate: after.gate };
 	}
@@ -410,18 +419,22 @@ async function converge(
  * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
  * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
  * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
- * from the reads, which is safe because the writes are idempotent. A refusal from the board stops the job.
+ * from the reads, which is safe because the writes are idempotent. Any other stop after the gate opened sends a
+ * close first, on its own signal so a Stop still reaches the board. A document with an OS mode stops before any frame:
+ * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
  */
 export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 	return async (start, ctx) => {
+		const stopped = (reason: StopReason, end: Session | null): JobEnd => ({ kind: "stopped", reason, session: end, board: null });
+		if (doc.osMode !== null) return stopped({ kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, start);
 		let session: Session | null = start;
 		let losses = 0;
 		let during: Activity | null = null;
+		const hold: GateHold = { open: false };
 		const progress = (activity: Activity) => {
 			during = activity;
 			ctx.progress(activity);
 		};
-		const stopped = (reason: StopReason, end: Session | null): JobEnd => ({ kind: "stopped", reason, session: end, board: null });
 		for (;;) {
 			try {
 				if (session?.mode !== "app") {
@@ -435,10 +448,14 @@ export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 					}
 					session = opened;
 				}
-				const outcome = await converge(session, doc, mode, ctx.signal, progress);
+				const outcome = await converge(session, doc, mode, ctx.signal, progress, hold);
 				if ("problem" in outcome) return stopped({ kind: "keymap", problem: outcome.problem }, session);
 				return { kind: "finished", result: { kind: "keymap-applied", writes: outcome.writes }, session, board: null };
 			} catch (error) {
+				if (hold.open && !isLinkFailure(error) && session?.mode === "app") {
+					await session.config.closeGate(new AbortController().signal).catch(() => undefined);
+					hold.open = false;
+				}
 				await session?.close().catch(() => undefined);
 				session = null;
 				if (isLinkFailure(error)) {

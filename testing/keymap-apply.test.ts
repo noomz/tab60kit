@@ -114,20 +114,67 @@ test("a refused gate open stops the job with the board's refusal and sends no wr
 	const board = fake({ refuseAlways: { cmd: 0x41, sub: 0x80 } });
 	const { end, sent } = await apply(board, docOf(FIVE));
 	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "keymap", problem: { kind: "refused" } } });
-	expect(sent.slice(-1)).toEqual(["4180"]);
+	expect(sent.slice(-2)).toEqual(["4180", "4100"]);
 	expect(count(sent, "5120")).toBe(0);
 });
 
-test("a refused write stops the job; the next Apply finds the gate at 0x80, writes without opening it, and closes it", async () => {
+async function gateOf(board: FakeTab60): Promise<number> {
+	const session = await connect({ port: board.port(), clearance: SHIPPED, signal: live }, { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	const { gate } = await session.config.queryGate(live);
+	await session.close();
+	return gate;
+}
+
+/** Leaves the gate at 0x80, as a tool that opened it and quit would. */
+async function leaveGateOpen(board: FakeTab60): Promise<void> {
+	const session = await connect({ port: board.port(), clearance: SHIPPED, signal: live }, { modes: ["app"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	await session.config.openGate(live);
+	await session.close();
+}
+
+test("a refused write stops the job and closes the gate it opened; the next Apply converges", async () => {
 	const board = fake({ refuseOnce: { cmd: 0x51, sub: 0x20 } });
 	const first = await apply(board, docOf(FIVE));
 	expect(first.end).toMatchObject({ kind: "stopped", reason: { kind: "keymap", problem: { kind: "refused" } } });
-	expect(first.sent.slice(-2)).toEqual(["4180", "5120"]);
+	expect(first.sent.slice(-3)).toEqual(["4180", "5120", "4100"]);
+	expect(await gateOf(board)).toBe(0);
 	const second = await apply(board, docOf(FIVE));
 	expect(second.end).toMatchObject({ kind: "finished", result: { kind: "keymap-applied", writes: 5 } });
-	expect(count(second.sent, "4180")).toBe(0);
-	expect(second.sent.slice(-2)).toEqual(["4100", "41ff"]);
 	expect(presses(board)).toEqual(FIVE.map(([, to]) => to));
+});
+
+test("a Stop during the writes still closes the gate, on its own signal, and leaves some keys written", async () => {
+	const board = fake();
+	const kit = createKit(board.port(), SHIPPED);
+	kit.subscribe((state) => {
+		if (state.kind === "working" && state.activity.kind === "applying-keymap" && state.activity.done === 2) kit.cancel();
+	});
+	const end = await kit.applyKeymap(docOf(FIVE), "windows");
+	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "cancelled", during: { kind: "applying-keymap", done: 2 } } });
+	expect(pairs(board).slice(-2)).toEqual(["5120", "4100"]);
+	expect(await gateOf(board)).toBe(0);
+	expect(presses(board).filter((sent, i) => sent === FIVE[i]![1]).length).toBeLessThan(5);
+});
+
+test("an Apply that finds the gate at 0x80 writes without opening it and closes it", async () => {
+	const board = fake();
+	await leaveGateOpen(board);
+	const { end, sent } = await apply(board, docOf(FIVE));
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "keymap-applied", writes: 5 } });
+	expect(count(sent, "4180")).toBe(0);
+	expect(sent.slice(-2)).toEqual(["4100", "41ff"]);
+});
+
+test("a wrong mode with the gate found at 0x80 writes nothing and closes the gate", async () => {
+	const board = fake({ osKeyMode: 0x20 });
+	await leaveGateOpen(board);
+	const { end, sent } = await apply(board, docOf(FIVE), "windows");
+	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "keymap", problem: { kind: "mode-disagrees" } } });
+	expect(count(sent, "5120")).toBe(0);
+	expect(sent.slice(-2)).toEqual(["4100", "41ff"]);
+	expect(await gateOf(board)).toBe(0);
 });
 
 test("a write to a usage no key has gets the error marker: the channel throws DeviceRefused", async () => {
@@ -180,9 +227,9 @@ test("a link lost in the middle of the writes reconnects and converges from the 
 	expect(board.violations).toEqual([]);
 });
 
-test("a document with an OS mode stops at G1 before any config frame", async () => {
+test("a document with an OS mode stops at G1 before any frame, naming the profile switch", async () => {
 	const board = fake();
 	const { end, sent } = await apply(board, { ...docOf(FIVE), osMode: 1 });
-	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "gate" } });
-	expect(sent).toEqual(["1202", "1200"]);
+	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "gate", blocked: expect.stringContaining("0x51/0x00") } });
+	expect(sent).toEqual([]);
 });
