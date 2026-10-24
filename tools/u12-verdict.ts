@@ -1,7 +1,9 @@
 /**
  * Plan U12's verdict on a saved lab/u12 transcript. It walks the transcript's own marks, attestations, and frames
  * against U12_STEPS: each wire step's frames are the ones between its "begin" mark and the next mark or attestation.
- * It holds the five writes, their replies, the five reads, the gate at the end of each Apply, the keymap the page read
+ * Frames before the first mark, after an attestation or the reload mark, and anything but cfgReadKey and the attach in a
+ * read step fail the frame check. Each step is checked where it stands, so a run that stopped early still shows which
+ * steps passed. It holds the five writes, their replies, the five reads, the gate at the end of each Apply, the keymap the page read
  * back after the reload, and each keylog to the plan. The page's results are never read. Only a full PASS writes the
  * capture.
  *
@@ -49,14 +51,18 @@ interface Marker {
 	readonly frames: Frame[];
 }
 
-/** A frame's reply is the first report after it whose byte 0 repeats the frame's, or the error marker. */
-function markers(entries: readonly TranscriptEntry[]): readonly Marker[] {
+/**
+ * A frame's reply is the first report after it whose byte 0 repeats the frame's, or the error marker. Frames before
+ * the first marker go to `early`.
+ */
+function markers(entries: readonly TranscriptEntry[]): { readonly found: readonly Marker[]; readonly early: readonly Frame[] } {
 	const found: Marker[] = [];
+	const early: Frame[] = [];
 	let last: Frame | null = null;
 	for (const entry of entries) {
 		if (entry.kind === "out") {
 			last = { out: entry.hex, reply: null };
-			found.at(-1)?.frames.push(last);
+			(found.at(-1)?.frames ?? early).push(last);
 		} else if (entry.kind === "in" && last !== null && last.reply === null && (entry.hex.slice(0, 2) === last.out.slice(0, 2) || entry.hex.startsWith(ERROR_MARKER))) {
 			last.reply = entry.hex;
 		} else if (entry.kind === "mark") {
@@ -65,15 +71,18 @@ function markers(entries: readonly TranscriptEntry[]): readonly Marker[] {
 			found.push({ kind: "attest", step: entry.step, text: "", answer: entry.answer, keys: entry.keys, frames: [] });
 		}
 	}
-	return found;
+	return { found, early };
 }
+
+/** The attach reads every session opens, the only frames a read step sends besides cfgReadKey. */
+const READ_STEP_PAIRS: readonly string[] = ["1202", "1200", "5220"];
 
 const plannedKind = (step: U12Step) => (step.kind === "user" ? "attest" : "mark");
 const shownAs = (marker: Marker | undefined) => (marker === undefined ? "nothing" : `${marker.kind} ${marker.step}`);
 const check = (title: string, problems: readonly string[], ok: string): U12Check => ({ title, pass: problems.length === 0, detail: problems.length === 0 ? ok : problems.join("; ") });
 
 export const TITLES = {
-	frames: "Every frame sent is one of the eight U12 rows",
+	frames: "Every frame sent is one of the eight U12 rows, inside a wire step that may send it",
 	order: "The marks and attestations follow the plan, step by step",
 	applied: "Both Applies of the keymap write the five keys as planned, each reply holds its value, and each ends with the gate closed",
 	keylog: "After each Apply the keylog shows every key's new code and not its old one, and the user said yes",
@@ -85,20 +94,32 @@ export const TITLES = {
 
 export function evaluateU12(transcript: Transcript): readonly U12Check[] {
 	const { entries, environment } = transcript;
-	const found = markers(entries);
-	const order = U12_STEPS.flatMap((step, i) => {
+	const { found, early } = markers(entries);
+	const placed = U12_STEPS.map((step, i) => {
 		const got = found[i];
-		const ok = got !== undefined && got.kind === plannedKind(step) && got.step === step.id && (step.kind === "reload" || step.kind === "user" || got.text === "begin");
-		return ok ? [] : [`step ${i + 1} (${step.id}): planned ${plannedKind(step)} ${step.id}, got ${shownAs(got)}`];
+		return got !== undefined && got.kind === plannedKind(step) && got.step === step.id && (step.kind === "reload" || step.kind === "user" || got.text === "begin");
 	});
+	const order = U12_STEPS.flatMap((step, i) => (placed[i] ? [] : [`step ${i + 1} (${step.id}): planned ${plannedKind(step)} ${step.id}, got ${shownAs(found[i])}`]));
 	if (found.length > U12_STEPS.length) order.push(`${found.length - U12_STEPS.length} more after the plan, the first ${shownAs(found[U12_STEPS.length])}`);
-	const inOrder = order.length === 0;
-	const outOfOrder = ["the transcript does not follow the plan"];
-	const at = (id: string) => found[U12_STEPS.findIndex((step) => step.id === id)]!;
+	/** The step's marker when it stands where the plan puts it, else the problem that says it does not. */
+	const at = (id: string): Marker | string => {
+		const i = U12_STEPS.findIndex((step) => step.id === id);
+		return placed[i] ? found[i]! : `${id}: not where the plan puts it`;
+	};
+	const misplaced = [
+		...early.map((frame) => `frame ${frame.out.slice(0, 12)} before the first step`),
+		...U12_STEPS.flatMap((step, i) => {
+			const marker = placed[i] ? found[i]! : null;
+			if (marker === null || step.kind === "apply") return [];
+			const allowed = step.kind === "read" ? READ_STEP_PAIRS : [];
+			return marker.frames.flatMap((frame) => (allowed.includes(frame.out.slice(0, 4)) ? [] : [`frame ${frame.out.slice(0, 12)} in ${step.kind} step ${step.id}`]));
+		}),
+	];
 
 	const writes = (id: string, restore: boolean) => {
-		if (!inOrder) return outOfOrder;
-		const { frames } = at(id);
+		const marker = at(id);
+		if (typeof marker === "string") return [marker];
+		const { frames } = marker;
 		const sent = frames.filter((frame) => frame.out.startsWith("5120"));
 		const want = writeFrames(restore);
 		const problems = sent.length === want.length && sent.every((frame, i) => frame.out === report(want[i]!)) ? [] : [`${id}: wrote ${sent.map((frame) => frame.out.slice(0, 12)).join(" ") || "nothing"}, planned ${want.join(" ")}`];
@@ -108,8 +129,9 @@ export function evaluateU12(transcript: Transcript): readonly U12Check[] {
 		return problems;
 	};
 	const reads = (id: string) => {
-		if (!inOrder) return outOfOrder;
-		const { frames } = at(id);
+		const marker = at(id);
+		if (typeof marker === "string") return [marker];
+		const { frames } = marker;
 		const sent = frames.filter((frame) => frame.out.startsWith("5220"));
 		const want = readFrames(true);
 		if (sent.length !== want.length) return [`${id}: ${sent.length} reads, planned ${want.length}`];
@@ -117,10 +139,11 @@ export function evaluateU12(transcript: Transcript): readonly U12Check[] {
 			sent[i]!.out === report(request) && sent[i]!.reply === report(reply) ? [] : [`${id}: wanted ${reply}, got ${sent[i]!.out.slice(0, 8)} reading ${sent[i]!.reply?.slice(0, 12) ?? "no reply"}`],
 		);
 	};
-	const attested = (ids: readonly string[]) => {
-		if (!inOrder) return outOfOrder;
-		return ids.flatMap((id) => {
-			const { answer, keys } = at(id);
+	const attested = (ids: readonly string[]) =>
+		ids.flatMap((id) => {
+			const marker = at(id);
+			if (typeof marker === "string") return [marker];
+			const { answer, keys } = marker;
 			const { keylog } = U12_STEPS.find((step): step is UserStep => step.kind === "user" && step.id === id)!;
 			return [
 				...(answer ? [] : [`${id}: the user answered no`]),
@@ -128,9 +151,9 @@ export function evaluateU12(transcript: Transcript): readonly U12Check[] {
 				...(keylog !== null && keys.includes(keylog.not) ? [`${id}: the keylog shows ${keylog.not}`] : []),
 			];
 		});
-	};
 	const keylogIds = U12_STEPS.flatMap((step) => (step.kind === "user" && step.keylog !== null ? [step.id] : []));
-	const stored = inOrder ? (at("reload").text === serializeKeymapDoc(U12_DOC) ? [] : [`storage held ${JSON.stringify(at("reload").text)}`]) : outOfOrder;
+	const reloaded = at("reload");
+	const stored = typeof reloaded === "string" ? [reloaded] : reloaded.text === serializeKeymapDoc(U12_DOC) ? [] : [`storage held ${JSON.stringify(reloaded.text)}`];
 	const mode = environment.osKeyMode;
 	const unmet = [
 		...(mode !== undefined && Object.hasOwn(OS_KEY_MODE_NAME, mode) ? [] : [`environment.osKeyMode is ${JSON.stringify(mode)}, not a mode`]),
@@ -138,7 +161,7 @@ export function evaluateU12(transcript: Transcript): readonly U12Check[] {
 	];
 	const frames = entries.filter((entry) => entry.kind === "out").length;
 	return [
-		check(TITLES.frames, framesOutsideU12(entries).map((hex) => `frame outside the U12 rows: ${hex}`), `${frames} frames, all U12 rows`),
+		check(TITLES.frames, [...framesOutsideU12(entries).map((hex) => `frame outside the U12 rows: ${hex}`), ...misplaced], `${frames} frames, all U12 rows, each in a step that sends it`),
 		check(TITLES.order, order, `${U12_STEPS.length} steps in plan order`),
 		check(TITLES.applied, [...writes("apply-five", false), ...writes("apply-stored", false)], "five writes echoed in each Apply, gate closed after each"),
 		check(TITLES.keylog, attested(keylogIds), `${keylogIds.length} keylogs`),

@@ -154,7 +154,8 @@ async function runRead(ctx: U12Context, restored: boolean): Promise<{ readonly p
 
 /**
  * Runs U12_STEPS from `from`. Arriving at the reload step stops the run with `paused`; starting at it records what
- * storage holds and goes on. A thrown error stops the run.
+ * storage holds and goes on. A failed apply or read step stops the run, because the steps after it would test a board
+ * in an unknown state; a failed user or reload step does not, so the verdict sees the rest.
  */
 export async function runU12(ctx: U12Context, from: number): Promise<{ readonly outcomes: readonly StepOutcome[]; readonly paused: boolean }> {
 	const outcomes: StepOutcome[] = [];
@@ -184,6 +185,7 @@ export async function runU12(ctx: U12Context, from: number): Promise<{ readonly 
 				ctx.mark(step.id, "begin");
 				const result = await (step.kind === "apply" ? runApply(ctx, step) : runRead(ctx, step.restored)).catch((error: unknown) => ({ pass: false, detail: describe(error) }));
 				report({ id: step.id, label: step.label, ...result });
+				if (!result.pass) return { outcomes, paused: false };
 				break;
 			}
 			default: {

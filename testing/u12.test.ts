@@ -73,22 +73,30 @@ test("the guided run on the fake board pauses at the reload, passes every step, 
 	expect(board.violations).toEqual([]);
 });
 
-test("without a real battery pull the keys still hold their overrides, so the read and the second Apply fail", async () => {
+test("without a real battery pull the keys still hold their overrides, so the read fails and the run stops there", async () => {
 	const { second } = await runOnFake({ pullsBatteries: false });
-	expect(second.outcomes.filter(({ pass }) => !pass).map(({ id, detail }) => [id, detail])).toEqual([
-		["read-after-pull", "0x35 0x1c 0x52 0x2a 0x4f"],
-		["apply-stored", "0 writes"],
+	expect(second.outcomes.map(({ id, pass, detail }) => [id, pass, detail])).toEqual([
+		["reload", true, "5 overrides on layer 0, mode windows"],
+		["battery-pull", true, "yes, keys none"],
+		["read-after-pull", false, "0x35 0x1c 0x52 0x2a 0x4f"],
 	]);
 });
 
-test("storage emptied across the reload fails the reload step, and the stored Apply writes nothing", async () => {
+test("storage emptied across the reload fails the reload step, and the stored Apply writes nothing and stops the run", async () => {
 	const { second } = await runOnFake({ afterReload: (items) => items.delete(KEYMAP_KEY) });
-	expect(second.outcomes.filter(({ pass }) => !pass).map(({ id }) => id)).toEqual([
-		"reload",
-		"apply-stored",
-		...U12_STEPS.flatMap((step) => (step.kind === "user" && step.id.startsWith("keylog-again") ? [step.id] : [])),
-		"restore",
+	expect(second.outcomes.map(({ id, pass }) => [id, pass])).toEqual([
+		["reload", false],
+		["battery-pull", true],
+		["read-after-pull", true],
+		["apply-stored", false],
 	]);
+});
+
+test("a failed first Apply stops the run before any keylog", async () => {
+	const { first, second } = await runOnFake({}, { osKeyMode: 0x20 });
+	expect(first.outcomes.map(({ id, pass }) => [id, pass])).toEqual([["apply-five", false]]);
+	expect(first.paused).toBe(false);
+	expect(second.outcomes[0]?.id).toBe("reload");
 });
 
 const ticks = U12_PRECONDITIONS.map(({ key }): TranscriptEntry => ({ t: 0, kind: "precondition", key, met: true }));
@@ -148,12 +156,24 @@ test("the U12 verdict refuses a fake board with exit 2 and writes nothing", asyn
 	expect({ code, written }).toEqual({ code: 2, written: null });
 });
 
-test("the U12 verdict fails a run without a battery pull on the pull, Apply, and keylog checks", async () => {
+test("the U12 verdict fails a run without a battery pull on the pull read, and on every step the stopped run never reached", async () => {
 	const { code, fails } = runVerdict(await savedTranscript({ pullsBatteries: false }));
 	expect(code).toBe(1);
-	expect(fails.map((line) => line.split(" | ")[0])).toEqual([TITLES.applied, TITLES.pull]);
-	expect(fails[0]).toContain("apply-stored: wrote nothing");
-	expect(fails[1]).toContain("read-after-pull: wanted 52202900ff00, got 52202900 reading 522029003500");
+	expect(fails.map((line) => line.split(" | ")[0])).toEqual([TITLES.order, TITLES.applied, TITLES.keylog, TITLES.pull, TITLES.restore]);
+	expect(fails[3]).toContain("read-after-pull: wanted 52202900ff00, got 52202900 reading 522029003500");
+	expect(fails[1]).toContain("apply-stored: not where the plan puts it");
+});
+
+test("the U12 verdict fails a write in a read step, and a frame after an attestation, on the frame check", async () => {
+	const transcript = await savedTranscript();
+	const insertAfter = (pick: (entry: TranscriptEntry) => boolean): Transcript => {
+		const at = transcript.entries.findIndex(pick) + 1;
+		return { ...transcript, entries: [...transcript.entries.slice(0, at), { t: 0, kind: "out", hex: "51202900ff00".padEnd(128, "0") }, ...transcript.entries.slice(at)] };
+	};
+	const inRead = runVerdict(insertAfter((entry) => entry.kind === "mark" && entry.step === "read-after-pull")).fails;
+	expect(inRead).toEqual([`${TITLES.frames} | frame 51202900ff00 in read step read-after-pull`]);
+	const afterAttest = runVerdict(insertAfter((entry) => entry.kind === "attest" && entry.step === "battery-pull")).fails;
+	expect(afterAttest).toEqual([`${TITLES.frames} | frame 51202900ff00 in user step battery-pull`]);
 });
 
 test("the U12 verdict fails a wrong write reply, a gate left open, an emptied storage, a No, and a missing tick each on its own check", async () => {
