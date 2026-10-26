@@ -86,9 +86,9 @@ export interface CommandSpec {
 	readonly modes: readonly Mode[];
 	readonly effect: Effect;
 	/**
-	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument. echo-cmd: byte 0
-	 * repeats cmd and bytes 1..3 carry an answer. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets
-	 * instead.
+	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument; the vendor's reply
+	 * filter accepts nothing less (U2, 0x4076FB..0x40770D), so every IAP row takes it. echo-cmd: byte 0 repeats cmd and
+	 * bytes 1..3 carry an answer. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets instead.
 	 */
 	readonly reply: "echo" | "echo-arg" | "echo-cmd" | "write-ack" | "none";
 	readonly timeoutMs: number;
@@ -135,7 +135,7 @@ export const COMMANDS = {
 		sub: 0x00,
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
@@ -151,7 +151,7 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
@@ -167,7 +167,7 @@ export const COMMANDS = {
 		sub: 0x02,
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		/** At least WRITE_LINK_RULE.maxProbeGapMs (flash.ts), so a slow answer is judged by the link gate and check 9 instead of thrown. */
 		timeoutMs: 1_000,
 		address: "none",
@@ -185,7 +185,7 @@ export const COMMANDS = {
 		sub: { first: 0x20, count: 3 },
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
@@ -233,7 +233,7 @@ export const COMMANDS = {
 		sub: 0x00,
 		modes: ["iap"],
 		effect: "erase",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 15_000,
 		address: "range",
 		payloadBytes: 8,
@@ -249,7 +249,7 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
@@ -265,7 +265,7 @@ export const COMMANDS = {
 		sub: 0x02,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
@@ -281,7 +281,7 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "write",
-		reply: "echo",
+		reply: "echo-arg",
 		/** The vendor's wait (U2, 0x408975), raised from pok3rtool's 500 ms by the user's D4 ruling. */
 		timeoutMs: 1_000,
 		address: "set-cursor",
@@ -298,7 +298,7 @@ export const COMMANDS = {
 		sub: 0x00,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "read-cursor",
 		payloadBytes: 4,

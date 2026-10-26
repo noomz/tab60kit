@@ -139,6 +139,20 @@ test("an FF AA that names another command is not this command's answer, so the w
 	expect(app.closed).toBe(1);
 });
 
+for (const [where, bytes23] of [
+	["byte 2", "0100"],
+	["byte 3", "0001"],
+] as const) {
+	test(`a reply that repeats cmd and sub but carries a nonzero ${where} is stale, on either link, so the wait runs on to its timeout`, async () => {
+		const app = new ScriptedLink("app", [modeReply("app"), report(`1200${bytes23}` + BL_INFO_HEX)]);
+		await expect(connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" })).rejects.toBeInstanceOf(LinkTimeout);
+		const iap = new ScriptedLink("iap", [modeReply("iap"), report(`1200${bytes23}` + BL_INFO_HEX), fwInfoReply()]);
+		const attach = connect(ctx(new ScriptedPort([iap])), { modes: ["iap"], reason: "connect" });
+		await expect(attach).rejects.toBeInstanceOf(IapAttachFailed);
+		await attach.catch((error: IapAttachFailed) => expect(error.cause).toBeInstanceOf(LinkTimeout));
+	});
+}
+
 test("a command the clearance does not name sends nothing", async () => {
 	const reads = { kind: "lab", only: ["readMode", "readBlInfo", "readFwInfo", "readVersionPage"], purpose: "no sum" } as unknown as Clearance;
 	const iap = new ScriptedLink("iap", iapAttach());
