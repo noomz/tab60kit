@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { usage } from "../core/keymap";
 import { U1_EXPECTED } from "../lab/u1-job";
 import { type Attestation, RELOAD_INDEX, U12_KEYS, U12_PRECONDITIONS, U12_STEPS, type UserStep, attestEntry, framesOutsideU12, runU12, u12Clearance, u12Preconditions } from "../lab/u12-run";
-import { TITLES, verdictMain } from "../tools/u12-verdict";
+import { TITLES, evaluateU12, verdictMain } from "../tools/u12-verdict";
 import { KEYMAP_KEY, type KeyValueStore } from "../web/keymap-store";
 import { targetOf } from "../web/usages";
 import { startWebHidLab } from "../web/webhid-port";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
-import type { Transcript, TranscriptEntry } from "./transcript";
+import { type Transcript, type TranscriptEntry, parseTranscript } from "./transcript";
 import { recording } from "./transcript";
 
 const live = new AbortController().signal;
@@ -197,4 +197,25 @@ test("the U12 verdict fails a stray frame on the frame gate, and a missing attes
 	const missing = { ...transcript, entries: transcript.entries.filter((entry) => !(entry.kind === "attest" && entry.step === "battery-pull")) };
 	const fails = runVerdict(missing).fails;
 	expect(fails[0]).toStartWith(`${TITLES.order} | step ${RELOAD_INDEX + 2} (battery-pull): planned attest battery-pull, got mark read-after-pull`);
+});
+
+const U12_CAPTURE = "fixtures/u12-macos.json";
+const U12_TRANSCRIPT = "testing/fixtures/tab60kit-u12-2026-10-24T13-36-22-812Z.json";
+const repoFile = (path: string) => JSON.parse(readFileSync(join(import.meta.dir, "..", path), "utf8"));
+
+test(`${U12_CAPTURE} holds the 2026-10-24 board run byte for byte, in Mac mode, with all eight checks passing`, () => {
+	const fixture = repoFile(U12_CAPTURE);
+	expect(fixture.format).toBe("tab60kit-u12-verdict/1");
+	expect(fixture.transcriptFile).toBe(U12_TRANSCRIPT);
+	expect(fixture.transcript).toEqual(repoFile(U12_TRANSCRIPT));
+	expect(fixture.environment).toMatchObject({ fake: "no", tool: "57352b7", osKeyMode: "mac" });
+	expect(fixture.checks.map((c: { title: string; pass: boolean }) => [c.title, c.pass])).toEqual(Object.values(TITLES).map((title) => [title, true]));
+});
+
+test("today's verdict passes the raw board transcript on every check: 464 frames, 17 steps", () => {
+	const transcript = parseTranscript(repoFile(U12_TRANSCRIPT));
+	const checks = evaluateU12(transcript);
+	expect(checks.filter(({ pass }) => !pass)).toEqual([]);
+	expect(checks[0]?.detail).toBe("464 frames, all U12 rows, each in a step that sends it");
+	expect(checks[1]?.detail).toBe(`${U12_STEPS.length} steps in plan order`);
 });
