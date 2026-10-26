@@ -72,7 +72,8 @@ const audit = (c: Case): EgressVerdict => {
 
 /**
  * What is wrong with a frame the audit passed, or null. Which frames carry a flash offset is read from the command
- * byte (0x1D a range, 0x1E the write address, 0x1F a write at the cursor), not from the registry's `address` field.
+ * byte (0x1D a range, 0x1E/0x01 the write address, 0x1E/0x00 a read of it, 0x1F a write at the cursor), not from the
+ * registry's `address` field.
  */
 function problemWith(c: Case, passed: Extract<EgressVerdict, { ok: true }>): string | null {
 	const { frame } = c;
@@ -99,6 +100,11 @@ function problemWith(c: Case, passed: Extract<EgressVerdict, { ok: true }>): str
 			offset = view.getUint32(4, true);
 			length = view.getUint32(8, true);
 			if (sub === 0x00 && (offset % PAGE !== 0 || length % PAGE !== 0)) return `erases off a page boundary: offset 0x${offset.toString(16)}, length 0x${length.toString(16)}`;
+		} else if (cmd === 0x1e && sub === 0x00) {
+			payloadBytes = 4;
+			if (view.getUint32(4, true) !== 0xffffffff) return "asks for the write address without the all-ones word";
+			offset = 0;
+			length = 1;
 		} else if (cmd === 0x1e) {
 			payloadBytes = 4;
 			offset = view.getUint32(4, true);
@@ -176,7 +182,7 @@ type Random = ReturnType<typeof random>;
 const NAMES_BY_CMD = (cmd: number) => COMMAND_NAMES.filter((name) => COMMANDS[name].cmd === cmd);
 const EVERY_COMMAND: ReadonlySet<CommandName> = new Set(COMMAND_NAMES);
 
-/** A range, set-address, or write frame at random offsets, with the cursor a write would land on. */
+/** A range, set-address, get-address, or write frame at random offsets, with the cursor a write would land on. */
 function addressed(r: Random): Pick<Case, "frame" | "requested" | "cursor"> {
 	const cmd = r.pick([0x1d, 0x1d, 0x1d, 0x1e, 0x1f]);
 	if (cmd === 0x1d) {
@@ -184,6 +190,7 @@ function addressed(r: Random): Pick<Case, "frame" | "requested" | "cursor"> {
 		const from = r.offset();
 		return { frame: frameOf(cmd, COMMANDS[requested].sub as number, [from, r.length(from)]), requested, cursor: null };
 	}
+	if (cmd === 0x1e && r.chance(0.5)) return { frame: frameOf(cmd, 0x00, [r.chance(0.8) ? 0xffffffff : r.offset()]), requested: "getWriteAddress", cursor: null };
 	if (cmd === 0x1e) return { frame: frameOf(cmd, 0x01, [r.offset()]), requested: "setWriteAddress", cursor: null };
 	const bytes = 1 + r.below(CHUNK);
 	const frame = frameOf(cmd, bytes);

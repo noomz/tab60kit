@@ -53,8 +53,9 @@ export type Maturity =
  *   range        u32 offset at byte 4, u32 length at byte 8 (ERASE, SUM, CRC)
  *   set-cursor   u32 offset at byte 4 becomes the board's write cursor (set write address)
  *   at-cursor    the payload lands at the write cursor, and the sub byte is its length (WRITE)
+ *   read-cursor  u32 0xFFFFFFFF at byte 4 asks for the board's write cursor, which the reply carries (get write address)
  */
-export type Addressing = "none" | "range" | "set-cursor" | "at-cursor";
+export type Addressing = "none" | "range" | "set-cursor" | "at-cursor" | "read-cursor";
 
 /** Sub-commands `first` to `first + count - 1`. Part i of a request is sub `first + i`. */
 export interface SubRange {
@@ -110,6 +111,8 @@ const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
 /** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
 const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
+/** The user's ruling on U2 audit item D4 (2026-10-26): "Add it, 1000 ms". No capture yet: U7. */
+const REVIEWED_FOR_U7 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-26" } as const;
 const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
 const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-24", capture: "fixtures/u11-macos.json" } as const;
 
@@ -120,8 +123,9 @@ const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "20
 const NO_ARG = { high: { min: 0, max: 0 }, low: { min: 0, max: 0 } } as const satisfies ArgRule;
 
 /**
- * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
- * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. G1 forbids a row until
+ * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, and the patched-firmware
+ * READ 0xFF) are left out on purpose, so the audit refuses them. Evidence addresses for vendor-updater rows are the
+ * U2 audit's (docs/protocol.md "Sequences"), each one a call site `x86.py dump` prints. G1 forbids a row until
  * the user reviews it and a lab session captures it (docs/units.md U1, U7, U10, U11).
  */
 export const COMMANDS = {
@@ -138,7 +142,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x40839D, sent 0x404749 (GetInfo) and 0x4050B9 (flash); identity compare 0x404E80" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	readFwInfo: {
@@ -154,7 +158,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4084C9, sent 0x40482C; payload[2..3] picks version part 0x20+x" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	readMode: {
@@ -188,7 +192,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x408613, sent 0x4047C7, 0x404841, 0x4057E1 (read-back of parts 0..2)" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	resetToIap: {
@@ -204,7 +208,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4082DB (sub 0 when arg = 1), sent 0x4068A7, no reply wait" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	resetToApp: {
@@ -220,7 +224,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x405A58, sent 0x405A95, no reply wait" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	erase: {
@@ -236,7 +240,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
+		evidence: { source: "vendor-updater", at: "U2: built 0x408754 (offset 0, length EDI), sent 0x405164 (window), 0x405885 (version page), 0x405CC8 (failure)" },
 		maturity: REVIEWED_FOR_U5,
 	},
 	sum: {
@@ -252,7 +256,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4087E2, sent 0x405422 over (BL[0x24], size)" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	crc: {
@@ -278,14 +282,31 @@ export const COMMANDS = {
 		modes: ["iap"],
 		effect: "write",
 		reply: "echo",
-		timeoutMs: 500,
+		/** The vendor's wait (U2, 0x408975), raised from pok3rtool's 500 ms by the user's D4 ruling. */
+		timeoutMs: 1_000,
 		address: "set-cursor",
 		payloadBytes: 4,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x408919, sent 0x404F78 inside 0x404F60, called from 0x4051B2 (BL[0x24]), 0x405538 (0), and the write retries 0x4052CF, 0x405653" },
 		maturity: REVIEWED_FOR_U5,
+	},
+	getWriteAddress: {
+		label: "Get write address",
+		cmd: 0x1e,
+		sub: 0x00,
+		modes: ["iap"],
+		effect: "read",
+		reply: "echo",
+		timeoutMs: 500,
+		address: "read-cursor",
+		payloadBytes: 4,
+		arg: NO_ARG,
+		value: null,
+		unlocks: null,
+		evidence: { source: "vendor-updater", at: "U2: built 0x4089F9..0x408A01, sent 0x404F90 inside 0x404F60" },
+		maturity: REVIEWED_FOR_U7,
 	},
 	write: {
 		label: "Write up to 52 bytes",
@@ -300,7 +321,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x408B2D (sub = length, memcpy to byte 4), sent 0x4052B2 (image), 0x405632 (version block)" },
 		maturity: REVIEWED_FOR_U5,
 	},
 	cfgReadKeys: {
@@ -519,7 +540,7 @@ export type EgressRefusal =
 	| { readonly code: "wrong-mode"; readonly command: CommandName; readonly mode: Mode }
 	/** Bytes 2..3, as a u16 LE, outside what the row's `arg` allows. */
 	| { readonly code: "arg-not-allowed"; readonly command: CommandName; readonly arg: number }
-	/** Bytes 4..5, as a u16 LE, outside what the row's `value` allows. */
+	/** Bytes 4..5, as a u16 LE, outside what the row's `value` allows, or get write address without its all-ones word. */
 	| { readonly code: "value-not-allowed"; readonly command: CommandName; readonly value: number }
 	/** `at` is the first nonzero byte past the payload the command's row declares. */
 	| { readonly code: "payload-overrun"; readonly at: number }
@@ -556,6 +577,8 @@ export type EgressVerdict =
 	| { readonly ok: false; readonly refusal: EgressRefusal };
 
 const PAYLOAD_OFFSET = 4;
+/** What get write address carries: the vendor's in/out word, preset to all ones (U2, 0x404F88). */
+const CURSOR_QUERY = 0xffff_ffff;
 const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
 
 const within = (bounds: ByteBounds, byte: number) => byte >= bounds.min && byte <= bounds.max;
@@ -629,6 +652,11 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 				cursor = ctx.cursor + sub;
 				break;
 			}
+			case "read-cursor": {
+				const asked = view.getUint32(4, true);
+				if (asked !== CURSOR_QUERY) return refuse({ code: "value-not-allowed", command, value: asked });
+				break;
+			}
 			default: {
 				const exhaustive: never = spec.address;
 				return exhaustive;
@@ -694,9 +722,15 @@ function encode(name: CommandName, request: Request): Uint8Array {
 
 type ReplyVerdict = { readonly kind: "ack" } | { readonly kind: "refused"; readonly detail: number } | { readonly kind: "stale" };
 
+/**
+ * The error marker counts only when bytes 4..5 name the command sent, as the vendor's reply filter requires (U2,
+ * 0x407731..0x407748); any other marker is someone else's answer.
+ */
 function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cursor: number | null): ReplyVerdict {
 	const view = viewOf(reply);
-	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) return { kind: "refused", detail: view.getUint16(4, true) };
+	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) {
+		return reply[4] === sent[0] && reply[5] === sent[1] ? { kind: "refused", detail: view.getUint16(4, true) } : { kind: "stale" };
+	}
 	if (spec.reply === "write-ack") {
 		if (reply[0] !== 0x1e || reply[1] !== 0x02) return { kind: "stale" };
 		const next = view.getUint32(4, true);

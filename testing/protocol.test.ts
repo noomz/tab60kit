@@ -133,6 +133,12 @@ test("FF AA is a DeviceRefused with the u16 detail at bytes 4..5", async () => {
 	expect(app.closed).toBe(1);
 });
 
+test("an FF AA that names another command is not this command's answer, so the wait runs on to its timeout", async () => {
+	const app = new ScriptedLink("app", [modeReply("app"), report("ffaa0000" + "1202")]);
+	await expect(connect(ctx(new ScriptedPort([app])), { modes: ["app"], reason: "connect" })).rejects.toBeInstanceOf(LinkTimeout);
+	expect(app.closed).toBe(1);
+});
+
 test("a command the clearance does not name sends nothing", async () => {
 	const reads = { kind: "lab", only: ["readMode", "readBlInfo", "readFwInfo", "readVersionPage"], purpose: "no sum" } as unknown as Clearance;
 	const iap = new ScriptedLink("iap", iapAttach());
