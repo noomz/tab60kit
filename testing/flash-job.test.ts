@@ -4,12 +4,14 @@ import { type FlashableImage, imageBytes } from "../core/firmware";
 import type { JobState } from "../core/job";
 import { createKit } from "../core/kit";
 import { Busy, type DevicePort, PickCancelled } from "../core/port";
+import { FlashOrderBroken, connect } from "../core/protocol";
 import { type TranscriptEntry, recording } from "./transcript";
 import { FLASH_CLEARANCE } from "./drop-sweep";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { syntheticFlashable } from "./synthetic-image";
 
 const image = await syntheticFlashable();
+const live = new AbortController().signal;
 const target = { imageBytes: image.entry.image.bytes, wireSum32: image.entry.image.wireSum32 };
 /** A board that starts in update mode with this block over an image summing to the target already holds the target. */
 const holdsTarget: Partial<FakeOptions> = { starting: "update-mode-official-image", versionBlock: imageBytes(image).versionBlock.bytes };
@@ -365,4 +367,37 @@ test("a late echo of a timed-out ERASE arrives during the 1 s wait before the re
 	expect((entries[second + 1]!.t) - (entries[second]!.t)).toBeGreaterThan(0);
 	expect(board.violations).toEqual([]);
 	await bootsTarget(board, image);
+});
+
+async function iapSession(options: Partial<FakeOptions>) {
+	const board = fake(options);
+	const session = await connect({ port: board.port(), clearance: FLASH_CLEARANCE, signal: new AbortController().signal }, { modes: ["iap"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	return { board, session };
+}
+const flashFrames = (board: FakeTab60) => board.received.filter((r) => r.cmd === 0x1d && r.sub === 0x00 || r.cmd === 0x1e || r.cmd === 0x1f).length;
+
+test("F4: writeImage throws FlashOrderBroken, sending nothing, unless eraseWindow completed on the same session", async () => {
+	const { board, session } = await iapSession({ starting: "update-mode-erased" });
+	await expect(session.writeImage(image, () => undefined)).rejects.toBeInstanceOf(FlashOrderBroken);
+	expect(flashFrames(board)).toBe(0);
+	await session.eraseWindow();
+	await session.writeImage(image, () => undefined);
+	await expect(session.writeImage(image, () => undefined)).rejects.toThrow("writeImage after image-written");
+	await session.close();
+});
+
+test("F4: writeVersionBlock throws FlashOrderBroken, sending nothing, unless the session's latest SUM matched the image", async () => {
+	const { board, session } = await iapSession({ ...holdsTarget, starting: "update-mode-damaged-image" });
+	await expect(session.writeVersionBlock(image)).rejects.toThrow("writeVersionBlock after none");
+	await session.checksum(target.imageBytes, live);
+	await expect(session.writeVersionBlock(image)).rejects.toThrow(`writeVersionBlock after a SUM of 0x${((target.wireSum32 + 1) >>> 0).toString(16)}`);
+	expect(flashFrames(board)).toBe(0);
+	await session.eraseWindow();
+	await session.writeImage(image, () => undefined);
+	await expect(session.writeVersionBlock(image)).rejects.toThrow("writeVersionBlock after image-written");
+	await session.checksum(target.imageBytes, live);
+	await session.writeVersionBlock(image);
+	await session.close();
+	expect(board.violations).toEqual([]);
 });

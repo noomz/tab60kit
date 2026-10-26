@@ -531,6 +531,11 @@ export class ReadBackMismatch extends Error {
 	override readonly name = "ReadBackMismatch";
 }
 
+/** A flash step on an IapSession out of the safety order. A bug in the caller: nothing was sent. */
+export class FlashOrderBroken extends Error {
+	override readonly name = "FlashOrderBroken";
+}
+
 /** A WRITE ack named a next offset other than the cursor plus the chunk length. */
 export class WrongNextOffset extends Error {
 	override readonly name = "WrongNextOffset";
@@ -1121,12 +1126,14 @@ export interface IapSession {
 	 * Sets the write address to the image offset and reads it back, then sends WRITE in 52-byte chunks of
 	 * `imageBytes(image).wire`. Each ack must report next offset = cursor + chunk length. A block that fails is resent
 	 * from its start (writeAt); one that keeps failing throws, and the caller's next observation decides what happens.
+	 * Throws FlashOrderBroken, before anything leaves, unless eraseWindow completed on this session.
 	 */
 	writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void>;
 	/**
 	 * Sets the write address to 0 and writes `imageBytes(image).versionBlock`, 180 bytes, as chunks of 52, 52, 52, and
 	 * 24. The 0x5AA5 magic at offset 0xB0 sits in the last chunk, so a partial block never carries it. Then reads the
-	 * page back and compares, as the vendor updater does.
+	 * page back and compares, as the vendor updater does. Throws FlashOrderBroken, before anything leaves, unless this
+	 * session's latest SUM matched the image, with no erase or write since.
 	 */
 	writeVersionBlock(image: FlashableImage): Promise<void>;
 	/** Restarts into normal mode. The session is closed afterwards; the board re-enumerates as 0x0304. */
@@ -1233,8 +1240,22 @@ class App implements AppSession {
 	}
 }
 
+/**
+ * What one update-mode session has done to flash, in the safety order: the version page erased, then the window,
+ * then the image written, then a SUM of the image range. writeImage needs the window erased on this session, and
+ * writeVersionBlock needs a SUM that matched the image. Each erase or write step starts by forgetting what came
+ * before, so a step that throws leaves nothing to build on.
+ */
+type FlashProgress =
+	| { readonly kind: "none" }
+	| { readonly kind: "page-erased" }
+	| { readonly kind: "window-erased" }
+	| { readonly kind: "image-written" }
+	| { readonly kind: "summed"; readonly bytes: number; readonly sum: Sum32 };
+
 class Iap implements IapSession {
 	readonly mode = "iap";
+	#progress: FlashProgress = { kind: "none" };
 
 	constructor(
 		private readonly ch: Channel,
@@ -1254,15 +1275,19 @@ class Iap implements IapSession {
 		const span = imageSpan(this.window, imageBytes);
 		if (span === null) throw new RangeError(`an image of ${imageBytes} bytes does not fit the window`);
 		const sum = sum32Literal(u32Of(await transmit(this.ch, "sum", { payload: rangePayload(span) }, signal)));
+		this.#progress = { kind: "summed", bytes: imageBytes, sum };
 		const crc = clears(this.ch.clearance, "crc") ? crc32Literal(u32Of(await transmit(this.ch, "crc", { payload: rangePayload(span) }, signal))) : null;
 		return { sum, crc };
 	}
 
 	async eraseWindow(): Promise<void> {
+		this.#progress = { kind: "none" };
 		await transmit(this.ch, "erase", { payload: rangePayload(versionPage(this.window)) }, NEVER_ABORTED);
+		this.#progress = { kind: "page-erased" };
 		for (let tries = 1; tries <= TRIES; tries++) {
 			try {
 				await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
+				this.#progress = { kind: "window-erased" };
 				return;
 			} catch (error) {
 				if (!(error instanceof DeviceRefused || error instanceof LinkTimeout)) throw error;
@@ -1271,19 +1296,29 @@ class Iap implements IapSession {
 			}
 		}
 		await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED);
+		this.#progress = { kind: "window-erased" };
 	}
 
 	async writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void> {
 		const { bytes } = imageBytes(image).wire;
 		const span = imageSpan(this.window, bytes.length);
 		if (span === null) throw new RangeError(`an image of ${bytes.length} bytes does not fit the window`);
+		if (this.#progress.kind !== "window-erased") throw new FlashOrderBroken(`writeImage after ${this.#progress.kind}, not after eraseWindow on this session`);
+		this.#progress = { kind: "none" };
 		await writeAt(this.ch, span, bytes, onChunk);
+		this.#progress = { kind: "image-written" };
 	}
 
 	async writeVersionBlock(image: FlashableImage): Promise<void> {
 		const { bytes } = imageBytes(image).versionBlock;
 		const span = versionSpan(this.window);
 		if (bytes.length !== span.length) throw new RangeError(`a version block of ${bytes.length} bytes, expected ${span.length}`);
+		const { image: wanted } = image.entry;
+		const done = this.#progress;
+		if (done.kind !== "summed" || done.bytes !== wanted.bytes || done.sum !== wanted.wireSum32) {
+			throw new FlashOrderBroken(`writeVersionBlock after ${done.kind === "summed" ? `a SUM of 0x${done.sum.toString(16)}` : done.kind}, not after a SUM matching ${image.entry.version}`);
+		}
+		this.#progress = { kind: "none" };
 		await writeAt(this.ch, span, bytes, () => undefined);
 		const back = (await readVersionPage(this.ch, NEVER_ABORTED)).bytes.subarray(0, span.length);
 		if (back.some((byte, at) => byte !== bytes[at])) throw new ReadBackMismatch("the version page read back differs from the block written");
