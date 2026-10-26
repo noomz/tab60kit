@@ -85,14 +85,15 @@ else
 fi
 rm -rf "$copy"
 
-# docs/units.md U5: the drop sweep and the link-gate scenario must each notice the defect they exist for.
+# docs/units.md U5: the drop sweep and the link-gate scenario must each notice the defect they exist for. `files` may name
+# several files, each of which gets the pattern; `applied` must then appear in the first.
 mutation_check() {
-	local why=$1 file=$2 pattern=$3 applied=$4 expect=$5 copy out status
+	local why=$1 files=$2 pattern=$3 applied=$4 expect=$5 copy out status file
 	shift 5
 	copy=$(mktemp -d)
 	cp -R core testing package.json "$copy/"
-	perl -0pi -e "$pattern" "$copy/$file"
-	grep -qF -- "$applied" "$copy/$file" || { echo "FAIL mutation did not apply: $why"; exit 1; }
+	for file in $files; do perl -0pi -e "$pattern" "$copy/$file"; done
+	grep -qF -- "$applied" "$copy/${files%% *}" || { echo "FAIL mutation did not apply: $why"; exit 1; }
 	out=$(cd "$copy" && "$BUN" "$@" 2>&1)
 	status=$?
 	if [ $status -ne 0 ] && printf '%s\n' "$out" | grep -qF -- "$expect"; then
@@ -102,9 +103,12 @@ mutation_check() {
 	fi
 	rm -rf "$copy"
 }
-mutation_check "the drop sweep catches a decideInIap that writes the version block over an unrecognized image" core/flash.ts \
-	's/if \(rewrite \|\| !isTargetImage\(chip\.image, target\)\) return "erase-and-write-image";/if (rewrite) return "erase-and-write-image";/' \
+mutation_check "the drop sweep catches a decideInIap that writes the version block over an unrecognized image, with the session's order guard off" "core/flash.ts core/protocol.ts" \
+	's/if \(rewrite \|\| !isTargetImage\(chip\.image, target\)\) return "erase-and-write-image";/if (rewrite) return "erase-and-write-image";/; s/if \(done\.kind !== "summed" \|\| done\.bytes !== wanted\.bytes \|\| done\.sum !== wanted\.wireSum32\) \{/if (false) {/' \
 	'if (rewrite) return "erase-and-write-image";' 'version-block-before-verified-image' testing/drop-sweep.ts official-image
+mutation_check "the session's order guard stops that decideInIap before its version block leaves" core/flash.ts \
+	's/if \(rewrite \|\| !isTargetImage\(chip\.image, target\)\) return "erase-and-write-image";/if (rewrite) return "erase-and-write-image";/' \
+	'if (rewrite) return "erase-and-write-image";' 'FlashOrderBroken: writeVersionBlock after a SUM of' testing/drop-sweep.ts official-image
 mutation_check "the drop sweep catches an eraseWindow that sends one ERASE over the whole window" core/protocol.ts \
 	's/await transmit\(this\.ch, "erase", \{ payload: rangePayload\(versionPage\(this\.window\)\) \}, NEVER_ABORTED\);/await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED); \/\/ first/' \
 	'rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED); // first' 'app-changed-under-valid-page' testing/drop-sweep.ts official-image

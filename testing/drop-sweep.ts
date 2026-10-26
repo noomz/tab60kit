@@ -75,7 +75,9 @@ export async function dropSweep(image: FlashableImage, starts: readonly Start[] 
 	let runs = 0;
 	const run = async (options: Partial<FakeOptions>, start: Start, iap: IapBehavior, rewrite: boolean) => {
 		const board = new FakeTab60({ ...startOptions(start, image), ...IAP_OPTIONS[iap], ...options, target, clock: "virtual", reenumerateAfterMs: 0 });
-		const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite });
+		const kit = createKit(board.port(), FLASH_CLEARANCE);
+		// A job that throws (a bug) leaves the kit stopped with an error reason, which counts as this run's failure.
+		const end = await kit.makeOfficial(image, { rewrite }).catch(() => kit.state);
 		runs++;
 		const boot = await board.bootTarget();
 		const problems: string[] = [];
