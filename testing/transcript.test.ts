@@ -3,7 +3,7 @@ import { type Link, LinkLost, asInReport } from "../core/port";
 import { type Transcript, type TranscriptEntry, parseTranscript, recording } from "./transcript";
 import { ScriptedLink, report } from "./scripted";
 
-test("recording stamps every report, close, and loss, tags each close and loss with the link's mode, and never records a WRITE", async () => {
+test("recording stamps every report, close, and loss, tags each close and loss with the link's mode, and keeps a WRITE's payload only as its hash", async () => {
 	let t = 0;
 	const inner = new ScriptedLink("iap", [report("1202000000")]);
 	let lose = () => undefined as void;
@@ -27,10 +27,13 @@ test("recording stamps every report, close, and loss, tags each close and loss w
 	]);
 	const write = asInReport(new Uint8Array(64));
 	write[0] = 0x1f;
-	write[1] = 52;
-	await expect(link.send(write as never)).rejects.toThrow(/WRITE/);
-	expect(inner.sent).toHaveLength(1);
-	expect(entries).toHaveLength(4);
+	write[1] = 3;
+	write.set([0xaa, 0xbb, 0xcc], 4);
+	await link.send(write as never);
+	expect(inner.sent).toHaveLength(2);
+	// sha256("aabbcc"), computed outside this code with shasum -a 256.
+	expect(entries.slice(4)).toEqual([{ t: 5, kind: "out-write", header: "1f030000", payloadBytes: 3, payloadSha256: "fa22dfe1da9013b3c1145040acae9089e0c08bc1c1a0719614f4b73add6f6ef5" }]);
+	expect(JSON.stringify(entries)).not.toContain("aabbcc");
 });
 
 test("recording keeps the reports discardPending drops and marks a send that rejected", async () => {

@@ -2,8 +2,8 @@
  * Recorded sessions with a real board: the golden fixtures behind the fake board and the replay tests, and the
  * capture that moves a G1 row from "reviewed" to "confirmed" (protocol.ts Maturity).
  *
- * A transcript never carries firmware. `recording` refuses a WRITE frame until U7 stores write payloads as their
- * length and SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
+ * A transcript never carries firmware. `recording` stores a WRITE frame as its first four bytes, its payload length,
+ * and its payload's SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
  * tests stay byte-exact without redistributing vendor bytes.
  */
 import { type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type Mode, type OutReport, type WantReason, asInReport, modeOf } from "../core/port";
@@ -90,9 +90,12 @@ export function recording(link: Link, sink: (entry: TranscriptEntry) => void, no
 		mode: link.mode,
 		lost: link.lost,
 		async send(report) {
-			if (report[0] === WRITE_CMD) throw new Error("recording: WRITE frames are not recordable before U7 hashes their payloads");
-			const hex = hexOf(report);
-			sink({ t: now(), kind: "out", hex });
+			let hex = hexOf(report);
+			if (report[0] === WRITE_CMD) {
+				const payloadBytes = report[1] ?? 0;
+				sink({ t: now(), kind: "out-write", header: hex.slice(0, 8), payloadBytes, payloadSha256: await sha256Hex(report.subarray(4, 4 + payloadBytes)) });
+				hex = hex.slice(0, 8).padEnd(hex.length, "0");
+			} else sink({ t: now(), kind: "out", hex });
 			try {
 				await link.send(report);
 			} catch (error) {
