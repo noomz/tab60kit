@@ -96,6 +96,8 @@ export interface Received {
 	readonly cmd: number;
 	readonly sub: number;
 	readonly mode: Mode;
+	/** The u32s at bytes 4 and 8: an ERASE's or SUM's offset and length, or the address a set write address names. */
+	readonly words: readonly [number, number];
 }
 
 const REPORT_BYTES = 64;
@@ -480,7 +482,8 @@ export class FakeTab60 {
 			else this.#reenumerate(this.#mode);
 			return;
 		}
-		this.#received.push({ t: this.clock.now(), cmd: bytes[0] ?? 0, sub: bytes[1] ?? 0, mode: this.#mode });
+		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		this.#received.push({ t: this.clock.now(), cmd: bytes[0] ?? 0, sub: bytes[1] ?? 0, mode: this.#mode, words: [view.getUint32(4, true), view.getUint32(8, true)] });
 		if (this.clock instanceof VirtualClock) this.clock.advance(COMMAND_MS);
 		if (this.options.loseLinkAfterPacket === index) {
 			const generation = this.#generation;

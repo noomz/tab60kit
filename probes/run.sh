@@ -106,8 +106,8 @@ mutation_check "the drop sweep catches a decideInIap that writes the version blo
 	's/if \(rewrite \|\| !isTargetImage\(chip\.image, target\)\) return "erase-and-write-image";/if (rewrite) return "erase-and-write-image";/' \
 	'if (rewrite) return "erase-and-write-image";' 'version-block-before-verified-image' testing/drop-sweep.ts official-image
 mutation_check "the drop sweep catches an eraseWindow that sends one ERASE over the whole window" core/protocol.ts \
-	's/await transmit\(this\.ch, "erase", \{ payload: rangePayload\(versionPage\(this\.window\)\) \}, NEVER_ABORTED\);\n\t\tawait transmit\(this\.ch, "erase", \{ payload: rangePayload\(appRegion\(this\.window\)\) \}, NEVER_ABORTED\);/await transmit(this.ch, "erase", { payload: rangePayload({ offset: versionPage(this.window).offset, length: this.window.end - this.window.base }) }, NEVER_ABORTED);/' \
-	'length: this.window.end - this.window.base' 'app-changed-under-valid-page' testing/drop-sweep.ts official-image
+	's/await transmit\(this\.ch, "erase", \{ payload: rangePayload\(versionPage\(this\.window\)\) \}, NEVER_ABORTED\);/await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED); \/\/ first/' \
+	'rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED); // first' 'app-changed-under-valid-page' testing/drop-sweep.ts official-image
 mutation_check "the gate scenario catches a job that writes before judgeLink says stable" core/flash.ts \
 	's/if \(verdict\.kind === "stable"\) return;/if (verdict.kind === "stable" || true) return;/' \
 	'|| true) return;' '(fail) no flash write within 15 s of a timeout' test testing/flash-job.test.ts

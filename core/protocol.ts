@@ -17,7 +17,7 @@
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
-import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, windowFor } from "./flashmap";
+import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, wholeWindow, windowFor } from "./flashmap";
 import type { Layer, OsMode, Usage } from "./keymap";
 import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
@@ -531,6 +531,28 @@ export class ReadBackMismatch extends Error {
 	override readonly name = "ReadBackMismatch";
 }
 
+/** A WRITE ack named a next offset other than the cursor plus the chunk length. */
+export class WrongNextOffset extends Error {
+	override readonly name = "WrongNextOffset";
+	constructor(
+		readonly expected: number,
+		readonly got: number,
+	) {
+		super(`the write ack named next offset 0x${got.toString(16)}, expected 0x${expected.toString(16)}`);
+	}
+}
+
+/** Get write address, right after a set, read back an address other than the one set. */
+export class CursorMismatch extends Error {
+	override readonly name = "CursorMismatch";
+	constructor(
+		readonly set: number,
+		readonly got: number,
+	) {
+		super(`the write address reads back 0x${got.toString(16)} after a set to 0x${set.toString(16)}`);
+	}
+}
+
 /** Why the egress audit refused a frame. Every code but "not-cleared" means a bug in the core. */
 export type EgressRefusal =
 	| { readonly code: "bad-length"; readonly bytes: number }
@@ -720,7 +742,11 @@ function encode(name: CommandName, request: Request): Uint8Array {
 	return frame;
 }
 
-type ReplyVerdict = { readonly kind: "ack" } | { readonly kind: "refused"; readonly detail: number } | { readonly kind: "stale" };
+type ReplyVerdict =
+	| { readonly kind: "ack" }
+	| { readonly kind: "refused"; readonly detail: number }
+	| { readonly kind: "wrong-next"; readonly next: number }
+	| { readonly kind: "stale" };
 
 /**
  * The error marker counts only when bytes 4..5 name the command sent, as the vendor's reply filter requires (U2,
@@ -734,7 +760,7 @@ function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cur
 	if (spec.reply === "write-ack") {
 		if (reply[0] !== 0x1e || reply[1] !== 0x02) return { kind: "stale" };
 		const next = view.getUint32(4, true);
-		return next === cursor ? { kind: "ack" } : { kind: "refused", detail: next };
+		return next === cursor ? { kind: "ack" } : { kind: "wrong-next", next };
 	}
 	const echoed = spec.reply === "echo-arg" ? 4 : spec.reply === "echo-cmd" ? 1 : 2;
 	return sent.subarray(0, echoed).every((byte, at) => reply[at] === byte) ? { kind: "ack" } : { kind: "stale" };
@@ -775,9 +801,9 @@ async function transmit(ch: Channel, name: CommandName, request: Request, signal
 			if (remaining <= 0) throw new LinkTimeout(`${spec.label}: no reply within ${spec.timeoutMs} ms`);
 			continue;
 		}
-		if (outcome.kind === "refused") {
+		if (outcome.kind === "refused" || outcome.kind === "wrong-next") {
 			if (spec.address === "set-cursor" || spec.address === "at-cursor") ch.cursor = null;
-			throw new DeviceRefused(name, outcome.detail);
+			throw outcome.kind === "refused" ? new DeviceRefused(name, outcome.detail) : new WrongNextOffset(verdict.cursor ?? 0, outcome.next);
 		}
 		ch.cursor = verdict.cursor;
 		return reply;
@@ -794,15 +820,59 @@ function rangePayload(span: Span): Uint8Array {
 
 const u32Of = (reply: InReport) => viewOf(reply).getUint32(PAYLOAD_OFFSET, true);
 
-/** Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address. */
+function u32Payload(value: number): Uint8Array {
+	const payload = new Uint8Array(4);
+	new DataView(payload.buffer).setUint32(0, value, true);
+	return payload;
+}
+
+/**
+ * Tries for each unit the vendor retries, by the user's 2026-10-26 rulings: the set and get write address pair, one
+ * WRITE block, and the app-region ERASE before its fallback. The vendor tries 15 times; past these, the convergence
+ * loop observes the board and decides.
+ */
+const TRIES = 3;
+
+/**
+ * Sets the write address, reads it back, and requires the address set (U2 D4: the vendor's pair at 0x404F60). The pair
+ * is retried as one unit on a refusal, a silence, or a different read-back; a lost link ends it at once.
+ */
+async function setCursor(ch: Channel, offset: number): Promise<void> {
+	for (let tries = 1; ; tries++) {
+		try {
+			await transmit(ch, "setWriteAddress", { payload: u32Payload(offset) }, NEVER_ABORTED);
+			const got = u32Of(await transmit(ch, "getWriteAddress", { payload: u32Payload(CURSOR_QUERY) }, NEVER_ABORTED));
+			if (got === offset) return;
+			ch.cursor = null;
+			throw new CursorMismatch(offset, got);
+		} catch (error) {
+			const retry = error instanceof DeviceRefused || error instanceof LinkTimeout || error instanceof CursorMismatch;
+			if (!retry || tries === TRIES) throw error;
+		}
+	}
+}
+
+/**
+ * Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address.
+ * A block whose ack is missing or names another offset goes again from its own start, after the cursor is set back
+ * and read back (U2 D5, the vendor's 0x4052C5..0x4052CF). After TRIES the error goes to the caller's next observation.
+ */
 async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (done: number, total: number) => void): Promise<void> {
-	const address = new Uint8Array(4);
-	new DataView(address.buffer).setUint32(0, span.offset, true);
-	await transmit(ch, "setWriteAddress", { payload: address }, NEVER_ABORTED);
+	await setCursor(ch, span.offset);
 	const size = EXPECTED_LAYOUT.writeChunkBytes;
 	const chunks = Math.ceil(bytes.length / size);
 	for (let i = 0; i < chunks; i++) {
-		await transmit(ch, "write", { payload: bytes.subarray(i * size, (i + 1) * size) }, NEVER_ABORTED);
+		const payload = bytes.subarray(i * size, (i + 1) * size);
+		for (let tries = 1; ; tries++) {
+			try {
+				if (tries > 1) await setCursor(ch, span.offset + i * size);
+				await transmit(ch, "write", { payload }, NEVER_ABORTED);
+				break;
+			} catch (error) {
+				const retry = error instanceof LinkTimeout || error instanceof WrongNextOffset;
+				if (!retry || tries === TRIES) throw error;
+			}
+		}
 		onChunk(i + 1, chunks);
 	}
 }
@@ -1027,14 +1097,16 @@ export interface IapSession {
 	/**
 	 * ERASE the version page (`versionPage(window)`), wait for its echo, then ERASE the app region (`appRegion(window)`).
 	 * The page is gone before any app byte changes, whatever order the IAP erases pages within one command, so no
-	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, R1; candidate A). These are the
-	 * only erases the tool sends.
+	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, R1; candidate A).
+	 * The vendor never erases from an offset above 0 (U2 D1). If the IAP refuses the app-region erase with FF AA, or
+	 * leaves it unanswered TRIES times, this sends the vendor's one ERASE over the whole window (`wholeWindow`). Only the
+	 * answered version-page erase makes that safe, so any failure of the first erase propagates instead.
 	 */
 	eraseWindow(): Promise<void>;
 	/**
-	 * Sets the write address to the image offset, then sends WRITE in 52-byte chunks of `imageBytes(image).wire`.
-	 * Each ack must report next offset = cursor + chunk length; anything else throws DeviceRefused and the caller's
-	 * next observation decides what happens.
+	 * Sets the write address to the image offset and reads it back, then sends WRITE in 52-byte chunks of
+	 * `imageBytes(image).wire`. Each ack must report next offset = cursor + chunk length. A block that fails is resent
+	 * from its start (writeAt); one that keeps failing throws, and the caller's next observation decides what happens.
 	 */
 	writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void>;
 	/**
@@ -1174,7 +1246,16 @@ class Iap implements IapSession {
 
 	async eraseWindow(): Promise<void> {
 		await transmit(this.ch, "erase", { payload: rangePayload(versionPage(this.window)) }, NEVER_ABORTED);
-		await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
+		for (let tries = 1; tries <= TRIES; tries++) {
+			try {
+				await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
+				return;
+			} catch (error) {
+				if (error instanceof DeviceRefused) break;
+				if (!(error instanceof LinkTimeout)) throw error;
+			}
+		}
+		await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED);
 	}
 
 	async writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void> {

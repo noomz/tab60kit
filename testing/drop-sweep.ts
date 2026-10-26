@@ -29,9 +29,9 @@ export interface SweepFailure {
 	readonly why: string;
 }
 
-/** Every row the flash job sends: the seven U1 rows and the three flash-write rows reviewed for U5. */
+/** Every row the flash job sends: the seven U1 rows, the three flash-write rows reviewed for U5, and get write address (U7). */
 export const FLASH_CLEARANCE: Clearance = labClearance(
-	["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp", "erase", "setWriteAddress", "write"],
+	["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp", "erase", "setWriteAddress", "getWriteAddress", "write"],
 	"U5 drop sweep, fake board only",
 );
 
