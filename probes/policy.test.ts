@@ -127,17 +127,19 @@ check("udev rule: R3's rule byte for byte", () =>
 	),
 );
 
-// G1 today, shipped: the two confirmed reads unlock reading; each unreviewed config command says what it lacks.
+// G1 today, shipped: the confirmed reads, gate, and key write unlock reading and writing; the unreviewed 0x51/0x00 says what it lacks.
 const caps = capabilities(SHIPPED);
-check("shipped caps: reading only", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, false, false]));
-check("shipped caps: each unreviewed config command is blocked with what it lacks", () =>
+check("shipped caps: reading and writing, not the OS mode", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, true, false]));
+check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lacks", () =>
 	assert.deepEqual(
 		caps.blockedBy.map((line) => line.replace(/^.*: /, "")),
-		Array(3).fill("needs review and a capture on this board (gate G1)"),
+		["needs review and a capture on this board (gate G1)"],
 	),
 );
 const u10Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "readMode", "readBlInfo"], "U10"));
 check("U10 lab caps: the two reads unlock reading and nothing else", () => assert.deepEqual([u10Caps.canRead, u10Caps.canWrite, u10Caps.canSetOsMode], [true, false, false]));
+const u11Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "gateQuery", "gateOpen", "gateClose", "cfgWriteKey"], "U11"));
+check("U11 lab caps: the reads, the gate, and the key write unlock writing and not the OS mode", () => assert.deepEqual([u11Caps.canRead, u11Caps.canWrite, u11Caps.canSetOsMode], [true, true, false]));
 
 // G1 as maturity.
 const reviewed: Maturity = { level: "reviewed", by: "user", on: "2026-10-10" };
@@ -157,17 +159,19 @@ for (const [clearance, name, maturity, want, why] of clearing) check(`clearance:
 const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
 const REVIEWED_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "write"];
 const U10_ROWS: readonly CommandName[] = ["cfgReadKeys", "cfgReadKey"];
-const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgSelectLayer", "cfgSetKey", "cfgSetOsMode"];
+const U11_ROWS: readonly CommandName[] = ["gateQuery", "gateOpen", "gateClose", "cfgWriteKey"];
+const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgSetOsMode"];
 check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
 check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
 check("clearance: a lab session for the reviewed erase, set write address, and write rows", () => assert.equal(labClearance(REVIEWED_ROWS, "U5").kind, "lab"));
 check("clearance: a lab session for the two confirmed override-store reads and the U1 rows an app session needs", () =>
 	assert.equal(labClearance([...U10_ROWS, "readMode", "readBlInfo"], "U10").kind, "lab"),
 );
-check("clearance: the shipped build sends exactly the seven U1 rows and the two U10 reads, and refuses erase, crc, set write address, write, and every config write", () =>
+check("clearance: a lab session for the four confirmed U11 rows", () => assert.equal(labClearance(U11_ROWS, "U11").kind, "lab"));
+check("clearance: the shipped build sends exactly the seven U1 rows, the two U10 reads, and the four U11 rows, and refuses erase, crc, set write address, write, and 0x51/0x00", () =>
 	assert.deepEqual(
 		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
-		{ sends: new Set([...U1_ROWS, ...U10_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
+		{ sends: new Set([...U1_ROWS, ...U10_ROWS, ...U11_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
 	),
 );
 for (const name of UNREVIEWED_ROWS) {
@@ -184,7 +188,9 @@ const captures = new Set(
 );
 const U10_CAPTURE = "fixtures/u10-macos.json";
 const U10_TRANSCRIPT = "testing/fixtures/tab60kit-u10-2026-10-19T08-46-35-778Z.json";
-check(`capture: every confirmed row cites ${CAPTURE} or ${U10_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE])));
+const U11_CAPTURE = "fixtures/u11-macos.json";
+const U11_TRANSCRIPT = "testing/fixtures/tab60kit-u11-2026-10-24T10-59-37-545Z.json";
+check(`capture: every confirmed row cites ${CAPTURE}, ${U10_CAPTURE}, or ${U11_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE, U11_CAPTURE])));
 check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
 	assert.deepEqual(
 		U10_ROWS.map((name) => {
@@ -194,6 +200,21 @@ check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
 		[U10_CAPTURE, U10_CAPTURE],
 	),
 );
+check(`capture: the U11 gate and key write cite ${U11_CAPTURE}`, () =>
+	assert.deepEqual(
+		U11_ROWS.map((name) => {
+			const maturity: Maturity = COMMANDS[name].maturity;
+			return maturity.level === "confirmed" ? maturity.capture : maturity.level;
+		}),
+		U11_ROWS.map(() => U11_CAPTURE),
+	),
+);
+check(`capture: ${U11_CAPTURE} holds the 2026-10-24 run byte for byte, and all eight checks pass`, () => {
+	const fixture: { transcriptFile: string; transcript: unknown; checks: { pass: boolean }[] } = JSON.parse(readFileSync(join(import.meta.dir, "..", U11_CAPTURE), "utf8"));
+	assert.equal(fixture.transcriptFile, U11_TRANSCRIPT);
+	assert.deepEqual(fixture.transcript, JSON.parse(readFileSync(join(import.meta.dir, "..", U11_TRANSCRIPT), "utf8")));
+	assert.ok(fixture.checks.length === 8 && fixture.checks.every((c) => c.pass), "every U11 check passes");
+});
 check(`capture: ${U10_CAPTURE} holds board run 3 byte for byte, in Mac mode with one approved difference, and every check passes`, () => {
 	const fixture: { transcriptFile: string; transcript: unknown; osKeyMode: string; approvedDifferences: unknown[]; checks: { pass: boolean }[] } = JSON.parse(
 		readFileSync(join(import.meta.dir, "..", U10_CAPTURE), "utf8"),
@@ -240,6 +261,27 @@ check("registry: WRITE decodes lengths 1 to 52 only", () =>
 	assert.deepEqual([0, 1, 52, 53].map((sub) => decodeCommand(0x1f, sub)), [null, "write", "write", null]),
 );
 check("registry: PING is left out on purpose", () => assert.equal(decodeCommand(0x10, 0x02), null));
+// The user's U11 ruling: cmd 0x41 carries only gate bytes 0x80, 0x00, and 0xFF; cmd 0x51 only sub 0x20 is reviewed; no 0x50 sub is a row.
+const gateRows = Array.from({ length: 256 }, (_, gate) => [gate, decodeCommand(0x41, gate)] as const).filter(([, name]) => name !== null);
+check("registry: cmd 0x41 decodes gate bytes 0x00, 0x80, and 0xFF only, so bit 0, bit 6, and 0x04 have no row", () =>
+	assert.deepEqual(gateRows, [
+		[0x00, "gateClose"],
+		[0x80, "gateOpen"],
+		[0xff, "gateQuery"],
+	]),
+);
+const sendable = (cmd: number, sub: number) => {
+	const name = decodeCommand(cmd, sub);
+	if (name === null) return false;
+	const maturity: Maturity = COMMANDS[name].maturity;
+	return maturity.level !== "unreviewed";
+};
+check("registry: of cmd 0x50 and 0x51, only 0x51/0x20 decodes to a row any clearance can send", () =>
+	assert.deepEqual(
+		[0x50, 0x51].flatMap((cmd) => Array.from({ length: 256 }, (_, sub) => (sendable(cmd, sub) ? [`${cmd.toString(16)}/${sub.toString(16)}`] : [])).flat()),
+		["51/20"],
+	),
+);
 
 // The user's ruling: an erase or write row moves above "unreviewed" only with vendor-updater evidence.
 const writeRowProblems = (rows: readonly (readonly [string, CommandSpec])[]) =>
@@ -260,15 +302,17 @@ const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor":
 check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
 	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),
 );
-check("registry: each row's payload is exactly its address fields", () =>
+check("registry: each row's payload is exactly its address fields, plus two bytes for a value", () =>
 	assert.deepEqual(
 		COMMAND_NAMES.filter((name) => {
 			const spec: CommandSpec = COMMANDS[name];
-			return spec.payloadBytes !== PAYLOAD_OF_ADDRESSING[spec.address];
+			const fields = PAYLOAD_OF_ADDRESSING[spec.address];
+			return spec.payloadBytes !== (spec.value === null ? fields : typeof fields === "number" ? fields + 2 : null);
 		}),
 		[],
 	),
 );
+check("registry: only cfgWriteKey carries a value", () => assert.deepEqual(COMMAND_NAMES.filter((name) => (COMMANDS[name] as CommandSpec).value !== null), ["cfgWriteKey"]));
 
 // The egress audit, on frames built by hand from R1 "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
 const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
@@ -323,6 +367,28 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["one override, layer 3", audited(poke(frame(0x52, 0x20), 3, 0x03), "cfgReadKey", app), { refused: "arg-not-allowed" }],
 	["layer-0 overrides in update mode", audited(frame(0x52, 0x21), "cfgReadKeys", iap), { refused: "wrong-mode" }],
 	["the deleted 0x51/0x11 reverse-map read", audited(frame(0x51, 0x11), "cfgReadKey", app), { refused: "unknown-command" }],
+	["gate query", audited(frame(0x41, 0xff), "gateQuery", app), { ok: "gateQuery", cursor: null }],
+	["gate open with bit 7", audited(frame(0x41, 0x80), "gateOpen", app), { ok: "gateOpen", cursor: null }],
+	["gate close", audited(frame(0x41, 0x00), "gateClose", app), { ok: "gateClose", cursor: null }],
+	["gate open into config mode (bit 0)", audited(frame(0x41, 0x01), "gateOpen", app), { refused: "unknown-command" }],
+	["gate open with bit 0 and bit 7", audited(frame(0x41, 0x81), "gateOpen", app), { refused: "unknown-command" }],
+	["gate open silenced (bit 6)", audited(frame(0x41, 0xc0), "gateOpen", app), { refused: "unknown-command" }],
+	["gate value 0x04, the raw cmd 0x55 protocol", audited(frame(0x41, 0x04), "gateOpen", app), { refused: "unknown-command" }],
+	["gate open with a timer in bytes 2..3", audited(poke(frame(0x41, 0x80), 2, 0x10), "gateOpen", app), { refused: "arg-not-allowed" }],
+	["gate close with a payload byte", audited(poke(frame(0x41, 0x00), 4, 0x01), "gateClose", app), { refused: "payload-overrun" }],
+	["gate open in update mode", audited(frame(0x41, 0x80), "gateOpen", iap), { refused: "wrong-mode" }],
+	["Caps Lock to Left Control on layer 0", audited(poke(poke(frame(0x51, 0x20), 2, 0x39), 4, 0xe0), "cfgWriteKey", app), { ok: "cfgWriteKey", cursor: null }],
+	["Caps Lock back to default", audited(poke(poke(frame(0x51, 0x20), 2, 0x39), 4, 0xff), "cfgWriteKey", app), { ok: "cfgWriteKey", cursor: null }],
+	["a key write on layer 2", audited(poke(poke(poke(frame(0x51, 0x20), 2, 0x39), 3, 0x02), 4, 0xe0), "cfgWriteKey", app), { ok: "cfgWriteKey", cursor: null }],
+	["a key write on layer 3", audited(poke(poke(poke(frame(0x51, 0x20), 2, 0x39), 3, 0x03), 4, 0xe0), "cfgWriteKey", app), { refused: "arg-not-allowed" }],
+	["a key write with flags 1", audited(poke(poke(poke(frame(0x51, 0x20), 2, 0x39), 4, 0xe0), 5, 1), "cfgWriteKey", app), { refused: "value-not-allowed" }],
+	["a key write with flags 2", audited(poke(poke(poke(frame(0x51, 0x20), 2, 0x39), 4, 0xe0), 5, 2), "cfgWriteKey", app), { refused: "value-not-allowed" }],
+	["a key write with flags 3", audited(poke(poke(poke(frame(0x51, 0x20), 2, 0x39), 4, 0xe0), 5, 3), "cfgWriteKey", app), { refused: "value-not-allowed" }],
+	["a key write with a byte past its value", audited(poke(poke(frame(0x51, 0x20), 2, 0x39), 6, 0x01), "cfgWriteKey", app), { refused: "payload-overrun" }],
+	["the 16-key bulk write 0x51/0x21", audited(frame(0x51, 0x21), "cfgWriteKey", app), { refused: "unknown-command" }],
+	["the LED-zone flash write 0x51/0x01", audited(frame(0x51, 0x01), "cfgWriteKey", app), { refused: "unknown-command" }],
+	["the 0x50/0x55 save", audited(frame(0x50, 0x55), "cfgWriteKey", app), { refused: "unknown-command" }],
+	["the 0x50/0x10 store reset", audited(frame(0x50, 0x10), "cfgWriteKey", app), { refused: "unknown-command" }],
 	["RESET to IAP carrying a payload byte", audited(poke(frame(0x11, 0x00), 4, 0xde), "resetToIap", app), { refused: "payload-overrun" }],
 	["READ VERSION PAGE with junk in its last byte", audited(poke(frame(0x12, 0x20), 63, 0x01), "readVersionPage", app), { refused: "payload-overrun" }],
 	["SUM with a byte past its range", audited(poke(frame(0x1d, 0x01, 0x200, 34_268), 12, 0x01), "sum"), { refused: "payload-overrun" }],
@@ -361,5 +427,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 3 G1 caps, ${clearing.length + 4 + UNREVIEWED_ROWS.length} clearance, 2 capture, 8 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 4 G1 caps, ${clearing.length + 5 + UNREVIEWED_ROWS.length} clearance, 1 maturity, 2 capture, 11 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

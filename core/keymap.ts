@@ -3,10 +3,11 @@
  *
  * The board rebuilds its active keymap from ROM at every boot and applies a per-key override store on top. R4 said
  * the app has no flash-write path; the U10 static read found a serial-flash save of the block that holds the store,
- * so whether overrides survive a battery pull is open for U11. The host document is the user's intent, and applying
- * it is another convergence: read what the board holds, write the difference, read back.
+ * and the U11 static read found that a host key write lands in RAM only, so a power cycle restores the saved store.
+ * The host document is the user's intent, and applying it is another convergence: read what the board holds, write
+ * the difference, read back.
  *
- * Under G1 the two override reads are reviewed and the config writes unreviewed. `capabilities(clearance)` derives
+ * Under G1 the two override reads are confirmed, the gate rows and the key write reviewed. `capabilities(clearance)` derives
  * what is unlocked from COMMANDS and the same `clears` the egress audit uses, so the editor's locks and the wire gate
  * cannot disagree.
  */
@@ -296,7 +297,7 @@ export function planKeymap(
  *   session = start, or connect { modes: ["app"], reason: "connect" }    (update mode has no config channel)
  *   for each layer in doc: observed = layer 0 ? config.readLayer0() : config.readKey(layer, ...) per usage
  *   writes = planKeymap(doc, observed)
- *   for each write: config.setKey(write); progress(applying-keymap i of n)
+ *   config.openGate; for each write: config.writeKey(write); progress(applying-keymap i of n); config.closeGate
  *   if doc.osMode !== null: config.setOsMode(doc.osMode)
  *   read every touched layer back; a mismatch counts one attempt and loops (at most 3), then stops
  *   NotCleared -> stopped(gate). LinkLost -> reconnect and restart from the read, which is safe because writes are

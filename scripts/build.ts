@@ -6,6 +6,7 @@ export const PAGES = [
 	{ html: "lab/u1.html", entry: "lab/u1.ts", outdir: "dist-lab" },
 	{ html: "lab/u6.html", entry: "lab/u6.ts", outdir: "dist-lab-u6" },
 	{ html: "lab/u10.html", entry: "lab/u10.ts", outdir: "dist-lab-u10" },
+	{ html: "lab/u11.html", entry: "lab/u11.ts", outdir: "dist-lab-u11" },
 ] as const;
 
 const repo = join(import.meta.dir, "..");

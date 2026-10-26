@@ -83,6 +83,7 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 			{ t: 11, kind: "typing", chars: 3 },
 			{ t: 12, kind: "granted", productId: 0x1304 },
 			{ t: 13, kind: "precondition", key: "cableIn", met: true },
+			{ t: 14, kind: "attest", step: "keylog-usb", answer: true, keys: ["ControlLeft", "ControlLeft"] },
 		],
 	};
 	expect(parseTranscript(JSON.parse(JSON.stringify(transcript)))).toEqual(transcript);
@@ -97,5 +98,7 @@ test("parseTranscript accepts a round trip and names the first problem it finds"
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: "0", kind: "closed" }] })).toThrow(/t is not a number/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "lost", mode: "boot" }] })).toThrow(/entry 0: unknown mode boot/);
 	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "precondition", key: "cableIn", met: "yes" }] })).toThrow(/entry 0: met is not a boolean/);
+	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "attest", step: "keylog-usb", answer: "yes", keys: [] }] })).toThrow(/entry 0: answer is not a boolean/);
+	expect(() => parseTranscript({ ...transcript, entries: [{ t: 0, kind: "attest", step: "keylog-usb", answer: true, keys: [57] }] })).toThrow(/entry 0: keys is not an array of strings/);
 	expect(LinkLost.name).toBe("LinkLost");
 });
