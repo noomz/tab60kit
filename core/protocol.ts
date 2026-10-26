@@ -833,6 +833,18 @@ function u32Payload(value: number): Uint8Array {
  */
 const TRIES = 3;
 
+/** The vendor's Sleep 1000 between tries (U2 section 3). */
+const RETRY_WAIT_MS = 1_000;
+
+/**
+ * Before a resend on the same link: wait out a late answer to the frame that failed, then drop it, so it cannot
+ * answer the resend, whose bytes it may repeat.
+ */
+async function settle(ch: Channel): Promise<void> {
+	await ch.clock.sleep(RETRY_WAIT_MS, NEVER_ABORTED);
+	ch.link.discardPending();
+}
+
 /**
  * Sets the write address, reads it back, and requires the address set (U2 D4: the vendor's pair at 0x404F60). The pair
  * is retried as one unit on a refusal, a silence, or a different read-back; a lost link ends it at once.
@@ -848,6 +860,7 @@ async function setCursor(ch: Channel, offset: number): Promise<void> {
 		} catch (error) {
 			const retry = error instanceof DeviceRefused || error instanceof LinkTimeout || error instanceof CursorMismatch;
 			if (!retry || tries === TRIES) throw error;
+			await settle(ch);
 		}
 	}
 }
@@ -871,6 +884,7 @@ async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (don
 			} catch (error) {
 				const retry = error instanceof LinkTimeout || error instanceof WrongNextOffset;
 				if (!retry || tries === TRIES) throw error;
+				await settle(ch);
 			}
 		}
 		onChunk(i + 1, chunks);
@@ -1251,8 +1265,9 @@ class Iap implements IapSession {
 				await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
 				return;
 			} catch (error) {
+				if (!(error instanceof DeviceRefused || error instanceof LinkTimeout)) throw error;
+				await settle(this.ch);
 				if (error instanceof DeviceRefused) break;
-				if (!(error instanceof LinkTimeout)) throw error;
 			}
 		}
 		await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED);

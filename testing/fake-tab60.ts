@@ -770,7 +770,8 @@ interface Waiter {
 /**
  * On the real clock, input goes through the core's ReportQueue and its timers. On the virtual clock, the link keeps
  * its own inbox: a request's timeout fires only when the board reports an answer late or never, which advances the
- * clock to the reply or to the timeout, whichever comes first.
+ * clock to the reply or to the timeout, whichever comes first. An answer later than the timeout stays due at its own
+ * time, and arrives at the first wait or discard that reaches that time, as a late report would on a real link.
  */
 class FakeLink implements Link {
 	readonly #queue = new ReportQueue();
@@ -779,6 +780,8 @@ class FakeLink implements Link {
 	readonly #inbox: InReport[] = [];
 	#waiter: Waiter | null = null;
 	#late: { readonly ms: number; readonly deliver: () => void } | null = null;
+	/** Answers that missed their request's timeout, by the virtual time they arrive. */
+	readonly #due: { readonly at: number; readonly deliver: () => void }[] = [];
 	#endedBy: LinkLost | null = null;
 	#ended = false;
 	readonly lost: Promise<void>;
@@ -807,19 +810,35 @@ class FakeLink implements Link {
 	next(timeoutMs: number): Promise<InReport> {
 		if (this.#virtual === null) return this.#queue.next(timeoutMs);
 		if (this.#endedBy !== null) return Promise.reject(this.#endedBy);
+		this.#arrive(this.#virtual.now());
 		const queued = this.#inbox.shift();
 		if (queued !== undefined) return Promise.resolve(queued);
 		return new Promise<InReport>((resolve, reject) => {
 			const waiter = { timeoutMs, resolve, reject };
 			const late = this.#late;
 			this.#late = null;
-			if (late === null) this.#waiter = waiter;
-			else this.#settleLate(late, waiter);
+			if (late !== null) return this.#settleLate(late, waiter);
+			const due = this.#due[0];
+			const clock = this.#virtual;
+			if (due === undefined || clock === null || due.at > clock.now() + timeoutMs) {
+				this.#waiter = waiter;
+				return;
+			}
+			clock.advance(due.at - clock.now());
+			this.#waiter = waiter;
+			this.#arrive(clock.now());
 		});
 	}
 
 	discardPending(): readonly InReport[] {
-		return this.#virtual === null ? this.#queue.discardPending() : this.#inbox.splice(0);
+		if (this.#virtual === null) return this.#queue.discardPending();
+		this.#arrive(this.#virtual.now());
+		return this.#inbox.splice(0);
+	}
+
+	/** Delivers every late answer due by `now`, in order. */
+	#arrive(now: number): void {
+		while (this.#due.length > 0 && this.#due[0]!.at <= now) this.#due.shift()?.deliver();
 	}
 
 	async close(): Promise<void> {
@@ -843,6 +862,7 @@ class FakeLink implements Link {
 		if (this.#virtual === null) return this.#queue.end(error);
 		this.#endedBy = error;
 		this.#inbox.length = 0;
+		this.#due.length = 0;
 		this.#late = null;
 		this.#waiter?.reject(error);
 		this.#waiter = null;
@@ -866,6 +886,9 @@ class FakeLink implements Link {
 		}
 		clock.advance(waiter.timeoutMs);
 		waiter.reject(new LinkTimeout(`no input report within ${waiter.timeoutMs} ms`));
-		if (Number.isFinite(late.ms)) late.deliver();
+		if (Number.isFinite(late.ms)) {
+			this.#due.push({ at: clock.now() + late.ms - waiter.timeoutMs, deliver: late.deliver });
+			this.#due.sort((a, b) => a.at - b.at);
+		}
 	}
 }

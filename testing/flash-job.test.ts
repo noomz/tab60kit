@@ -4,6 +4,7 @@ import { type FlashableImage, imageBytes } from "../core/firmware";
 import type { JobState } from "../core/job";
 import { createKit } from "../core/kit";
 import { Busy, type DevicePort, PickCancelled } from "../core/port";
+import { type TranscriptEntry, recording } from "./transcript";
 import { FLASH_CLEARANCE } from "./drop-sweep";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { syntheticFlashable } from "./synthetic-image";
@@ -342,6 +343,26 @@ test("D5: a block that fails three times hands off to the loop, which erases and
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
 	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, VERSION_PAGE, APP_REGION]);
 	expect(ofCommand(board, 0x1f)).toHaveLength(100 + 3 + IMAGE_CHUNKS + 4);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+test("a late echo of a timed-out ERASE arrives during the 1 s wait before the resend and is dropped, so the resend waits for its own answer", async () => {
+	const board = fake({ ...holdsTarget, slowOnce: { cmd: 0x1d, sub: 0x00, mode: "iap", ms: 15_500, skip: 1 } });
+	const entries: TranscriptEntry[] = [];
+	const base = board.port();
+	const port: DevicePort = { ...base, open: async (want, signal) => recording(await base.open(want, signal), (entry) => entries.push(entry), () => board.clock.now()) };
+	const end = await createKit(port, FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, APP_REGION]);
+	const appErase = `1d000000${"00020000"}`;
+	const [first, second] = entries.flatMap((entry, i) => (entry.kind === "out" && entry.hex.startsWith(appErase) ? [i] : []));
+	if (first === undefined || second === undefined) throw new Error("no resend");
+	const between = entries.slice(first + 1, second);
+	expect(between.map((entry) => entry.kind)).toEqual(["discarded"]);
+	expect((entries[second]!.t) - (entries[first]!.t)).toBeGreaterThanOrEqual(15_000 + 1_000);
+	expect(entries[second + 1]).toMatchObject({ kind: "in", hex: expect.stringMatching(/^1d000000/) });
+	expect((entries[second + 1]!.t) - (entries[second]!.t)).toBeGreaterThan(0);
 	expect(board.violations).toEqual([]);
 	await bootsTarget(board, image);
 });
