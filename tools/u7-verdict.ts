@@ -11,9 +11,9 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { CATALOG, type CatalogEntry, type FlashableImage, imageBytes, readUpdater } from "../core/firmware";
+import { type CatalogEntry, type FlashableImage, imageBytes } from "../core/firmware";
 import { MAX_MISSING, PHRASE, TRIALS, parseKeylogTrial, summarizeTrial } from "../lab/keylog-trial";
-import { U7_STEPS, type U7Step, framesOutsideU7, u7Preconditions } from "../lab/u7-run";
+import { U7_STEPS, type U7Step, catalogImage, framesOutsideU7, u7Preconditions } from "../lab/u7-run";
 import { type Environment, type Transcript, type TranscriptEntry, parseTranscript } from "../testing/transcript";
 import { notRealBoardCleanBuild } from "./u1-verdict";
 
@@ -333,9 +333,6 @@ export function evaluateU7(transcript: Transcript, expected: U7Expected): readon
 }
 
 const USAGE = "usage: bun tools/u7-verdict.ts <transcript.json> --exe <Tab60firmwareV1.01.13.exe> [--out fixtures/u7-macos.json]";
-/** The image U7 flashes over itself: V1.01.13, US layout, the one CATALOG entry. */
-const V1_01_13 = "tab60-v1.01.13-us";
-
 function parseArgs(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): { readonly transcriptFile: string; readonly exe: string; readonly out: string | null } | string {
 	let transcriptFile: string | null = null;
 	let exe: string | null = env.TAB60_EXE ?? null;
@@ -352,16 +349,6 @@ function parseArgs(argv: readonly string[], env: Readonly<Record<string, string 
 	if (exe === null || exe === "") return "no exe: pass --exe or set TAB60_EXE";
 	if (out === "") return "--out needs a path";
 	return { transcriptFile, exe, out };
-}
-
-/** The V1.01.13 image the user's exe holds, admitted against CATALOG, or why not. */
-export async function catalogImage(exe: Uint8Array): Promise<FlashableImage | string> {
-	const reading = await readUpdater(exe);
-	if (reading.kind === "refused") return `the exe was refused: ${reading.refusal.code}`;
-	for (const candidate of reading.images) {
-		if (candidate.admission.kind === "admitted" && candidate.admission.image.entry.id === V1_01_13 && CATALOG.includes(candidate.admission.image.entry)) return candidate.admission.image;
-	}
-	return `the exe holds no admitted ${V1_01_13} image`;
 }
 
 export async function verdictMain(argv: readonly string[], env: Readonly<Record<string, string | undefined>> = process.env): Promise<number> {

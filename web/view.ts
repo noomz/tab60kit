@@ -60,7 +60,7 @@ const ACTIVITY: { readonly [K in Activity["kind"]]: (activity: Extract<Activity,
 	"link-lost": (a) => `The USB link dropped (${a.losses}). Reconnecting.`,
 };
 
-function activityText(activity: Activity): string {
+export function activityText(activity: Activity): string {
 	return (ACTIVITY[activity.kind] as (a: Activity) => string)(activity);
 }
 

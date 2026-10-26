@@ -5,7 +5,7 @@
  * Each wire step is one job on a fresh JobContext; the run never shares a session between steps.
  */
 import { type ChipState, deepCheck } from "../core/chip";
-import type { CatalogEntry, FlashableImage } from "../core/firmware";
+import { CATALOG, type CatalogEntry, type FlashableImage, readUpdater } from "../core/firmware";
 import { makeOfficial } from "../core/flash";
 import type { Activity, JobContext, JobEnd } from "../core/job";
 import type { DevicePort } from "../core/port";
@@ -95,7 +95,7 @@ export const U7_STEPS: readonly U7Step[] = [
 	{
 		kind: "user",
 		id: "bluetooth",
-		label: "Unplug USB. Switch the board to Bluetooth; the batteries keep it running. Click in the box below before you type.",
+		label: "Unplug USB. Switch the board to Bluetooth; the batteries keep it running. Three typing trials come next.",
 		question: "Is USB unplugged, and does the board type over Bluetooth on its batteries?",
 		keylog: null,
 	},
@@ -216,4 +216,17 @@ export function framesOutsideU7(entries: readonly TranscriptEntry[]): readonly s
 		const head = entry.kind === "out" ? entry.hex : entry.kind === "out-write" ? entry.header : null;
 		return head !== null && !U7_PAIRS.includes(head.slice(0, 4)) ? [head.slice(0, 8)] : [];
 	});
+}
+
+/** The image U7 flashes over itself: V1.01.13, US layout, the one CATALOG entry. */
+export const V1_01_13 = "tab60-v1.01.13-us";
+
+/** The V1.01.13 image the user's exe holds, admitted against CATALOG, or why not. */
+export async function catalogImage(exe: Uint8Array): Promise<FlashableImage | string> {
+	const reading = await readUpdater(exe);
+	if (reading.kind === "refused") return `the exe was refused: ${reading.refusal.code}`;
+	for (const candidate of reading.images) {
+		if (candidate.admission.kind === "admitted" && candidate.admission.image.entry.id === V1_01_13 && CATALOG.includes(candidate.admission.image.entry)) return candidate.admission.image;
+	}
+	return `the exe holds no admitted ${V1_01_13} image`;
 }
