@@ -18,7 +18,7 @@
 import { type AppChip, type ChipState, type IapChip, type ImageCheck, type PageState, home, leaveUpdateMode, observe } from "./chip";
 import { CATALOG, type FlashableImage } from "./firmware";
 import { type Activity, type Job, type JobContext, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
-import { type CommandName, CursorMismatch, DeviceRefused, IapAttachFailed, ModeDisagrees, ReadBackMismatch, type Session, WrongNextOffset, clears, connect, gateMessage } from "./protocol";
+import { CursorMismatch, DeviceRefused, FLASH_ROWS, IapAttachFailed, ModeDisagrees, ReadBackMismatch, type Session, WrongNextOffset, clears, connect, gateMessage } from "./protocol";
 
 export type AppStep = "done" | "enter-iap";
 export type IapStep = "erase-and-write-image" | "write-version-block" | "exit-to-app";
@@ -141,6 +141,9 @@ export interface FlashOptions {
 	readonly rewrite: boolean;
 }
 
+/** Answers the board gave that disagree with the step: a refusal, a read-back, a mode, a write ack, or a cursor. */
+const DISAGREEMENTS = [DeviceRefused, ReadBackMismatch, ModeDisagrees, WrongNextOffset, CursorMismatch] as const;
+
 /**
  * The flash job: observe, decide, act, and observe again, until the board is checked official or a budget runs out.
  * Any lost link, timeout, refusal, MCU reset, or cancel leaves the next run to start from a fresh observation.
@@ -148,12 +151,6 @@ export interface FlashOptions {
  * It recognizes CATALOG plus the entry it was asked to write. `admit` already proved that entry, so for a shipped
  * image this is CATALOG, and a test's synthetic image converges like a real one.
  */
-/** The rows a flash needs beyond the read and reset rows. A kit that cannot send them stops before the first frame. */
-const FLASH_ROWS = ["erase", "setWriteAddress", "getWriteAddress", "write"] as const satisfies readonly CommandName[];
-
-/** Answers the board gave that disagree with the step: a refusal, a read-back, a mode, a write ack, or a cursor. */
-const DISAGREEMENTS = [DeviceRefused, ReadBackMismatch, ModeDisagrees, WrongNextOffset, CursorMismatch] as const;
-
 export function makeOfficial(target: FlashableImage, options: FlashOptions = { rewrite: false }): Job {
 	const catalog = CATALOG.some((entry) => entry.id === target.entry.id) ? CATALOG : [...CATALOG, target.entry];
 	return async (start, ctx) => {

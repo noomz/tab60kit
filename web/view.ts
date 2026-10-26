@@ -17,7 +17,7 @@ import {
 	TAB60_KEYS,
 	type UpdaterReading,
 } from "@tab60kit/core";
-import type { Screen } from "./screens";
+import type { FlashOffer, Screen } from "./screens";
 
 export type Action = "connect" | "deep-check" | "make-official" | "apply" | "pick" | "cancel" | "skip";
 
@@ -197,25 +197,29 @@ export function admittedImage(reading: UpdaterReading | null): FlashableImage | 
 	return null;
 }
 
-const boardActions = (reading: UpdaterReading | null): readonly Action[] => ["connect", "deep-check", ...(admittedImage(reading) === null ? [] : ["make-official" as const])];
+const canMakeOfficial = ({ reading, blockedBy }: FlashOffer) => admittedImage(reading) !== null && blockedBy.length === 0;
+const boardActions = (flash: FlashOffer): readonly Action[] => ["connect", "deep-check", ...(canMakeOfficial(flash) ? ["make-official" as const] : [])];
 
-/** What the Board, result, and Stopped screens say about the dropped exe: each image's admission, and what Make official does first. */
-function readingLines(reading: UpdaterReading | null): readonly string[] {
+/**
+ * What the Board, result, and Stopped screens say about the dropped exe: each image's admission, and either what
+ * Make official does first or why this build cannot flash.
+ */
+function readingLines({ reading, blockedBy }: FlashOffer): readonly string[] {
 	if (reading === null) return ["To flash official firmware, drop Tab60firmwareV1.01.13.exe (from vortexgear.tw) on the file picker below. The page reads it here and uploads nothing."];
 	if (reading.kind === "refused") return [`That file is not a TAB 60 updater this page can read (${reading.refusal.code}).`];
 	const lines = reading.images.map(({ slot, layoutName, admission }) =>
 		admission.kind === "admitted" ? `Slot ${slot + 1}, ${layoutName}: official ${admission.image.entry.version}, ready to flash.` : `Slot ${slot + 1}, ${layoutName}: not flashable (${admission.refusal.code}).`,
 	);
-	if (admittedImage(reading) !== null) {
-		lines.push(
-			"Make official first checks the USB link for 15 seconds and writes nothing until it holds. Keep the cable still and this tab in front. The keyboard cannot type for about 35 seconds. If the cable drops, click Reconnect and pick whichever row appears.",
-		);
-	}
-	return lines;
+	if (admittedImage(reading) === null) return lines;
+	if (blockedBy.length > 0) return [...lines, `This build cannot flash yet: ${blockedBy[0]}.`];
+	return [
+		...lines,
+		"Make official first checks the USB link for 15 seconds and writes nothing until it holds. Keep the cable still and this tab in front. The keyboard cannot type from then until the page says the flash is done. If the cable drops, click Reconnect and pick whichever row appears.",
+	];
 }
 
 /** After a job, the exe's lines show once one was dropped; the Board screen alone prompts for one. */
-const droppedLines = (reading: UpdaterReading | null) => (reading === null ? [] : readingLines(reading));
+const droppedLines = (flash: FlashOffer) => (flash.reading === null ? [] : readingLines(flash));
 
 /** `needsClick` is the chooser's parked request: a pick then needs this page's click to open the chooser. */
 export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView {
@@ -247,7 +251,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 			};
 		}
 		case "board":
-			return { ...idle, title: "Your board", lines: readingLines(screen.reading), ...flashMap(screen.report), actions: boardActions(screen.reading) };
+			return { ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "progress":
 			return {
 				...idle,
@@ -258,9 +262,9 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 				holdStill: screen.holdStill,
 			};
 		case "result":
-			return { ...idle, title: resultText(screen.result), lines: droppedLines(screen.reading), ...flashMap(screen.report), actions: boardActions(screen.reading) };
+			return { ...idle, title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "stopped":
-			return { ...idle, title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.reading)], ...flashMap(screen.report), actions: boardActions(screen.reading) };
+			return { ...idle, title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "os-permission":
 			return {
 				...idle,

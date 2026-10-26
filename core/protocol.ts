@@ -448,6 +448,9 @@ export const COMMANDS = {
 
 export type CommandName = keyof typeof COMMANDS;
 
+/** The rows a flash needs beyond the read and reset rows. A kit that cannot send them stops before the first frame. */
+export const FLASH_ROWS = ["erase", "setWriteAddress", "getWriteAddress", "write"] as const satisfies readonly CommandName[];
+
 /** Every command name, in registry order. Object.keys of a const object is exactly its key union. */
 export const COMMAND_NAMES = Object.keys(COMMANDS) as readonly CommandName[];
 

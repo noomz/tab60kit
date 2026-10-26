@@ -35,9 +35,11 @@ test("progress holds still, with its banner and unload guard, only when the boar
 const report = { regions: [], boot: "normal-mode" } as unknown as ChipReport;
 /** Only `admit` builds a real handle; the view reads nothing but its entry. */
 const image = { entry: CATALOG[0] } as unknown as FlashableImage;
-const board = (reading: UpdaterReading | null) => viewFor({ name: "board", report, reading, keymapLockedBy: [], openFirmware: [] }, null);
+const unread = { reading: null, blockedBy: [] };
+const G1_ERASE = "Erase pages: reviewed, needs a capture on this board (gate G1)";
+const board = (reading: UpdaterReading | null, blockedBy: readonly string[] = []) => viewFor({ name: "board", report, flash: { reading, blockedBy }, keymapLockedBy: [], openFirmware: [] }, null);
 
-test("the Board screen offers Make official only for an admitted image, and says the link check comes first", () => {
+test("the Board screen offers Make official only for an admitted image G1 lets this kit flash, and says the link check comes first", () => {
 	expect(board(null).actions).toEqual(["connect", "deep-check"]);
 	expect(board(null).lines[0]).toStartWith("To flash official firmware, drop Tab60firmwareV1.01.13.exe");
 	expect(board({ kind: "refused", refusal: { code: "not-pe", detail: "x" } }).lines).toEqual(["That file is not a TAB 60 updater this page can read (not-pe)."]);
@@ -47,16 +49,21 @@ test("the Board screen offers Make official only for an admitted image, and says
 	expect(board(admitted).actions).toEqual(["connect", "deep-check", "make-official"]);
 	expect(board(admitted).lines[0]).toBe("Slot 1, US Layout: official V1.01.13, ready to flash.");
 	expect(board(admitted).lines[1]).toStartWith("Make official first checks the USB link for 15 seconds and writes nothing until it holds.");
+	expect(board(admitted).lines[1]).toContain("The keyboard cannot type from then until the page says the flash is done.");
+	expect(board(admitted, [G1_ERASE])).toMatchObject({
+		actions: ["connect", "deep-check"],
+		lines: ["Slot 1, US Layout: official V1.01.13, ready to flash.", `This build cannot flash yet: ${G1_ERASE}.`],
+	});
 	const refused = read({ kind: "refused", refusal: { code: "no-version-block" } });
 	expect(admittedImage(refused)).toBeNull();
 	expect(board(refused)).toMatchObject({ actions: ["connect", "deep-check"], lines: ["Slot 1, US Layout: not flashable (no-version-block)."] });
 });
 
 test("a stop names what to do next, and a cancel during the restart says where the board may be", () => {
-	const cancelled = viewFor({ name: "stopped", reason: { kind: "cancelled", during: { kind: "restarting", into: "iap" } }, report: null, reading: null }, null);
+	const cancelled = viewFor({ name: "stopped", reason: { kind: "cancelled", during: { kind: "restarting", into: "iap" } }, report: null, flash: unread }, null);
 	expect(cancelled.lines).toEqual(["Stopped. The board may be in update mode: click Connect to see where it is."]);
 	expect(cancelled.actions).toEqual(["connect", "deep-check"]);
-	const busy = viewFor({ name: "stopped", reason: { kind: "busy" }, report: null, reading: null }, null);
+	const busy = viewFor({ name: "stopped", reason: { kind: "busy" }, report: null, flash: unread }, null);
 	expect(busy.lines[0]).toContain("Another tab or program");
 });
 
@@ -65,18 +72,20 @@ test("a browser without WebHID gets the gate and no buttons", () => {
 });
 
 test("a Stop during Apply says the writes may be partial and offers Apply again; a closed-gate refusal says to pull the batteries", () => {
-	const partial = viewFor({ name: "stopped", reason: { kind: "cancelled", during: { kind: "applying-keymap", done: 2, total: 5 } }, report: null, reading: null }, null);
+	const partial = viewFor({ name: "stopped", reason: { kind: "cancelled", during: { kind: "applying-keymap", done: 2, total: 5 } }, report: null, flash: unread }, null);
 	expect(partial.lines[0]).toStartWith("Stopped during Apply: some keys may hold the new keymap and others not");
 	expect(partial.lines[0]).toContain("Click Apply again");
-	const held = viewFor({ name: "stopped", reason: { kind: "keymap", problem: { kind: "gate", when: "before", gate: 1 } }, report: null, reading: null }, null);
+	const held = viewFor({ name: "stopped", reason: { kind: "keymap", problem: { kind: "gate", when: "before", gate: 1 } }, report: null, flash: unread }, null);
 	expect(held.lines[0]).toContain("unplug USB with the batteries out");
 });
 
 test("after a job, the result and Stopped screens keep the dropped exe's lines and Make official", () => {
 	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
-	const stopped = viewFor({ name: "stopped", reason: { kind: "gate", blocked: "Erase pages: reviewed, needs a capture on this board (gate G1)" }, report: null, reading }, null);
+	const stopped = viewFor({ name: "stopped", reason: { kind: "busy" }, report: null, flash: { reading, blockedBy: [] } }, null);
 	expect(stopped.actions).toEqual(["connect", "deep-check", "make-official"]);
-	expect(stopped.lines[0]).toBe("This build cannot do that yet: Erase pages: reviewed, needs a capture on this board (gate G1).");
-	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, reading }, null).actions).toContain("make-official");
-	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, reading: null }, null)).toMatchObject({ lines: [], actions: ["connect", "deep-check"] });
+	expect(stopped.lines[1]).toBe("Slot 1, US Layout: official V1.01.13, ready to flash.");
+	const gated = viewFor({ name: "stopped", reason: { kind: "gate", blocked: G1_ERASE }, report: null, flash: { reading, blockedBy: [G1_ERASE] } }, null);
+	expect(gated.actions).toEqual(["connect", "deep-check"]);
+	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: { reading, blockedBy: [] } }, null).actions).toContain("make-official");
+	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: unread }, null)).toMatchObject({ lines: [], actions: ["connect", "deep-check"] });
 });

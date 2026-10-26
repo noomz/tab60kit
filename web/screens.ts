@@ -30,6 +30,15 @@ export type AppView =
 			readonly caps: ConfigCapabilities;
 	  };
 
+/**
+ * What Make official needs on the Board, result, and Stopped screens: the dropped exe's reading, kept across jobs, and
+ * one line per flash row G1 does not clear for this kit. The action shows only when that list is empty.
+ */
+export interface FlashOffer {
+	readonly reading: UpdaterReading | null;
+	readonly blockedBy: readonly string[];
+}
+
 export type Screen =
 	/** Firefox and Safari ship no WebHID (R3 B1, B2). */
 	| { readonly name: "browser-gate"; readonly why: "no-webhid" | "insecure-context" }
@@ -39,15 +48,14 @@ export type Screen =
 	| {
 			readonly name: "board";
 			readonly report: ChipReport;
-			readonly reading: UpdaterReading | null;
+			readonly flash: FlashOffer;
 			readonly keymapLockedBy: readonly string[];
 			readonly openFirmware: readonly OpenFirmwarePrerequisite[];
 	  }
 	/** `holdStill`: the board cannot type, so the page says not to unplug and blocks unload. */
 	| { readonly name: "progress"; readonly activity: Activity; readonly holdStill: boolean; readonly report: ChipReport | null }
-	/** `reading` is the dropped exe's, so Make official stays one click away after any job. */
-	| { readonly name: "result"; readonly result: JobResult; readonly report: ChipReport | null; readonly reading: UpdaterReading | null }
-	| { readonly name: "stopped"; readonly reason: StopReason; readonly report: ChipReport | null; readonly reading: UpdaterReading | null }
+	| { readonly name: "result"; readonly result: JobResult; readonly report: ChipReport | null; readonly flash: FlashOffer }
+	| { readonly name: "stopped"; readonly reason: StopReason; readonly report: ChipReport | null; readonly flash: FlashOffer }
 	| { readonly name: "os-permission"; readonly linuxRule: string };
 
 /**
@@ -69,13 +77,14 @@ export function screenFor(view: AppView): Screen {
 	if (view.kind === "unsupported") return { name: "browser-gate", why: view.why };
 	const { state } = view;
 	const flashMap = state.board ? report(state.board) : null;
+	const flash: FlashOffer = { reading: view.reading, blockedBy: view.caps.flashBlockedBy };
 	switch (state.kind) {
 		case "idle":
 			return state.board
 				? {
 						name: "board",
 						report: report(state.board),
-						reading: view.reading,
+						flash,
 						keymapLockedBy: view.caps.blockedBy,
 						openFirmware: OPEN_FIRMWARE_PREREQUISITES,
 					}
@@ -99,11 +108,11 @@ export function screenFor(view: AppView): Screen {
 				report: flashMap,
 			};
 		case "finished":
-			return { name: "result", result: state.result, report: flashMap, reading: view.reading };
+			return { name: "result", result: state.result, report: flashMap, flash };
 		case "stopped":
 			return state.reason.kind === "os-permission"
 				? { name: "os-permission", linuxRule: udevRules() }
-				: { name: "stopped", reason: state.reason, report: flashMap, reading: view.reading };
+				: { name: "stopped", reason: state.reason, report: flashMap, flash };
 		default: {
 			const exhaustive: never = state;
 			return exhaustive;

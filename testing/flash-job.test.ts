@@ -401,3 +401,10 @@ test("F4: writeVersionBlock throws FlashOrderBroken, sending nothing, unless the
 	await session.close();
 	expect(board.violations).toEqual([]);
 });
+
+test("a shipped kit lists every flash row as blocked by G1, so the page hides Make official; the flash clearance lists none", () => {
+	const blocked = createKit(fake().port()).capabilities().flashBlockedBy;
+	expect(blocked).toHaveLength(4);
+	expect(blocked[0]).toBe("Erase pages: reviewed, needs a capture on this board (gate G1)");
+	expect(createKit(fake().port(), FLASH_CLEARANCE).capabilities().flashBlockedBy).toEqual([]);
+});
