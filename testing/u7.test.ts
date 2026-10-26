@@ -6,10 +6,12 @@ import { imageBytes } from "../core/firmware";
 import type { DevicePort } from "../core/port";
 import { type KeylogTrial, PHRASE, perfectTrial } from "../lab/keylog-trial";
 import { U7_PRECONDITIONS, U7_STEPS, type UserStep, attestEntry, framesOutsideU7, runU7, u7Clearance, u7Preconditions } from "../lab/u7-run";
+import { FrameNotAllowed, U7_CURSORS, U7_ERASES, onlyU7Targets, u7Wrap } from "../lab/u7-frames";
 import { TITLES, evaluateU7, expectedFor, verdictMain } from "../tools/u7-verdict";
 import { startWebHidLab } from "../web/webhid-port";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
+import { ScriptedLink, fromHex } from "./scripted";
 import { syntheticFlashable } from "./synthetic-image";
 import { type Transcript, type TranscriptEntry, recording, replayPort } from "./transcript";
 
@@ -189,7 +191,7 @@ test(
 		const board = new FakeTab60({ starting: "official-image", versionBlock: imageBytes(image).versionBlock.bytes, target });
 		const entries: TranscriptEntry[] = [...ticks];
 		const { port, chooser } = startWebHidLab(new FakeHid(board, { rowAppearsInOpenChooser: ["app", "iap"], isActive: () => true }), new FakeLocks(), {
-			wrap: (link) => recording(link, (entry) => entries.push(entry)),
+			wrap: u7Wrap((entry) => entries.push(entry)),
 			onEvent: (event) => entries.push({ t: performance.now(), ...event }),
 		});
 		const clicker = setInterval(() => chooser.needsClick !== null && chooser.pick(), 1);
@@ -221,3 +223,21 @@ test(
 	},
 	60_000,
 );
+
+test("the lab wrap refuses, before the wire, an erase or a write address outside U7's set, and passes every one in it", async () => {
+	const inner = new ScriptedLink("iap");
+	const link = onlyU7Targets(inner);
+	const send = (hex: string) => link.send(fromHex(hex.padEnd(128, "0")) as never);
+	expect(U7_ERASES).toHaveLength(3);
+	expect(U7_CURSORS).toHaveLength(663);
+	for (const hex of [...U7_ERASES, ...U7_CURSORS]) await send(hex);
+	await send("1f340000" + "ab".repeat(52));
+	await send("12020000");
+	expect(inner.sent).toHaveLength(3 + 663 + 2);
+	await expect(send("1d000000" + "00040000" + "00020000")).rejects.toBeInstanceOf(FrameNotAllowed);
+	await expect(send("1d000000" + "00000000" + "00cc0100")).rejects.toBeInstanceOf(FrameNotAllowed);
+	await expect(send("1e010000" + "01020000")).rejects.toBeInstanceOf(FrameNotAllowed);
+	await expect(send("1e010000" + "d0000000")).rejects.toBeInstanceOf(FrameNotAllowed);
+	await expect(send("1e010000" + "00020000" + "01")).rejects.toBeInstanceOf(FrameNotAllowed);
+	expect(inner.sent).toHaveLength(3 + 663 + 2);
+});

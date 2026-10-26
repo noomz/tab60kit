@@ -9,11 +9,12 @@ import { type FlashableImage, imageBytes } from "../core/firmware";
 import { FakeTab60 } from "../testing/fake-tab60";
 import { FakeHid, FakeLocks } from "../testing/fake-webhid";
 import { syntheticFlashable } from "../testing/synthetic-image";
-import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
+import type { Transcript, TranscriptEntry } from "../testing/transcript";
 import { activityText } from "../web/view";
 import { startWebHidLab } from "../web/webhid-port";
 import { type KeyEvent, type KeylogTrial, PHRASE, perfectTrial } from "./keylog-trial";
 import { preconditionsLocked, tickedBoxes } from "./u1-state";
+import { u7Wrap } from "./u7-frames";
 import { type Attestation, DONT_PRESS, type TrialStep, U7_PRECONDITIONS, U7_ROWS, type UserStep, attestEntry, catalogImage, framesOutsideU7, runU7, u7Clearance, u7Preconditions } from "./u7-run";
 
 const fakeMode = new URLSearchParams(location.search).get("fake");
@@ -224,7 +225,7 @@ try {
 	const clearance = u7Clearance();
 	const { hid, locks } = hardware();
 	const { port, chooser } = startWebHidLab(hid, locks, {
-		wrap: (link) => recording(link, (entry) => entries.push(entry), now),
+		wrap: u7Wrap((entry) => entries.push(entry), now),
 		onEvent: (event) => entries.push({ t: now(), ...event }),
 	});
 	const recordVisibility = () => entries.push({ t: now(), kind: "visibility", state: document.visibilityState === "hidden" ? "hidden" : "visible" });
