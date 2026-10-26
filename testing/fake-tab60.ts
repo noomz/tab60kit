@@ -58,6 +58,18 @@ export interface FakeOptions {
 	readonly clock?: "real" | "virtual";
 	/** The order the IAP erases the pages of one ERASE, which R1 does not document. Default "descending", the order that punishes one ERASE over the whole window. */
 	readonly eraseOrder?: "descending" | "ascending";
+	/**
+	 * An IAP that takes only the vendor's erases, which all start at offset 0 (U2 audit section 5): an ERASE at any other
+	 * offset gets the FF AA marker naming 1D 00, or no answer, and erases nothing. Default: it takes any aligned range.
+	 */
+	readonly offsetErase?: "error-marker" | "silent";
+	/**
+	 * WRITE frames `at` to `at + times - 1`, counted from 0 across the run, go wrong: "no-reply" is never received,
+	 * "mute" is executed with its ack lost, and "wrong-next" is executed and acked with a next offset one word too far.
+	 */
+	readonly writeFault?: { readonly at: number; readonly times: number; readonly kind: "no-reply" | "mute" | "wrong-next" };
+	/** Get write address answers `at` to `at + times - 1`, counted from 0, report the cursor one word too far. */
+	readonly cursorFault?: { readonly at: number; readonly times: number };
 	/** SRAM 0x2000102B, the OS key mode the active keymap is built for: 0x10 (default), 0x20, or 0x40. */
 	readonly osKeyMode?: 0x10 | 0x20 | 0x40;
 	/** Entries of the key override store, by layer and matrix cell, written over the store the reset leaves (0xFF, plus the factory layer 2). */
@@ -277,6 +289,8 @@ export class FakeTab60 {
 	#slowOnce: NonNullable<FakeOptions["slowOnce"]> | null;
 	#slowSkip: number;
 	#packets = 0;
+	#writes = 0;
+	#cursorReads = 0;
 	/** The IAP's write address, a window offset, held in SRAM until the next MCU reset. */
 	#cursor: number | null = null;
 	/** The override store at SRAM 0x20000D24: usage byte per cell for layers 0..2, and the two flag bits per cell (unpacked). */
@@ -581,6 +595,9 @@ export class FakeTab60 {
 					this.#violations.push({ kind: "outside-window", cmd, offset, length });
 					return refuse();
 				}
+				if (sub === 0x00 && offset !== 0 && this.options.offsetErase !== undefined) {
+					return this.options.offsetErase === "error-marker" ? refuse() : this.#late(socket, Number.POSITIVE_INFINITY, () => undefined);
+				}
 				if (sub === 0x00) {
 					if (offset % PAGE_SIZE !== 0 || length % PAGE_SIZE !== 0) return refuse();
 					this.#erase(offset / PAGE_SIZE, length / PAGE_SIZE);
@@ -600,7 +617,21 @@ export class FakeTab60 {
 				this.#cursor = offset;
 				return reply(new Uint8Array(0));
 			}
+			// The vendor sends 0xFFFFFFFF and reads the cursor from bytes 4..7 (U2, 0x4089B0). A board with no cursor set
+			// answering all ones is a GUESS.
+			if (cmd === 0x1e && sub === 0x00) {
+				const n = this.#cursorReads++;
+				const fault = this.options.cursorFault;
+				const misreport = fault !== undefined && n >= fault.at && n < fault.at + fault.times;
+				const payload = new Uint8Array(4);
+				new DataView(payload.buffer).setUint32(0, this.#cursor === null ? 0xffffffff : this.#cursor + (misreport ? 4 : 0), true);
+				return reply(payload);
+			}
 			if (cmd === 0x1f && sub >= 1 && sub <= WRITE_CHUNK_BYTES) {
+				const n = this.#writes++;
+				const fault = this.options.writeFault;
+				const faulty = fault !== undefined && n >= fault.at && n < fault.at + fault.times ? fault.kind : null;
+				if (faulty === "no-reply") return this.#late(socket, Number.POSITIVE_INFINITY, () => undefined);
 				const at = this.#cursor;
 				if (at === null) return refuse();
 				if (at + sub > WINDOW_BYTES) {
@@ -610,12 +641,13 @@ export class FakeTab60 {
 				}
 				this.#write(at, bytes.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + sub));
 				this.#cursor = at + sub;
+				if (faulty === "mute") return this.#late(socket, Number.POSITIVE_INFINITY, () => undefined);
 				// R1's write ack: 1E 02, then the next write address, which the host compares with its own cursor.
 				const out = new Uint8Array(REPORT_BYTES);
 				out[0] = 0x1e;
 				out[1] = 0x02;
 				out.set(echo, 2);
-				new DataView(out.buffer).setUint32(PAYLOAD_OFFSET, this.#cursor, true);
+				new DataView(out.buffer).setUint32(PAYLOAD_OFFSET, this.#cursor + (faulty === "wrong-next" ? 4 : 0), true);
 				socket.report(out);
 				return;
 			}

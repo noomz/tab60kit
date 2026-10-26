@@ -166,6 +166,55 @@ test("WRITE lands at the address, acks with the next one, and clears bits only",
 	expect(board.violations).toEqual([{ kind: "outside-window", cmd: 0x1e, offset: WINDOW, length: 1 }]);
 });
 
+test("get write address answers the cursor in bytes 4..7, all ones before any set, and moves nothing", async () => {
+	const board = new FakeTab60({ starting: "update-mode-erased", target });
+	const { ask } = tap(board);
+	const get = `1e000000${u32(0xffffffff)}`;
+	expect(await ask(get)).toEqual([`1e000000${u32(0xffffffff)}`.padEnd(128, "0")]);
+	await ask(setAddress(0x200));
+	expect(await ask(get)).toEqual([`1e000000${u32(0x200)}`.padEnd(128, "0")]);
+	expect(await ask(write(Uint8Array.of(0)))).toEqual([`1e020000${u32(0x201)}`.padEnd(128, "0")]);
+	expect(board.violations).toEqual([]);
+});
+
+test("cursorFault misreports the chosen get write address answers by one word, and only those", async () => {
+	const board = new FakeTab60({ starting: "update-mode-erased", target, cursorFault: { at: 1, times: 2 } });
+	const { ask } = tap(board);
+	await ask(setAddress(0x200));
+	const got = [];
+	for (let i = 0; i < 4; i++) got.push((await ask(`1e000000${u32(0xffffffff)}`))[0]?.slice(8, 16));
+	expect(got).toEqual([u32(0x200), u32(0x204), u32(0x204), u32(0x200)]);
+});
+
+test("writeFault: no-reply writes nothing, mute writes and stays silent, wrong-next writes and acks one word too far", async () => {
+	for (const [kind, reply, cursorAfter] of [
+		["no-reply", [], 0x200],
+		["mute", [], 0x201],
+		["wrong-next", [`1e020000${u32(0x205)}`.padEnd(128, "0")], 0x201],
+	] as const) {
+		const board = new FakeTab60({ starting: "update-mode-erased", target, writeFault: { at: 1, times: 1, kind } });
+		const { ask } = tap(board);
+		await ask(setAddress(0x1ff));
+		expect(await ask(write(Uint8Array.of(0)))).toEqual([`1e020000${u32(0x200)}`.padEnd(128, "0")]);
+		expect(await ask(write(Uint8Array.of(0)))).toEqual([...reply]);
+		expect((await ask(`1e000000${u32(0xffffffff)}`))[0]?.slice(8, 16)).toBe(u32(cursorAfter));
+	}
+});
+
+test("offsetErase refuses an ERASE that starts past 0, by marker or by silence, and erases nothing; offset 0 still erases", async () => {
+	const marker = new FakeTab60({ starting: "update-mode-official-image", target, offsetErase: "error-marker" });
+	const asked = tap(marker);
+	expect(await asked.ask(erase(0x200, WINDOW - 0x200))).toEqual([`ffaa00001d000000`.padEnd(128, "0")]);
+	expect(await marker.bootTarget()).not.toEqual({ mode: "iap", versionPageSha256: "erased" });
+	expect(await asked.ask(erase(0, 0x200))).toEqual(["1d000000".padEnd(128, "0")]);
+	expect(await asked.ask(erase(0, WINDOW))).toEqual(["1d000000".padEnd(128, "0")]);
+	expect(await asked.ask(`1d010000${u32(0x200)}${u32(8)}`)).toEqual([`1d010000${u32(0xfffffffe)}`.padEnd(128, "0")]);
+	expect(marker.violations).toEqual([]);
+	const silent = new FakeTab60({ starting: "update-mode-official-image", target, offsetErase: "silent" });
+	expect(await tap(silent).ask(erase(0x200, WINDOW - 0x200))).toEqual([]);
+	expect((await silent.bootTarget()).mode).toBe("app");
+});
+
 test("a version block written over an image that does not sum to the target is a violation once its magic lands", async () => {
 	const block = syntheticVersionBlock();
 	for (const [starting, want] of [
