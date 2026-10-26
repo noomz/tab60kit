@@ -45,8 +45,9 @@ export type Screen =
 	  }
 	/** `holdStill`: the board cannot type, so the page says not to unplug and blocks unload. */
 	| { readonly name: "progress"; readonly activity: Activity; readonly holdStill: boolean; readonly report: ChipReport | null }
-	| { readonly name: "result"; readonly result: JobResult; readonly report: ChipReport | null }
-	| { readonly name: "stopped"; readonly reason: StopReason; readonly report: ChipReport | null }
+	/** `reading` is the dropped exe's, so Make official stays one click away after any job. */
+	| { readonly name: "result"; readonly result: JobResult; readonly report: ChipReport | null; readonly reading: UpdaterReading | null }
+	| { readonly name: "stopped"; readonly reason: StopReason; readonly report: ChipReport | null; readonly reading: UpdaterReading | null }
 	| { readonly name: "os-permission"; readonly linuxRule: string };
 
 /**
@@ -98,11 +99,11 @@ export function screenFor(view: AppView): Screen {
 				report: flashMap,
 			};
 		case "finished":
-			return { name: "result", result: state.result, report: flashMap };
+			return { name: "result", result: state.result, report: flashMap, reading: view.reading };
 		case "stopped":
 			return state.reason.kind === "os-permission"
 				? { name: "os-permission", linuxRule: udevRules() }
-				: { name: "stopped", reason: state.reason, report: flashMap };
+				: { name: "stopped", reason: state.reason, report: flashMap, reading: view.reading };
 		default: {
 			const exhaustive: never = state;
 			return exhaustive;
