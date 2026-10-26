@@ -142,14 +142,17 @@ const plannedKind = (step: U7Step) => (step.kind === "user" ? "attest" : "mark")
 const shownAs = (marker: Marker | undefined) => (marker === undefined ? "nothing" : `${marker.kind} ${marker.step}`);
 const check = (title: string, problems: readonly string[], ok: string): U7Check => ({ title, pass: problems.length === 0, detail: problems.length === 0 ? ok : problems.join("; ") });
 
-/** The link gate, from the probes the flash step sent on the erase's own link before the first ERASE. */
+/**
+ * The link gate, from the probes right before the first ERASE: the unbroken run of READ MODE frames on the erase's
+ * own link. The READ MODE an attach sends comes before other reads, so it never counts toward the 15 s.
+ */
 function gateProblems(frames: readonly Frame[]): { readonly problems: readonly string[]; readonly ok: string } {
 	const first = frames.findIndex((frame) => frame.head.startsWith("1d00"));
 	if (first === -1) return { problems: ["no ERASE was sent"], ok: "" };
 	const erase = frames[first]!;
 	let from = first;
-	while (from > 0 && !frames[from]!.newLink) from--;
-	const probes = frames.slice(from, first).filter((frame) => frame.head.startsWith("1202"));
+	while (from > 0 && !frames[from]!.newLink && frames[from - 1]!.head.startsWith("1202")) from--;
+	const probes = frames.slice(from, first);
 	const answered = probes.flatMap((frame) => (frame.reply !== null && frame.reply.hex.startsWith("12020000") && frame.reply.hex.slice(8, 10) === "00" ? [frame.reply.t] : []));
 	const silent = probes.length - answered.length;
 	const newest = answered.at(-1);
@@ -183,6 +186,8 @@ function eraseProblems(frames: readonly Frame[]): readonly string[] {
 		if (frame.reply === null) problems.push(`ERASE ${range(ranges[i]!)} got no answer before the next frame`);
 		else if (frame.reply.hex.slice(0, 4) !== "1d00") problems.push(`ERASE ${range(ranges[i]!)} was answered ${frame.reply.hex.slice(0, 16)}`);
 	});
+	const firstWrite = frames.findIndex((frame) => frame.head.startsWith("1e01") || frame.write !== null);
+	if (firstWrite !== -1 && frames.some((frame, i) => i > firstWrite && frame.head.startsWith("1d00"))) problems.push("an ERASE went out after the first write address or WRITE");
 	return problems;
 }
 
@@ -205,15 +210,21 @@ function cursorProblems(frames: readonly Frame[]): { readonly problems: readonly
 
 /**
  * Follows the board's cursor through the frames: a set the board echoed moves it, an acked WRITE advances it, and
- * anything else forgets it. Each WRITE's payload hash must be the expected chunk's at the cursor it went to.
+ * anything else forgets it. Each WRITE's payload hash must be the expected chunk's at the cursor it went to. A
+ * version-block chunk (below the image offset) must follow a SUM that read the image's sum after the last image WRITE.
  */
 function writeProblems(frames: readonly Frame[], expected: U7Expected): { readonly problems: readonly string[]; readonly ok: string } {
 	const problems: string[] = [];
 	const written = new Set<number>();
 	let cursor: number | null = null;
 	let sent = 0;
+	let imageSummed = false;
 	for (const frame of frames) {
 		if (frame.newLink) cursor = null;
+		if (frame.head.startsWith("1d01")) {
+			imageSummed = frame.reply?.hex.startsWith("1d01") === true && u32At(frame.reply.hex, 4) === expected.entry.image.wireSum32 >>> 0;
+			continue;
+		}
 		if (frame.head.startsWith("1e01")) {
 			cursor = frame.reply?.hex.startsWith("1e01") ? u32At(frame.hex!, 4) : null;
 			continue;
@@ -222,6 +233,8 @@ function writeProblems(frames: readonly Frame[], expected: U7Expected): { readon
 		sent++;
 		const at = cursor;
 		const want = at === null ? undefined : expected.chunks.get(at);
+		if (at !== null && at < IMAGE_OFFSET && !imageSummed) problems.push(`the version-block WRITE at ${hex32(at)} went out before a SUM read the written image`);
+		if (at !== null && at >= IMAGE_OFFSET) imageSummed = false;
 		if (at === null) problems.push(`a WRITE ${frame.head} went out with no known cursor`);
 		else if (want === undefined || want.bytes !== frame.write.bytes || want.sha256 !== frame.write.sha256) problems.push(`the WRITE at ${hex32(at)} does not match the chunk planned there`);
 		const acked = at !== null && frame.reply?.hex.startsWith("1e02") === true && u32At(frame.reply.hex, 4) === at + frame.write.bytes;

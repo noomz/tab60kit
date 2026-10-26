@@ -241,3 +241,57 @@ test("the lab wrap refuses, before the wire, an erase or a write address outside
 	await expect(send("1e010000" + "00020000" + "01")).rejects.toBeInstanceOf(FrameNotAllowed);
 	expect(inner.sent).toHaveLength(3 + 663 + 2);
 });
+
+/** The clean transcript's entries with the edit applied, and the indices it needs. */
+function edited(edit: (entries: TranscriptEntry[], at: { readonly erases: readonly number[]; readonly probes: readonly number[] }) => void): Transcript {
+	const entries = [...clean.transcript.entries];
+	const outs = entries.flatMap((entry, i) => (entry.kind === "out" ? [i] : []));
+	const erases = outs.filter((i) => (entries[i] as { hex: string }).hex.startsWith("1d00"));
+	const before = outs.filter((i) => i < erases[0]!);
+	let run = before.length;
+	while (run > 0 && (entries[before[run - 1]!] as { hex: string }).hex.startsWith("1202")) run--;
+	edit(entries, { erases, probes: before.slice(run) });
+	return { ...clean.transcript, entries };
+}
+const replyAfter = (entries: readonly TranscriptEntry[], out: number) => entries.findIndex((entry, i) => i > out && entry.kind === "in");
+
+test("M3: a gate of about 14.5 s fails, even though the attach's READ MODE answered under 1 s before the first probe", () => {
+	const short = edited((entries, { probes }) => {
+		const first = probes[0]!;
+		entries.splice(replyAfter(entries, first), 1);
+		entries.splice(first, 1);
+	});
+	const fails = failing(short);
+	expect(titlesOf(fails)).toEqual([TITLES.gate]);
+	expect(fails[0]).toMatch(/the probes answered for 14\.\d\d s without a gap over 1 s, not 15 s/);
+});
+
+test("L2: erases swapped, an erase unanswered, and a WRITE before the erases each fail the erase check", () => {
+	const swapped = edited((entries, { erases: [a, b] }) => {
+		const first = entries[a!]!;
+		entries[a!] = { ...first, hex: (entries[b!] as { hex: string }).hex } as TranscriptEntry;
+		entries[b!] = { ...entries[b!]!, hex: (first as { hex: string }).hex } as TranscriptEntry;
+	});
+	expect(failing(swapped)).toEqual([`${TITLES.erase} | the ERASEs were [0x200, 0x1ce00), [0x0, 0x200), planned [0x0, 0x200), [0x200, 0x1ce00)`]);
+	const unanswered = edited((entries, { erases }) => void entries.splice(replyAfter(entries, erases[1]!), 1));
+	expect(failing(unanswered)).toEqual([`${TITLES.erase} | ERASE [0x200, 0x1ce00) got no answer before the next frame`]);
+	const early = edited((entries, { probes }) => {
+		const write = entries.find((entry) => entry.kind === "out-write")!;
+		entries.splice(probes[0]!, 0, write);
+	});
+	const fails = failing(early);
+	expect(titlesOf(fails)).toEqual([TITLES.erase, TITLES.writes]);
+	expect(fails[0]).toBe(`${TITLES.erase} | an ERASE went out after the first write address or WRITE`);
+});
+
+test("L2: a version block written with no SUM of the written image before it fails the write check", () => {
+	const unsummed = edited((entries) => {
+		const block = entries.findIndex((entry) => entry.kind === "out" && entry.hex.startsWith("1e010000" + "00000000"));
+		let sum = block;
+		while (!(entries[sum]?.kind === "out" && (entries[sum] as { hex: string }).hex.startsWith("1d01"))) sum--;
+		entries.splice(sum, replyAfter(entries, sum) - sum + 1);
+	});
+	const fails = failing(unsummed);
+	expect(titlesOf(fails)).toEqual([TITLES.writes]);
+	expect(fails[0]).toContain("the version-block WRITE at 0x0 went out before a SUM read the written image");
+});
