@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Admission, ChipReport, UpdaterReading } from "@tab60kit/core";
-import { syntheticFlashable } from "../testing/synthetic-image";
+import { type Admission, CATALOG, type ChipReport, type FlashableImage, type UpdaterReading } from "@tab60kit/core";
 import { admittedImage, viewFor } from "./view";
 
 test("a parked pick shows a Pick button that names the row; an open chooser only says which row to pick", () => {
@@ -34,18 +33,19 @@ test("progress holds still, with its banner and unload guard, only when the boar
 });
 
 const report = { regions: [], boot: "normal-mode" } as unknown as ChipReport;
+/** Only `admit` builds a real handle; the view reads nothing but its entry. */
+const image = { entry: CATALOG[0] } as unknown as FlashableImage;
 const board = (reading: UpdaterReading | null) => viewFor({ name: "board", report, reading, keymapLockedBy: [], openFirmware: [] }, null);
 
-test("the Board screen offers Make official only for an admitted image, and says the link check comes first", async () => {
+test("the Board screen offers Make official only for an admitted image, and says the link check comes first", () => {
 	expect(board(null).actions).toEqual(["connect", "deep-check"]);
 	expect(board(null).lines[0]).toStartWith("To flash official firmware, drop Tab60firmwareV1.01.13.exe");
 	expect(board({ kind: "refused", refusal: { code: "not-pe", detail: "x" } }).lines).toEqual(["That file is not a TAB 60 updater this page can read (not-pe)."]);
-	const image = await syntheticFlashable();
 	const read = (admission: Admission): UpdaterReading => ({ kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission }] });
 	const admitted = read({ kind: "admitted", image });
 	expect(admittedImage(admitted)).toBe(image);
 	expect(board(admitted).actions).toEqual(["connect", "deep-check", "make-official"]);
-	expect(board(admitted).lines[0]).toBe("Slot 1, US Layout: official V9.99.99, ready to flash.");
+	expect(board(admitted).lines[0]).toBe("Slot 1, US Layout: official V1.01.13, ready to flash.");
 	expect(board(admitted).lines[1]).toStartWith("Make official first checks the USB link for 15 seconds and writes nothing until it holds.");
 	const refused = read({ kind: "refused", refusal: { code: "no-version-block" } });
 	expect(admittedImage(refused)).toBeNull();
@@ -72,8 +72,7 @@ test("a Stop during Apply says the writes may be partial and offers Apply again;
 	expect(held.lines[0]).toContain("unplug USB with the batteries out");
 });
 
-test("after a job, the result and Stopped screens keep the dropped exe's lines and Make official", async () => {
-	const image = await syntheticFlashable();
+test("after a job, the result and Stopped screens keep the dropped exe's lines and Make official", () => {
 	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
 	const stopped = viewFor({ name: "stopped", reason: { kind: "gate", blocked: "Erase pages: reviewed, needs a capture on this board (gate G1)" }, report: null, reading }, null);
 	expect(stopped.actions).toEqual(["connect", "deep-check", "make-official"]);
