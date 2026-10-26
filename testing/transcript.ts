@@ -315,8 +315,8 @@ function describeEntry(entry: WireEntry | undefined): string {
  * "out" entry (or match an "out-write" by header and payload hash), and each read gets the next "in" entry. An open
  * waits until the transcript reaches its "opened" entry, because the core asks for the update-mode link before the
  * RESET that makes it appear. A read that finds no "in" next times out, as it did when recorded. The clock is the
- * transcript's: it reads the time of the last entry consumed, and a sleep returns at once.
- * Entries the core does not cause (picks, visibility, typing, preconditions, discarded reports) are skipped.
+ * transcript's: it reads the time of the last entry consumed, and a sleep returns at once with the clock moved by its
+ * length. Entries the core does not cause (picks, visibility, typing, preconditions, discarded reports) are skipped.
  */
 export function replayPort(transcript: Transcript): ReplayPort {
 	const wire = transcript.entries.flatMap((entry, index) => (isWire(entry) ? [{ index, entry }] : []));
@@ -448,7 +448,11 @@ export function replayPort(transcript: Transcript): ReplayPort {
 		exclusive: (job) => job(),
 		clock: {
 			now: () => now,
-			sleep: async (_ms, signal) => signal.throwIfAborted(),
+			// A sleep moves the clock by its length, so the link gate judges the quiet time the recording saw.
+			sleep: async (ms, signal) => {
+				signal.throwIfAborted();
+				now += ms;
+			},
 		},
 		get divergence() {
 			return divergence;
