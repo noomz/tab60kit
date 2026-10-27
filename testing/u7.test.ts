@@ -13,7 +13,7 @@ import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
 import { ScriptedLink, fromHex } from "./scripted";
 import { syntheticFlashable } from "./synthetic-image";
-import { type Transcript, type TranscriptEntry, recording, replayPort } from "./transcript";
+import { type Transcript, type TranscriptEntry, replayPort } from "./transcript";
 
 const image = await syntheticFlashable();
 const expected = expectedFor(image);
@@ -37,7 +37,7 @@ async function runOnFake(user: User = {}, options: Partial<FakeOptions> = {}) {
 	const entries: TranscriptEntry[] = [...ticks];
 	const now = () => board.clock.now();
 	const base = board.port();
-	const port: DevicePort = { ...base, open: async (want, signal) => recording(await base.open(want, signal), (entry) => entries.push(entry), now) };
+	const port: DevicePort = { ...base, open: async (want, signal) => u7Wrap((entry) => entries.push(entry), now)(await base.open(want, signal)) };
 	let trial = 0;
 	const outcomes = await runU7({
 		port,
