@@ -1,13 +1,13 @@
 /**
- * The maav102 container inside the vendor updater exe. A pure port of tools/oracle/decode_updater.py.
- * The Python script stays the oracle: docs/units.md U3 runs both on the real exe and compares bytes.
+ * The maav102 container inside the vendor updater exe. A pure port of tools/oracle/decode_updater.py (format: docs/updater-package.md).
+ * The Python script stays the oracle: `bun run real-exe` runs both on the real exe and compares bytes.
  *
  * Reads bytes only. The exe is never executed (gate G2) and never leaves the user's machine.
  */
 import { EXPECTED_LAYOUT } from "./device";
 import { xorWords } from "./firmware";
 
-/** Each reason R2's extractor refuses with, so the UI can explain it. */
+/** Each reason the extractor refuses with (docs/updater-package.md "Refusals"), so the UI can explain it. */
 export type UpdaterRefusal =
 	| { readonly code: "not-pe"; readonly detail: string }
 	| { readonly code: "not-pe32"; readonly magic: number }

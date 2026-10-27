@@ -1,8 +1,8 @@
 /**
- * Plan U3's check on the vendor's own exe: the TypeScript extractor against its oracle, tools/oracle/decode_updater.py.
- * The exe is never committed, so this runs locally, before every release. It fails when its inputs are missing.
+ * Unit U3's check on the vendor's own exe: the TypeScript extractor against its oracle, tools/oracle/decode_updater.py.
+ * The exe is never committed, so this runs locally, before every release. It fails when the exe is missing.
  *
- * Run: TAB60_EXE=<Tab60firmwareV1.01.13.exe> TAB60_DECODER=<decode_updater.py> bun run real-exe
+ * Run: TAB60_EXE=<Tab60firmwareV1.01.13.exe> bun run real-exe. TAB60_DECODER overrides the oracle's path.
  */
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,9 +12,9 @@ import { type UpdaterContents, parseMaav102 } from "../core/updater";
 import { refusalCases, withImageByteFlipped } from "./updater-cases";
 
 const exePath = process.env.TAB60_EXE;
-const decoder = process.env.TAB60_DECODER;
-if (!exePath || !decoder) {
-	console.error("FAIL TAB60_EXE (the V1.01.13 updater) and TAB60_DECODER (tools/oracle/decode_updater.py) must both be set");
+const decoder = process.env.TAB60_DECODER ?? new URL("../tools/oracle/decode_updater.py", import.meta.url).pathname;
+if (!exePath) {
+	console.error("FAIL TAB60_EXE (the V1.01.13 updater) must be set");
 	process.exit(1);
 }
 
