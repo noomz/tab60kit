@@ -14,6 +14,12 @@
  *   - The window. Every address the frame carries, and the write cursor a WRITE lands on, must lie inside the window
  *     validated at attach. Erases must be page-aligned.
  * Only the audit makes an `OutReport`, the one type `Link.send` accepts.
+ *
+ * How the evidence was learned. The official updater and the V1.01.13 firmware it carries were read as bytes. They
+ * were never run, and no Vortex bytes are in this repository or redistributed. They were read only to learn the
+ * commands and data formats needed to talk to the keyboard. Every address in an evidence string cites V1.01.13 (the
+ * updater exe, or the app image linked at 0x3200), so anyone with the same files can check it. In those strings, R1
+ * means docs/protocol.md, R2 docs/updater-package.md, and R4 docs/app-firmware.md.
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
