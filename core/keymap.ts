@@ -7,13 +7,28 @@
  * The host document is the user's intent, and applying it is another convergence: read what the board holds, write
  * the difference, read back.
  *
- * Under G1 the two override reads are confirmed, the gate rows and the key write reviewed. `capabilities(clearance)` derives
+ * Under G1 the two override reads, the gate rows, and the key write are confirmed. `capabilities(clearance)` derives
  * what is unlocked from COMMANDS and the same `clears` the egress audit uses, so the editor's locks and the wire gate
  * cannot disagree.
  */
-import type { Job } from "./job";
-import { COMMANDS, COMMAND_NAMES, type Clearance, type CommandName, type CommandSpec, type OverrideEntry, clears, gateMessage } from "./protocol";
-import { type Brand, notImplemented } from "./units";
+import { MAX_LINK_LOSSES } from "./flash";
+import { type Activity, type Job, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
+import {
+	type AppSession,
+	COMMANDS,
+	COMMAND_NAMES,
+	type Clearance,
+	type CommandName,
+	type CommandSpec,
+	DeviceRefused,
+	type OverrideEntry,
+	type OverrideValue,
+	type Session,
+	clears,
+	connect,
+	gateMessage,
+} from "./protocol";
+import type { Brand } from "./units";
 
 /**
  * A key layer of the override store. sub_5E98 bounds its index at 0x2FF (layer << 8 | usage), and the reset clears
@@ -40,10 +55,11 @@ export function usage(n: number): Usage {
 	return n as Usage;
 }
 
+/** One cfgWriteKey frame Apply sends: the document's usage for a key, or no override where the document dropped one. */
 export interface KeyWrite {
 	readonly layer: Layer;
 	readonly key: KeyId;
-	readonly usage: Usage;
+	readonly value: OverrideValue;
 }
 
 /** The user's intent: overrides on top of the ROM defaults, per layer. Stored by the page, exported as JSON. */
@@ -158,6 +174,14 @@ export const LAYER_KEY_MARKERS: readonly { readonly cell: KeyId; readonly usage:
 	{ cell: keyId(54), usage: usage(0xd9), what: "Pn" },
 ];
 
+/**
+ * Whether Apply may write `key`. Fn and Pn are not: the store lookup skips their marker usages 0xD8..0xDF (0x51BC), so
+ * an override there never takes effect (U11 research, VERIFIED).
+ */
+export function canRemap(key: KeyId): boolean {
+	return LAYER_KEY_MARKERS.every((marker) => marker.cell !== key);
+}
+
 /** The 80-byte ROM keymap at flash 0xB205 as TAB60_KEYS and NON_CAP_CELLS describe it. `bun run real-image` checks it byte for byte. */
 export function romKeymap(): readonly Usage[] {
 	const cells = Array.from({ length: 80 }, () => usage(0));
@@ -193,6 +217,19 @@ export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: nu
 	] as const
 ).map(([k, code]) => ({ usage: usage(k), code }));
 const FACTORY_FLAGS = 1;
+
+/**
+ * The factory function code (flags 1, as flags << 8 | code) that the store reset writes on `key`, or null. The reset
+ * writes FACTORY_LAYER2 by cell under the Windows keymap, so the cell does not move with the OS key mode. Whether the
+ * board still holds it depends on its history (U10 board run 3 found Esc's pair missing), so this is what the reset
+ * leaves, not a read.
+ */
+export function factoryFunction(layer: Layer, key: KeyId): number | null {
+	if (layer !== 2) return null;
+	const atReset = reverseMap(activeKeymap("windows"));
+	const pair = FACTORY_LAYER2.find(({ usage: k }) => atReset.get(k) === key);
+	return pair === undefined ? null : (FACTORY_FLAGS << 8) | pair.code;
+}
 
 /** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
 function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
@@ -270,56 +307,198 @@ export function capabilities(clearance: Clearance): ConfigCapabilities {
 
 const ascending = (a: number, b: number) => a - b;
 
+const holds = (entry: OverrideEntry | undefined, value: OverrideValue) =>
+	entry !== undefined && (value.kind === "default" ? entry.kind === "default" : entry.kind === "override" && entry.flags === 0 && entry.code === value.code);
+
 /**
- * Pure diff: the overrides whose usage differs from what the board reports, by layer and then key. A cell without an
- * override is left alone, because the defaults above the base layer are unknown. A layer missing from `observed` gets
- * every override written.
+ * Pure diff, by layer and then key. A key the document overrides gets its usage unless the board already holds it.
+ * A key the document does not override but the board holds a flags-0 override for gets 0x00FF, so a key removed
+ * from the document loses its override at the next Apply: only a host write or an on-board recording makes a flags-0
+ * entry. An entry with flags set (the factory layer 2 function codes) is left alone unless the document overrides
+ * that key, because cfgWriteKey cannot write flags back. A layer missing from `observed` gets every override written.
  */
-export function planKeymap(
-	doc: KeymapDoc,
-	observed: ReadonlyMap<Layer, ReadonlyMap<KeyId, Usage>>,
-): readonly KeyWrite[] {
+export function planKeymap(doc: KeymapDoc, observed: ReadonlyMap<Layer, ReadonlyMap<KeyId, OverrideEntry>>): readonly KeyWrite[] {
 	const writes: KeyWrite[] = [];
-	for (const layer of [...doc.overrides.keys()].sort(ascending)) {
-		const keys = doc.overrides.get(layer)!;
-		const held = observed.get(layer);
-		for (const key of [...keys.keys()].sort(ascending)) {
-			const want = keys.get(key)!;
-			if (held?.get(key) !== want) writes.push({ layer, key, usage: want });
+	const none = new Map<KeyId, never>();
+	for (const layer of [...new Set([...doc.overrides.keys(), ...observed.keys()])].sort(ascending)) {
+		const wanted = doc.overrides.get(layer) ?? none;
+		const held = observed.get(layer) ?? none;
+		for (const key of [...new Set([...wanted.keys(), ...held.keys()])].sort(ascending)) {
+			const want = wanted.get(key);
+			const entry = held.get(key);
+			const value: OverrideValue | null =
+				want !== undefined ? { kind: "override", code: want, flags: 0 } : entry?.kind === "override" && entry.flags === 0 ? { kind: "default" } : null;
+			if (value !== null && !holds(entry, value)) writes.push({ layer, key, value });
 		}
 	}
 	return writes;
 }
 
+/** Why Apply stopped on a board that answered. Nothing past the first refused or mismatched write was sent. */
+export type KeymapProblem =
+	/** The usages layer 0 reports present differ from `mode`'s active keymap: another OS key mode, or Fn or Pn moved. Nothing was written. */
+	| { readonly kind: "mode-disagrees"; readonly mode: OsKeyMode; readonly missing: readonly number[]; readonly unexpected: readonly number[] }
+	/** The gate byte read `gate`: before Apply, neither closed nor 0x80 (another tool holds config mode); after the close, not 0. */
+	| { readonly kind: "gate"; readonly when: "before" | "after"; readonly gate: number }
+	/** The board answered with the error marker, as it does for a closed gate or a usage no key has. */
+	| { readonly kind: "refused"; readonly message: string }
+	/** A write's reply or the read after the writes did not hold the value written. The gate was closed afterwards. */
+	| { readonly kind: "read-back"; readonly layer: Layer; readonly key: KeyId; readonly want: string; readonly got: string };
+
+const LAYERS: readonly Layer[] = [0, 1, 2];
+const GATE_CLOSED = COMMANDS.gateClose.sub;
+const GATE_OPEN = COMMANDS.gateOpen.sub;
+
+const describeOverride = (entry: OverrideEntry | OverrideValue): string =>
+	entry.kind === "override" ? `0x${((entry.flags << 8) | entry.code).toString(16).padStart(4, "0")}` : entry.kind;
+
+/** Whether this job may have left the gate at 0x80. A stop after it opened, or found it open, closes it (timer 0 never expires). */
+interface GateHold {
+	open: boolean;
+}
+
 /**
- * The apply job, a convergence like the flash job but in SRAM.
- * TODO:
- *   session = start, or connect { modes: ["app"], reason: "connect" }    (update mode has no config channel)
- *   for each layer in doc: observed = layer 0 ? config.readLayer0() : config.readKey(layer, ...) per usage
- *   writes = planKeymap(doc, observed)
- *   config.openGate; for each write: config.writeKey(write); progress(applying-keymap i of n); config.closeGate
- *   if doc.osMode !== null: config.setOsMode(doc.osMode)
- *   read every touched layer back; a mismatch counts one attempt and loops (at most 3), then stops
- *   NotCleared -> stopped(gate). LinkLost -> reconnect and restart from the read, which is safe because writes are
- *   idempotent; as in flash.ts, a loss resets the attempt count.
+ * One pass on an open normal-mode session: query the gate, read layer 0 and check its presence set against `mode`,
+ * read layers 1 and 2 for each remappable cap, write the plan with the gate at 0x80, read every write back, close the
+ * gate, and query it. A board that already holds the document, with the gate closed, gets no write and no gate frame.
  */
-export function applyKeymap(doc: KeymapDoc): Job {
-	return async (start, ctx) =>
-		notImplemented(`applyKeymap(${doc.overrides.size} layers) from ${String(start?.mode)}, aborted=${ctx.signal.aborted}`);
+async function converge(
+	app: AppSession,
+	doc: KeymapDoc,
+	mode: OsKeyMode,
+	signal: AbortSignal,
+	progress: (activity: Activity) => void,
+	hold: GateHold,
+): Promise<{ readonly writes: number } | { readonly problem: KeymapProblem }> {
+	const { config } = app;
+	const before = await config.queryGate(signal);
+	if (before.gate !== GATE_CLOSED && before.gate !== GATE_OPEN) return { problem: { kind: "gate", when: "before", gate: before.gate } };
+	hold.open = before.gate === GATE_OPEN;
+	const layer0 = await config.readLayer0(signal);
+	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
+	const want = new Set(presentUsages(mode));
+	const missing = [...want].filter((k) => !present.has(k));
+	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
+	let problem: KeymapProblem | null = missing.length > 0 || unexpected.length > 0 ? { kind: "mode-disagrees", mode, missing, unexpected } : null;
+
+	const active = activeKeymap(mode);
+	const usageOf = (key: KeyId) => {
+		if (!canRemap(key)) throw new RangeError(`key ${key} is Fn or Pn, which no override changes`);
+		return usage(active[key]!);
+	};
+	const observed = new Map<Layer, Map<KeyId, OverrideEntry>>();
+	for (const layer of problem === null ? LAYERS : []) {
+		const keys = new Map<KeyId, OverrideEntry>();
+		for (const { id } of TAB60_KEYS) {
+			if (!canRemap(id)) continue;
+			keys.set(id, layer === 0 ? (layer0.get(usageOf(id)) ?? { kind: "absent" }) : await config.readKey(layer, usageOf(id), signal));
+		}
+		observed.set(layer, keys);
+	}
+	const writes = problem === null ? planKeymap(doc, observed) : [];
+	const mismatch = (write: KeyWrite, got: OverrideEntry): KeymapProblem => ({ kind: "read-back", layer: write.layer, key: write.key, want: describeOverride(write.value), got: describeOverride(got) });
+	if (writes.length > 0) {
+		if (!hold.open) {
+			hold.open = true;
+			await config.openGate(signal);
+		}
+		for (const [done, write] of writes.entries()) {
+			progress({ kind: "applying-keymap", done, total: writes.length });
+			const got = await config.writeKey(write.layer, usageOf(write.key), write.value, signal);
+			if (!holds(got, write.value)) {
+				problem = mismatch(write, got);
+				break;
+			}
+		}
+		for (const write of problem === null ? writes : []) {
+			const got = await config.readKey(write.layer, usageOf(write.key), signal);
+			if (!holds(got, write.value)) {
+				problem = mismatch(write, got);
+				break;
+			}
+		}
+	}
+	if (hold.open) {
+		await config.closeGate(signal);
+		hold.open = false;
+		const after = await config.queryGate(signal);
+		if (problem === null && after.gate !== GATE_CLOSED) problem = { kind: "gate", when: "after", gate: after.gate };
+	}
+	return problem === null ? { writes: writes.length } : { problem };
+}
+
+/**
+ * The apply job, a convergence like the flash job but in SRAM. `mode` is the board's OS key mode, which decides the
+ * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
+ * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
+ * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
+ * from the reads, which is safe because the writes are idempotent. Any other stop after the gate opened sends a
+ * close first, on its own signal so a Stop still reaches the board. A document with an OS mode stops before any frame:
+ * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
+ */
+export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
+	return async (start, ctx) => {
+		const stopped = (reason: StopReason, end: Session | null): JobEnd => ({ kind: "stopped", reason, session: end, board: null });
+		if (doc.osMode !== null) return stopped({ kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, start);
+		let session: Session | null = start;
+		let losses = 0;
+		let during: Activity | null = null;
+		const hold: GateHold = { open: false };
+		const progress = (activity: Activity) => {
+			during = activity;
+			ctx.progress(activity);
+		};
+		for (;;) {
+			try {
+				if (session?.mode !== "app") {
+					await session?.close();
+					session = null;
+					progress({ kind: "reading" });
+					const opened = await connect(ctx, { modes: ["app"], reason: losses > 0 ? "after-link-loss" : "connect" });
+					if ("refusal" in opened) {
+						await opened.close();
+						return stopped({ kind: "board-refused", refusal: opened.refusal }, null);
+					}
+					session = opened;
+				}
+				const outcome = await converge(session, doc, mode, ctx.signal, progress, hold);
+				if ("problem" in outcome) return stopped({ kind: "keymap", problem: outcome.problem }, session);
+				return { kind: "finished", result: { kind: "keymap-applied", writes: outcome.writes }, session, board: null };
+			} catch (error) {
+				if (hold.open && !isLinkFailure(error) && session?.mode === "app") {
+					await session.config.closeGate(new AbortController().signal).catch(() => undefined);
+					hold.open = false;
+				}
+				await session?.close().catch(() => undefined);
+				session = null;
+				if (isLinkFailure(error)) {
+					if (++losses > MAX_LINK_LOSSES) return stopped({ kind: "too-many-link-losses", losses }, null);
+					progress({ kind: "link-lost", losses });
+					continue;
+				}
+				if (error instanceof DeviceRefused) return stopped({ kind: "keymap", problem: { kind: "refused", message: error.message } }, null);
+				const reason = stopReasonFor(error, ctx.signal, during);
+				if (reason === null) throw error;
+				return stopped(reason, null);
+			}
+		}
+	};
 }
 
 const FORMAT = "tab60kit-keymap";
 const VERSION = 1;
 const FIELDS = ["format", "version", "osMode", "overrides"] as const;
-const LAYERS: readonly string[] = ["0", "1", "2"];
-const CAP_IDS: ReadonlySet<number> = new Set(TAB60_KEYS.map((cap) => cap.id));
+const LAYER_NAMES: readonly string[] = ["0", "1", "2"];
+const REMAPPABLE_IDS: ReadonlySet<number> = new Set(TAB60_KEYS.flatMap((cap) => (canRemap(cap.id) ? [cap.id] : [])));
+/** sub_5E98 refuses a value of 0x0003, which reads back as "absent". */
+const ABSENT_CODE = 0x03;
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
  * Boundary parse for an imported file or stored JSON, the shape `serializeKeymapDoc` writes. Every field is required,
  * and an unknown field, layer, key, or usage is an error naming its path, never dropped. A key is the decimal id of a
- * cap in TAB60_KEYS. An empty layer object parses to an empty map, so the round trip is exact. Object.keys lists
+ * cap in TAB60_KEYS that `canRemap`. An empty layer object parses to an empty map, so the round trip is exact. Object.keys lists
  * array-index keys ascending, so the maps come out sorted.
  */
 export function parseKeymapDoc(json: unknown): KeymapDoc | { readonly error: string } {
@@ -340,16 +519,16 @@ export function parseKeymapDoc(json: unknown): KeymapDoc | { readonly error: str
 	const overrides = new Map<Layer, ReadonlyMap<KeyId, Usage>>();
 	for (const layer of Object.keys(json.overrides)) {
 		const path = `$.overrides.${layer}`;
-		if (!LAYERS.includes(layer)) return error(path, "is not a layer from 0 to 2");
+		if (!LAYER_NAMES.includes(layer)) return error(path, "is not a layer from 0 to 2");
 		const keys = json.overrides[layer];
 		if (!isObject(keys)) return error(path, "is not an object");
 		const layerMap = new Map<KeyId, Usage>();
 		for (const key of Object.keys(keys)) {
 			const id = Number(key);
-			if (String(id) !== key || !CAP_IDS.has(id)) return error(`${path}.${key}`, "is not the id of a TAB 60 cap");
+			if (String(id) !== key || !REMAPPABLE_IDS.has(id)) return error(`${path}.${key}`, "is not the id of a TAB 60 cap other than Fn and Pn");
 			const value = keys[key];
-			if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 0xe7) {
-				return error(`${path}.${key}`, `is ${JSON.stringify(value)}, not an integer from 0 to 231 (0xE7)`);
+			if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 0xe7 || value === ABSENT_CODE) {
+				return error(`${path}.${key}`, `is ${JSON.stringify(value)}, not an integer from 0 to 231 (0xE7) other than 3`);
 			}
 			layerMap.set(keyId(id), usage(value as number));
 		}

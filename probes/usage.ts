@@ -50,7 +50,7 @@ async function applyCapsToCtrl(): Promise<JobState | undefined> {
 		return undefined;
 	}
 	const base: Layer = 0;
-	return kit.applyKeymap({ overrides: new Map([[base, new Map([[keyId(4), usage(0xe0)]])]]), osMode: null });
+	return kit.applyKeymap({ overrides: new Map([[base, new Map([[keyId(4), usage(0xe0)]])]]), osMode: null }, "windows");
 }
 
 void [onExeDrop, applyCapsToCtrl];

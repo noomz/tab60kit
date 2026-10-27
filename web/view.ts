@@ -3,10 +3,10 @@
  * app.ts draws it. Every Record and switch is exhaustive, so a new activity, finding, or stop reason fails to compile
  * until it has its words.
  */
-import type { Activity, BootTarget, ChipReport, DeviceWant, Finding, JobResult, StopReason } from "@tab60kit/core";
+import { type Activity, type BootTarget, type ChipReport, type DeviceWant, type Finding, type JobResult, type KeymapProblem, type OsKeyMode, type StopReason, TAB60_KEYS } from "@tab60kit/core";
 import type { Screen } from "./screens";
 
-export type Action = "connect" | "deep-check" | "pick" | "cancel" | "skip";
+export type Action = "connect" | "deep-check" | "apply" | "pick" | "cancel" | "skip";
 
 export interface FlashRow {
 	readonly region: string;
@@ -95,9 +95,43 @@ function flashMap(report: ChipReport | null): Pick<PageView, "flashMap" | "boot"
 	};
 }
 
+export const OS_KEY_MODE_NAME: Readonly<Record<OsKeyMode, string>> = {
+	windows: "Windows (Fn+Q)",
+	mac: "Mac (Fn+W)",
+	"caps-ctrl": "Caps/Ctrl swap (Fn+E)",
+};
+
+const UNDO = "Unplugging USB with the batteries out for 10 seconds undoes every write Apply made.";
+const gateByte = (gate: number) => `0x${gate.toString(16).padStart(2, "0")}`;
+const usages = (list: readonly number[]) => list.map(gateByte).join(" ");
+
+function keymapText(problem: KeymapProblem): string {
+	switch (problem.kind) {
+		case "mode-disagrees":
+			return `The board's keys do not match OS key mode ${OS_KEY_MODE_NAME[problem.mode]}${problem.missing.length > 0 ? `: no key has ${usages(problem.missing)}` : ""}${problem.unexpected.length > 0 ? `${problem.missing.length > 0 ? ", and" : ":"} a key has ${usages(problem.unexpected)}` : ""}. Choose the mode the board runs in and apply again. If Fn or Pn was moved, this editor cannot address the keys. Nothing was written.`;
+		case "gate":
+			return problem.when === "before"
+				? `Another tool holds the board's config gate (it reads ${gateByte(problem.gate)}). Close that tool, then unplug USB with the batteries out for 10 seconds and plug USB back in, which clears the gate, and apply again. Nothing was written.`
+				: `The board's config gate still reads ${gateByte(problem.gate)} after Apply closed it. ${UNDO}`;
+		case "refused":
+			return `The board refused a write (${problem.message}). ${UNDO}`;
+		case "read-back": {
+			const legend = TAB60_KEYS.find((cap) => cap.id === problem.key)?.legend ?? `key ${problem.key}`;
+			return `${legend} on layer ${problem.layer} reads back ${problem.got}, not ${problem.want}. ${UNDO}`;
+		}
+		default: {
+			const exhaustive: never = problem;
+			return exhaustive;
+		}
+	}
+}
+
 function stopText(reason: StopReason): string {
 	switch (reason.kind) {
 		case "cancelled":
+			if (reason.during?.kind === "applying-keymap") {
+				return `Stopped during Apply: some keys may hold the new keymap and others not, and the config gate may still be open if the board missed the close. Click Apply again to finish. ${UNDO}`;
+			}
 			return reason.during?.kind === "restarting" && reason.during.into === "iap"
 				? "Stopped. The board may be in update mode: click Connect to see where it is."
 				: "Stopped.";
@@ -113,6 +147,8 @@ function stopText(reason: StopReason): string {
 			return `The board refused the same step three times (${reason.step}). Click Connect to see where it is.`;
 		case "too-many-link-losses":
 			return `The USB link dropped ${reason.losses} times. Try another cable or port, then click Connect.`;
+		case "keymap":
+			return keymapText(reason.problem);
 		case "error":
 			return `Something went wrong in this tool: ${reason.message}`;
 		default: {
