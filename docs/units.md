@@ -17,7 +17,7 @@ No hardware unit runs before a wired USB stability test passes, and no unit that
 | U4 | Property tests over the flash window and the egress audit | no | Done | |
 | U5 | Fake board, convergence loop, link gate, drop sweep | no | Done | |
 | U6 | Connect and Deep check in the shipped page | yes | Confirmed 2026-10-18, macOS | `testing/fixtures/tab60kit-u6-*.json` |
-| U7 | First write: V1.01.13 over itself | yes | **In progress. Not in this release** | |
+| U7 | First write: V1.01.13 over itself | yes | Confirmed 2026-10-28, macOS | `fixtures/u7-macos.json` |
 | U8 | Drop drill: unplug during a write, then resume | yes | Not started. Runs only if the maintainer chooses to risk it | |
 | U9 | Keymap model and the 61-key table | no | Done | local only (`bun run real-image`) |
 | U10 | Read the key override store | yes | Confirmed 2026-10-19, macOS | `fixtures/u10-macos.json` |
@@ -53,7 +53,7 @@ No hardware unit runs before a wired USB stability test passes, and no unit that
 
 **U6.** Two deep checks from the shipped page give transcripts identical apart from timing, with U1's command sequence.
 
-**U7.** The link gate holds for 15 s before the first ERASE. The board gets two ERASE commands (version page, then app region) and 663 writes whose payload hashes match the image and the version block. A deep check afterwards passes. A keylog trial over Bluetooth on batteries passes. Then `erase`, `setWriteAddress`, and `write` move to "confirmed".
+**U7.** The link gate holds for 15 s before the first ERASE. The board gets two ERASE commands (version page, then app region) and 663 writes whose payload hashes match the image and the version block. A deep check afterwards passes. A keylog trial over Bluetooth on batteries passes. Every set write address is read back with get write address. Then `erase`, `setWriteAddress`, `write`, and `getWriteAddress` move to "confirmed". Passed on 2026-10-28: both ERASEs answered with no fallback, all 663 chunks matched with none resent, and 0 of 162 characters missed over Bluetooth.
 
 **U8.** Unplug the cable during the image write. The board comes back in update mode with an erased version page, one Reconnect resumes the job, and a deep check passes. If nothing enumerates, recovery moves to the vendor updater on a Windows PC, and then to SWD.
 

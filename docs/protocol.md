@@ -74,20 +74,21 @@ The table lists every command tab60kit may send for flashing and for reading the
 | `12/20..22` | READ VERSION PAGE, part i | none | 60 bytes of absolute `0x3000 + 60*i` | app, IAP | VERIFIED |
 | `11/00` | RESET to IAP | none | none. The board re-enumerates | app | VERIFIED |
 | `11/01` | RESET to app | none | none. The board re-enumerates | IAP | VERIFIED |
-| `1D/00` | ERASE | u32 offset, u32 length | echo, sent when the erase is done | IAP | VERIFIED. Page granular |
+| `1D/00` | ERASE | u32 offset, u32 length | echo, sent when the erase is done | IAP | VERIFIED. Page granular. Confirmed on the board (U7) |
 | `1D/01` | SUM | u32 offset, u32 length | u32 sum | IAP | VERIFIED |
 | `1D/02` | CRC | u32 offset, u32 length | u32 CRC-32 | IAP | VERIFIED in pok3rtool. The vendor updater never sends it |
 | `1E/01` | SET WRITE ADDRESS | u32 offset | echo | IAP | VERIFIED |
+| `1E/00` | GET WRITE ADDRESS | u32 `FF FF FF FF` | u32 cursor | IAP | VERIFIED. Confirmed on the board (U7) |
 | `1F/n` | WRITE n bytes (n up to 52) | n bytes of encoded image | `1E 02` + u32 next offset | IAP | VERIFIED |
 
 Notes on single commands:
 
 - **READ FW INFO.** The 4 bytes at `0x3C00` come back as `04 00 02 00` on this board. The vendor updater reads the u16 at payload bytes 2..3 (value 2) and uses it to pick a version part (`12 22`). It does not use it as a write address. VERIFIED. tab60kit never compares this value.
 - **READ VERSION PAGE.** The board serves parts 0 to 7. The tool reads parts 0 to 2, which is the 180-byte version block. VERIFIED. Part i answers `12 20+i`.
-- **ERASE.** In the vendor updater the offset is always 0. A range that starts above 0 has no vendor precedent. VERIFIED. The vendor timeout is `max(500 ms, floor(length / 10240) * 1000 ms)`, which is 11 s for the whole window. A single page needs 500 ms. VERIFIED.
+- **ERASE.** In the vendor updater the offset is always 0. A range that starts above 0 has no vendor precedent. VERIFIED. On the board, the IAP answered an ERASE at offset `0x200` (U7). The vendor timeout is `max(500 ms, floor(length / 10240) * 1000 ms)`, which is 11 s for the whole window. A single page needs 500 ms. VERIFIED.
 - **SUM.** The 32-bit wrapping sum of the encoded image's LE u32 words. VERIFIED. See [Image encoding](#image-encoding-and-checksums).
 - **CRC.** Standard CRC-32 (reflected polynomial `0x04C11DB7`, init and xorout `0xFFFFFFFF`) of the encoded image. VERIFIED in pok3rtool source. Not sent by the vendor updater, so tab60kit treats it as a lower-evidence check.
-- **SET WRITE ADDRESS.** The vendor updater always follows a SET with a GET (`1E 00`, payload `FF FF FF FF`, reply u32 = cursor) and accepts only an equal value. VERIFIED. tab60kit does not send GET WRITE ADDRESS. Its timeout in the vendor updater is 1000 ms.
+- **SET WRITE ADDRESS.** The vendor updater always follows a SET with a GET (`1E 00`, payload `FF FF FF FF`, reply u32 = cursor) and accepts only an equal value. VERIFIED. tab60kit does the same: it reads back every SET with a GET and retries the pair as one unit. On the board, GET returned the value set (U7). The SET timeout in the vendor updater is 1000 ms, and tab60kit uses it.
 - **WRITE.** `sub` is the payload length. Both pok3rtool and the vendor updater send 52-byte chunks from the image start. VERIFIED. 52 bytes is one period of the XOR key, so keep that chunking. If the bootloader restarts the key at every chunk, other sizes would decode wrong. INFERRED.
 - **Other commands.** PING (`10 02`), DISCONNECT USB (`11 02`) and READ ANY ADDRESS (`12 FF`, patched firmware only) exist but tab60kit does not send them. The normal firmware also has a key-configuration command set (`41`, `51`, `52`). It is outside this document.
 
@@ -186,8 +187,8 @@ Prove the image, erase, write the image, write the version block last, boot.
 
 1. **Prove the image.** Check the firmware file against the catalog (size and hashes) before any command leaves.
 2. **Attach.** Read BL info. Refuse the board if the identity or the layout numbers differ from [BL info block](#bl-info-block). In normal mode, send `11 00` and reconnect as `04D9:1304`.
-3. **Erase.** Two ERASE commands: first the version page `[0, 0x200)`, then the app region `[0x200, 0x1CE00)`. Erasing the version page first means that any interruption afterwards leaves the board in update mode (see [Boot rule](#boot-rule)).
-4. **Write the image.** `1E 01` with offset `0x200`, then `1F` writes of 52 bytes (`sub` = `0x34`) of the encoded image, the last one shorter. Check each ack's next offset.
+3. **Erase.** Two ERASE commands: first the version page `[0, 0x200)`, then the app region `[0x200, 0x1CE00)`. Erasing the version page first means that any interruption afterwards leaves the board in update mode (see [Boot rule](#boot-rule)). If the IAP refuses the app-region ERASE with `FF AA`, or leaves it unanswered three times, send the vendor's one ERASE over `[0, 0x1CE00)`. Only after the version-page ERASE was answered.
+4. **Write the image.** `1E 01` with offset `0x200`, read back with `1E 00`, then `1F` writes of 52 bytes (`sub` = `0x34`) of the encoded image, the last one shorter. Check each ack's next offset. On a missing or wrong ack, wait 1 s, drop pending reports, set and read back the cursor at the block start, and resend, up to three tries. Then observe the board again.
 5. **Check.** SUM over the image (and CRC where allowed). Compare with the catalog. On a mismatch, go back to step 3. Do not write the version block.
 6. **Write the version block last.** `1E 01` with offset 0, then four `1F` writes (52, 52, 52, 24 bytes). Read parts 0 to 2 back and compare.
 7. **Boot.** `11 01`, then wait for `04D9:0304`.
@@ -219,15 +220,15 @@ pok3rtool 2.0 (Python): reset to IAP, read BL info, one ERASE of `[0, fw_pages *
 
 | Topic | tab60kit | Vendor updater | pok3rtool 2.0 |
 |---|---|---|---|
-| Erase | Two commands: `[0, 0x200)`, then `[0x200, 0x1CE00)` | One command `[0, 0x1CE00)`. Page 0 alone is erased only in recovery | One command `[0, fw_pages * page_size)` |
-| Erase offsets | One above 0. This has no vendor precedent | Always 0 | Always 0 |
-| Write cursor read-back | Not sent (`1E 00` is not in the command list) | Every SET is followed by a GET, retried | Confirms with `1E 00` |
+| Erase | Two commands: `[0, 0x200)`, then `[0x200, 0x1CE00)`. Falls back to one `[0, 0x1CE00)` if the IAP refuses the second | One command `[0, 0x1CE00)`. Page 0 alone is erased only in recovery | One command `[0, fw_pages * page_size)` |
+| Erase offsets | One above 0. No vendor precedent, but the board answered it (U7) | Always 0 | Always 0 |
+| Write cursor read-back | Every SET is followed by a GET, retried as a pair | Every SET is followed by a GET, retried | Confirms with `1E 00` |
 | Checks | SUM, and CRC where allowed | SUM only | SUM and CRC |
 | Version block | Written last, from the catalog | Written last. Re-erase and rewrite once on a bad read-back | Written last, but synthesized, in UTF-8 |
 | On failure | Leaves the version page erased | Erases `[0, 0x400)` | Not known |
 | Mode check | Product ID, and READ MODE | Product ID only | READ MODE |
 
-- The vendor erases the whole window in one command. tab60kit uses two, so that the version page is gone before any app page changes. A single erase would depend on the bootloader erasing pages in ascending order, which nothing documents. This is a design choice, not vendor behavior. The second erase starts above offset 0, which the vendor never does.
+- The vendor erases the whole window in one command. tab60kit uses two, so that the version page is gone before any app page changes. A single erase would depend on the bootloader erasing pages in ascending order, which nothing documents. This is a design choice, not vendor behavior. The second erase starts above offset 0, which the vendor never does. If the IAP refuses it, tab60kit falls back to the vendor's one ERASE, which is safe then because the version page is already erased.
 - The vendor's failure erase destroys the first app page. tab60kit does not copy that.
 - The vendor updater has one quirk in its version-block rewrite path: it does not reset the write cursor to 0 before rewriting. INFERRED from the code. tab60kit does not copy it.
 
@@ -236,5 +237,5 @@ pok3rtool 2.0 (Python): reset to IAP, read BL info, one ERASE of `[0, fw_pages *
 - **pok3rtool**, the open tool for these boards: https://github.com/pok3r-custom/pok3rtool . Read: the Python 2.0 code (`cykb.py`, `device.py`, `package.py`) and the older C++ code (`proto_cykb.cpp`, `kbscan.cpp`). The sources were read, not run.
 - **pok3r_re_firmware**, the reverse-engineering notes, decoded firmware images and sibling bootloader dumps: https://github.com/pok3r-custom/pok3r_re_firmware . It includes a decoded V1.01.13 TAB 60 image and a Holtek user manual for the HT32F52342/52352.
 - **The official V1.01.13 updater**, read as bytes, never run or redistributed. Addresses such as "updater 0x40xxxx" are virtual addresses in that executable (image base `0x400000`).
-- **Recorded sessions** in `fixtures/` of this repo: `u1-macos.json` (units U1, read-only checks in both modes: mode, BL info, device descriptors), `u10-macos.json` and `u11-macos.json` (app-mode key configuration reads and writes), and `u12-macos.json`. These are the board-side evidence for the VERIFIED labels that say "on the board".
-- Not covered by any source: a recorded TAB 60 flash by an open tool, a TAB 60 bootloader dump, the chip marking, and the flash lock state.
+- **Recorded sessions** in `fixtures/` of this repo: `u1-macos.json` (units U1, read-only checks in both modes: mode, BL info, device descriptors), `u10-macos.json` and `u11-macos.json` (app-mode key configuration reads and writes), `u12-macos.json`, and `u7-macos.json` (the first write: V1.01.13 over itself, 745 frames). These are the board-side evidence for the VERIFIED labels that say "on the board".
+- Not covered by any source: an `FF AA` reply from the TAB 60 IAP (none came in U7), a TAB 60 bootloader dump, the chip marking, and the flash lock state.

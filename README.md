@@ -1,156 +1,108 @@
 # tab60kit
 
-tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page that reaches the board over WebHID in Chrome or Edge, built on a TypeScript core. This tree holds plan units U0 (the scaffold), U1 (the bootloader round trip and the read-only deep check, behind a lab page), U3 (the extractor for the vendor updater package, and image admission), U4 (property tests over the flash window and the egress audit), U5 (the flash job, the link gate, the check jobs, and the kit, proved against the fake board by a drop sweep), U6 (the shipped page: Connect, Deep check, and the flash map), U9 (the keymap model: the 61-key table, the keymap diff, and the keymap file parse), U10 (the read of the key override store, behind a lab page), U11 (one key write in RAM and its gate, behind a lab page), U12 (the keymap editor on the shipped page's Board screen, and its lab page), and U7 (the first write, its lab page, and its verdict). Plan U7's board run passed on 2026-10-28 (`fixtures/u7-macos.json`), so the erase, set and get write address, and write rows are confirmed and a shipped kit offers Make official. The U10 and U11 rows are confirmed, so a shipped kit applies a keymap. Plan U12's board run passed on 2026-10-24 (`fixtures/u12-macos.json`).
+tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page. It talks to the keyboard over WebHID in Chrome or Edge. You build it and run it on your own computer. Nothing is installed, and nothing leaves your computer.
 
-The design and the units live in [`docs/`](docs/), in `design.md` and `units.md`.
+**tab60kit is not affiliated with, endorsed by, or supported by Vortex or Vortexgear.** "Vortex" and "TAB 60" are their names. They are used here only to say which keyboard this tool is for. Do not ask Vortex for help with this tool.
 
-## Run the checks
+> **Status: early. Use at your own risk.** The checks, the keymap editor, and the firmware write are tested on one board, on macOS. Linux and Windows hosts are not tested yet.
 
-You need Bun 1.3.13 and Node.js, which runs `tsc`.
+## What works today
+
+Each feature below was tested on a real TAB 60 that runs the official firmware V1.01.13. "Confirmed" means a recorded session on the board passed every check. The recording is in `fixtures/`.
+
+| Feature | State | Tested |
+|---|---|---|
+| Connect, and read the firmware mode and bootloader info | Confirmed | 2026-10-12, macOS, Chrome |
+| Deep check: restart into the bootloader, read the version page and the flash checksum, restart back. Reads only, nothing is written | Confirmed | 2026-10-12 and 2026-10-18, macOS, Chrome |
+| Read the per-key override store (three layers) | Confirmed | 2026-10-19, macOS, Chrome |
+| Keymap editor: change keys on three layers, apply them to the board in RAM, keep the keymap in the browser | Confirmed | 2026-10-24, macOS, Chrome |
+| Make official: write the official V1.01.13 firmware, taken from your copy of the official updater, then check it | Confirmed | 2026-10-28, macOS, Chrome |
+| Linux | Expected to work with a udev rule. Not tested | not yet |
+| Windows | Not tested | not yet |
+
+What "confirmed" means: the tool keeps a list of every command it may send. The shipped page may send a command only after a recorded session on a real board confirms it. The code checks every outgoing byte against that list before the byte leaves. See [docs/design.md](docs/design.md) "Gates".
+
+## Safety
+
+Read this before you connect your keyboard.
+
+**Firmware flashing can brick the keyboard.** Make official erases and rewrites the firmware. It erases the version page first and writes it last, so an interrupted write leaves the keyboard in update mode, where it does not type, and you can run Make official again. Keep the USB cable still and the tab in front until the page reports. The firmware write is tested only on macOS. The official Vortex updater for Windows can usually recover it. If the bootloader itself cannot recover, the board needs an SWD programmer.
+
+**Key changes are RAM only, and are lost at power off.** The keymap editor writes keys to the keyboard's RAM. It does not save them to the keyboard's flash. Unplug USB with the batteries out, and the keyboard returns to its saved keymap. The page keeps your keymap in the browser, so one click on Apply puts it back.
+
+**Some keys and key combinations save to flash.** These are part of the stock firmware, not tab60kit. Each combination below fires after you hold it for about 3 seconds:
+
+| Hold | What the firmware does |
+|---|---|
+| Pn + R | Resets the whole current profile (all layers, not one layer) and saves it |
+| Left Alt + Right Alt | Factory reset of all profiles, and saves them |
+| Left GUI + Right Alt + Space | Toggles a profile setting and saves the current profile |
+| Fn + Left Shift, or Pn + Left Shift | Moves the Fn or Pn key (profiles 1 to 4) and saves the profile |
+| Fn + Right Alt, held while the keyboard powers on | Toggles a profile setting and saves the current profile |
+
+Some single key presses also save the current profile: the OS key mode keys (Fn + Q, W, or E), Win lock, the layout key, and some lighting keys. See [docs/app-firmware.md](docs/app-firmware.md) "Key combinations that save to flash".
+
+From reading the firmware, we believe that a save of the current profile also saves any keys that tab60kit wrote to RAM. We have not tested this on a board. If you do not want your changes saved on the keyboard, do not press these keys while your changes are applied. Switching to another profile reloads it from flash and drops the keys written in RAM.
+
+**One program at a time.** Close the Vortex updater and any other keyboard tool before you connect. Two programs that send commands at once can mix their packets.
+
+## Browser support
+
+| Browser | Works |
+|---|---|
+| Chrome or Edge on macOS | Yes (tested) |
+| Chrome or Edge on Linux | Needs a udev rule. The page shows the exact rule. Not tested |
+| Chrome or Edge on Windows | Not tested |
+| Firefox, Safari | No. They do not support WebHID |
+
+WebHID needs a secure context. `http://127.0.0.1` works. `file://` does not.
+
+## Build and run
+
+You need [Bun](https://bun.sh) 1.3.13 and Node.js.
 
 ```sh
 bun install --frozen-lockfile
+bun run build
+python3 -m http.server --bind 127.0.0.1 --directory dist 8000
+```
+
+Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Fn + Q Windows, Fn + W Mac, Fn + E Caps/Ctrl swap), change keys, and click Apply.
+
+To run the test suite that CI runs:
+
+```sh
 bun run check
 ```
 
-`bun run check` runs the same steps as CI (`.github/workflows/ci.yml`), in this order:
+`check` takes a few minutes, because of the drop sweep. The developer notes, the lab pages, and the hardware checks are in [docs/development.md](docs/development.md).
 
-1. `bun run typecheck` runs `tsc` on `tsconfig.json`. It runs again on `tsconfig.browser.json`, which checks the code that ships to the page without Node or Bun types.
-2. `bun test` runs the unit tests. They cover the policy checks in `probes/policy.test.ts`, the package-exports test, and the protocol, chip, port, fake-board, transcript, and U1 tests under `testing/`. The U1 tests include the recovery cases, one run per `?fake` mode, and a reduced U1 sweep. The CSP test builds every page into a temp dir. `testing/egress-property.test.ts` holds plan U4's property tests. It sends 10,000 random BL info payloads through `connect` and 100,000 random frames and contexts through the egress audit, from fixed seeds. Every frame the audit passes must stay inside the window, by expectations the test writes for itself. `testing/updater.test.ts` holds plan U3's tests. They run the extractor and `admit` on a synthetic package that `testing/maav102.ts` builds, because the repo holds no vendor bytes, and on twelve mutated copies that the extractor must refuse. `testing/flash-job.test.ts` holds plan U5's scenario tests on the fake board's virtual clock: a whole flash, the link gate after a timeout, a chooser cancelled after the reset, a cancel mid-write, a shipped kit's Make official with rewrite off, G1 under a clearance without the flash rows (nothing is sent), refusals that must stay bounded, the gate on the link a refusal reopens, the kit's one-job rule and error state, and the check jobs. `testing/replay.test.ts` replays the two 2026-10-12 U1 transcripts through `replayPort` and today's core with no divergence, and shows that the 2026-10-10 transcript, recorded before attach read the version page in update mode, diverges. `testing/keymap.test.ts` holds plan U9's tests: the shape of the 61-key table, a property test that applies `planKeymap`'s writes for 10,000 random documents, and the keymap file parse, with every rejection and a round trip of 1,000 random documents, from fixed seeds. It also holds plan U10's store prediction for each OS key mode: the presence set in the U10 research note, the factory layer 2 overrides, and in Mac mode the 30 layer 2 entries board run 1 read. `testing/protocol.test.ts` holds the override entry parse. `testing/u10.test.ts` runs the U10 lab read on the fake board through the WebHID shell and checks every frame it sends. `testing/u11.test.ts` runs the U11 guided run on the fake board the same way, with the test as the user, and runs `tools/u11-verdict.ts` on a clean transcript and on one broken copy per check. `testing/keymap-apply.test.ts` runs plan U12's apply job on the fake board through a shipped kit: the five-key apply and its frames, a second Apply that sends nothing, a power cycle and one Apply that restores, a removed key, a Mac board under a Windows Apply, a refused gate open, a refused write, a mismatched read-back, a lost link, and a document with an OS mode. `web/keymap-store.test.ts` and `web/editor.test.ts` cover the editor's storage and its edits. `testing/u12.test.ts` runs the U12 guided run on the fake board across a simulated reload and runs `tools/u12-verdict.ts` on a clean transcript and on broken copies. `testing/flash-job.test.ts` also holds the U7 rulings on the fake board: the window-erase fallback (D1), the write address read back after every set (D4), and the block resend (D5), each with its hand-off to the flash loop. `testing/u7.test.ts` runs the U7 guided run on the fake board, runs `tools/u7-verdict.ts` on it and on one broken copy per check, and runs the page's path through the WebHID shell on the real clock and replays that transcript. `testing/keylog-trial.test.ts` covers the keylog harness's counts.
-3. `bun run probes` runs `probes/run.sh`. Each type probe must fail to compile with the error it predicts, and the control and usage files must compile. The boundaries lint must pass on the tree and fail on each mutated copy. The property test must fail on a copy whose `inWindow` accepts one page past the end. The drop sweep must fail on a copy whose `decideInIap` writes the version block over an unrecognized image and on a copy whose `eraseWindow` sends one ERASE over the whole window, and the link-gate scenario must fail on a copy that writes before `judgeLink` says stable. The script ends with `failures: 0` when every check passes.
-4. `bun run reconcile` runs the flash-loop model in `testing/reconcile-model.ts`. It throws if the synthesized loop has a problem run.
-5. `bun run drop-sweep` runs `testing/drop-sweep.ts`: the kit's flash job against the fake board, from six starts (including a board that already holds the target and a valid page over a damaged image), against four IAPs (one that takes the app-region ERASE, one that refuses it with FF AA, one that never answers it, so the window-erase fallback runs, and one that loses the ack of WRITE 100, so that block is resent), with `rewrite` off and on, losing the link at every packet, both before the board sees it and after it executed it with the reply lost, with and without an MCU reset. Each of the 117,496 runs must finish official, leave no board violation, and leave the board booting normal mode over the image's version block. The fake erases the pages of one ERASE from the top down. With no arguments it runs one process per start and IAP, about 45 s on an Apple M4 Max. Pass start or IAP names (`erases`, `error-marker`, `silent`, `mute-write`) to sweep only those, in one process.
+## Firmware files
 
-## Check the extractor on the vendor's exe
+The repository holds no Vortex firmware and no Vortex software. To check or write firmware, you give the page your own copy of the official updater. The page reads the firmware out of it in the browser. It never runs the updater and never uploads it. The page accepts only firmware whose SHA-256 matches its catalog (today, V1.01.13).
 
-The vendor's updater is never committed, so two checks run outside CI. Run them before every release:
+## How we know the protocol
 
-```sh
-TAB60_EXE=<Tab60firmwareV1.01.13.exe> TAB60_DECODER=<decode_updater.py> bun run real-exe
-```
+The protocol comes from three sources: public prior art ([pok3rtool](https://github.com/pok3r-custom/pok3rtool) and [pok3r_re_firmware](https://github.com/pok3r-custom/pok3r_re_firmware)), the official updater and firmware, and recorded sessions on a real board.
 
-`TAB60_DECODER` is the Python extractor from the research notes, the oracle for this port, and it needs `python3`. The script fails when either variable is unset. It compares the TypeScript output with the oracle's byte for byte, checks the catalog's hashes and checksums, runs the twelve mutations on the real exe, and requires `admit` to admit V1.01.13 and to refuse it with one byte flipped.
+The official updater and the V1.01.13 firmware it carries were read as bytes. They were never run, and no Vortex bytes are in this repository or redistributed. They were read only to learn the commands and data formats needed to talk to the keyboard. Every address in the code and the docs cites V1.01.13, so anyone with the same files can check it.
 
-```sh
-TAB60_EXE=<Tab60firmwareV1.01.13.exe> bun run real-image
-```
+Every command in `core/protocol.ts` names where it is known from and how far it is confirmed.
 
-This check reads the exe through `readUpdater` and compares the default usage of every key in `TAB60_KEYS` with the ROM keymap at flash 0xB205 in the plain image. It also checks the four matrix cells that are not keys on this board, and that the table rebuilds all 80 ROM bytes. Then it checks plan U10's tables against the image: the 31 factory layer 2 pairs at flash 0xB2D6 and the 0xD8 after them, the swap pairs of each OS key mode at 0xAA25 and 0xAA21, and the Fn and Pn cells at 0xAA14. Last, `predictLayers` for every mode and layer must equal a prediction computed from the ROM bytes alone, entry by entry. It fails when `TAB60_EXE` is unset or any byte differs.
+| Document | What it covers |
+|---|---|
+| [docs/protocol.md](docs/protocol.md) | Packet format, both modes, flash map, version page, flash sequence |
+| [docs/app-firmware.md](docs/app-firmware.md) | App commands, key override store, config gate, keys that save to flash |
+| [docs/updater-package.md](docs/updater-package.md) | How the firmware is stored in the official updater, and how it is extracted |
+| [docs/webhid.md](docs/webhid.md) | Browser and platform facts, and the Linux udev rule |
+| [docs/design.md](docs/design.md) | How the code is shaped, and where each safety rule lives |
+| [docs/units.md](docs/units.md) | The units of work (U0 to U15), their checks, and their status |
+| [docs/development.md](docs/development.md) | Build, tests, lab pages, and hardware checks |
 
-## Build the page
+## Report a problem
 
-```sh
-bun run build
-```
+For anything that could brick a keyboard or damage saved settings, follow [SECURITY.md](SECURITY.md). Do not open a public issue for those. For other bugs, open an issue.
 
-The build writes `dist/index.html` and `dist/main.js`, and the lab pages `dist-lab/u1.html`, `dist-lab-u6/u6.html`, `dist-lab-u10/u10.html`, `dist-lab-u11/u11.html`, `dist-lab-u12/u12.html`, and `dist-lab-u7/u7.html` with their scripts. Chrome does not load module scripts from `file://`, so serve a directory over HTTP, for example with `python3 -m http.server --directory dist 8000`. Then open `http://127.0.0.1:8000` in Chrome or Edge. WebHID needs a secure context, and `127.0.0.1` is one.
+## License
 
-## The U6 lab page
-
-`dist-lab-u6/u6.html` runs the shipped page's app (`web/app.ts`) and records a transcript. Its clearance names exactly the seven U1 rows, which is what a shipped kit sends. Add `?fake` to run it on the fake board.
-
-For plan U6's hardware check, build from a clean commit, then do this twice: open the page, click Connect, then Deep check, pick the board each time the chooser asks, and click Download transcript. Reload between the two runs. Then:
-
-```sh
-bun tools/u6-verdict.ts first.json second.json
-```
-
-It passes when both transcripts come from the real board and a clean build, are identical apart from timing, send U1's frames in the expected order, read a version page that hashes to the catalog's V1.01.13 block, and get the catalog's wire sum back from SUM.
-
-## The U10 lab page
-
-The board keeps a per-key override store with three layers. Cmd 0x52 reads it. It has no host-config gate and writes nothing. `cfgReadKeys` (0x52/0x21) returns layer 0 in 16 frames, and `cfgReadKey` (0x52/0x20) returns one entry of layer 0, 1, or 2. An entry is absent (no key has that usage), default (the key has no override), or an override with two flag bits. No command returns the active keymap itself. Both rows are confirmed by board run 3 on 2026-10-19 (`fixtures/u10-macos.json`, OS key mode Mac, one approved difference). A shipped kit may now send them, so `capabilities(SHIPPED).canRead` is true; the keymap editor below uses them.
-
-`dist-lab-u10/u10.html` runs under a clearance that names only those two reads, plus READ MODE and BL info for the attach. For plan U10's hardware check, build from a clean commit and serve `dist-lab-u10`. Remove the batteries and unplug USB for 10 seconds, then reconnect over USB. Choose the board's OS key mode (Fn+Q Windows, Fn+W Mac, Fn+E Caps/Ctrl swap) and tick both boxes: the battery pull, and that no other app holds the keyboard. Read the store stays disabled until the mode is chosen and both boxes are ticked. The choices lock when the first frame goes out, and the transcript records them, the mode as `environment.osKeyMode`. Click Read the store and pick the board. The page reads layer 0, then layers 1 and 2 for each usage present in that mode's active keymap. It compares every entry with `predictLayers` for the mode: no overrides on layers 0 and 1, and on layer 2 the 31 factory overrides the store reset writes, found through the mode's swapped cells. It shows PASS when nothing differs and every frame it sent is one of the four rows. One Read per page load; reload for another. Click Download transcript, then run `bun tools/u10-verdict.ts <transcript.json> --os-mode mac --expect fixtures/u10-expected-diffs.json --out fixtures/u10-macos.json`. `--os-mode` is required and must agree with the mode the page recorded. `--expect` is required: a JSON list of approved differences, each with `layer`, `usage` (as `"0x29"`), `read` (the entry as the verdict prints it), and `reason`. The verdict decodes every 0x52 reply from the transcript's own frames, checks the four-row frame gate, the 16 layer 0 frames with arguments 0 to 15 and their echoes, every entry against the prediction, layers 1 and 2 at every present usage, and the two boxes. A difference passes only when the list names it, and a listed difference that does not occur fails, so an approval cannot go stale. `fixtures/u10-expected-diffs.json` holds one: Esc on layer 2 reads default, although the factory table writes 0x70 there. It writes the capture only on a full PASS, and that file is the capture for the commit that moves both reads to "confirmed". Like the U1 verdict, it exits 2 and writes nothing for a fake board or a build that no clean commit names. Add `?fake` to run the page on the fake board, or `?fake=override` to seed one override so a difference shows.
-
-## The U11 lab page
-
-A host key write needs the gate byte at 0x200006FA open. It is 0 at boot, and only cmd 0x41 sets it. The registry holds four U11 rows, reviewed by the user's G1 ruling on `docs/app-firmware.md` and confirmed by the board run on 2026-10-24 (`fixtures/u11-macos.json`). A shipped kit may now send them, so `capabilities(SHIPPED).canWrite` is true; the keymap editor below uses them, and 0x51/0x00 stays unreviewed. `gateQuery` (`41 FF 00 00`) reads the gate byte and its timer. `gateOpen` (`41 80 00 00`) sets bit 7 alone, which lets cmd 0x51 run without config mode. `gateClose` (`41 00 00 00`) clears it and reloads nothing. `cfgWriteKey` (0x51/0x20) writes one entry of the RAM override store: bytes 2..3 carry layer << 8 | active usage on layers 0 to 2, and bytes 4..5 a u16 value with flags 0, either a usage or 0x00FF for no override. The board replies with the entry read back, or with the error marker when the gate is closed or no key has that usage. The write is never saved to flash, so a power cycle restores the saved store.
-
-The registry refuses every other gate byte (bit 0, bit 6, 0x04), every other 0x50 and 0x51 sub, and any value with flags 1 to 3. A gate byte or sub that has no row is `unknown-command`. A value outside the row's `value` rule is `value-not-allowed`. 0x51/0x00 keeps its unreviewed `cfgSetOsMode` row, which no clearance can send. The board run on 2026-10-24 moved the four rows to "confirmed" (`fixtures/u11-macos.json`), so a shipped kit sends them, and the keymap editor uses them.
-
-`dist-lab-u11/u11.html` runs under a clearance that names the four U11 rows, `cfgReadKey`, and READ MODE and BL info for the attach. Build from a clean commit and serve `dist-lab-u11`. Tick the five boxes, then click Start and pick the board. The page queries and opens the gate, writes Caps Lock (usage 0x39, layer 0) as Left Control (0x00E0), and reads it back. Then it asks you to press Caps Lock over USB, and again over Bluetooth with USB unplugged. While a keylog step shows, the page logs the `code` of every keydown and keyup, and records it with your Yes or No. Next it restores 0x00FF, reads it back, closes the gate, and queries it. Then it opens the gate and writes Left Control again. You unplug USB with the batteries out for 10 seconds and plug USB back in. The page queries the gate (0), reads Caps Lock (0x00FF), and asks you to press Caps Lock once more. Each run of frames opens its own session, so unplugging between steps is safe. One run per page load. Click Download transcript, then run `bun tools/u11-verdict.ts <transcript.json> --out fixtures/u11-macos.json`. The verdict pairs every frame with its reply and holds the frames and attestations to `U11_STEPS`, byte for byte. It checks the frame gate, the plan order, the gate replies, the read-backs, both keylogs, the power cycle, the gate closed at the end, and the boxes. It writes the capture only on a full PASS, and exits 2 and writes nothing for a fake board or a build that no clean commit names. Add `?fake` to run the page on the fake board: Yes on the power-cycle step power-cycles it, and a button presses its Caps Lock key.
-
-## The keymap editor and the U12 lab page
-
-Once a check has read the board, the Board screen (and the result and Stopped screens after it) shows the keymap editor. Choose the OS key mode the board runs in (Fn+Q Windows, Fn+W Mac, Fn+E Caps/Ctrl swap) and a layer, click a key, and choose what it sends. The list under the keys shows every override, each with Remove. Fn and Pn cannot be changed: the store lookup skips their marker usages. Apply stays disabled until the mode is chosen.
-
-Every edit saves the document (`serializeKeymapDoc`) under the localStorage key `tab60kit-keymap`, and the mode under `tab60kit-os-key-mode`. A page load reads them back through `parseKeymapDoc`. Storage that is blocked, throws, or holds text the parse refuses leaves an empty document and a line that says why. The page still works, and the keymap lasts until the tab closes.
-
-Apply runs `applyKeymap(doc, mode)`. It queries the gate, reads layer 0 in 16 frames, and refuses a mode whose presence set differs from what layer 0 reports (Windows and Mac differ by 0xE6 and 0xE7; Windows and the Caps/Ctrl swap look the same, so that choice is the user's). It reads layers 1 and 2 for each remappable cap, then plans the writes. A key the document overrides gets its usage. A key the document does not override, but that holds a flags-0 override, gets 0x00FF, so a key removed from the document loses its override at the next Apply. Entries with flags set, such as the factory layer 2 function codes, stay unless the document overrides that key. With writes to send, Apply opens the gate with 0x80, writes each key, reads each one back, closes the gate, and queries it for 0. A board that already holds the document gets no write and no gate frame. Nothing is saved on the board: after a power loss, click Apply again. A refused frame, a read-back that differs, a Stop, or a gate that will not close stops the job with the reason. Any stop after the gate opened sends the close first, on its own signal, because a gate timer of 0 never expires. Unplugging USB with the batteries out undoes every write. A document with an OS mode stops at G1 before any frame: 0x51/0x00 is a profile switch that writes flash. Layers 1 and 2 are named by the 0xD8 and 0xD9 layer keys, since which physical key carries each is still open, and a layer 2 key that the store reset gives a factory function shows a warning before an override replaces it.
-
-`dist-lab-u12/u12.html` checks plan U12 on the board with the same job and the same storage code. The board run on 2026-10-24 (build 57352b7, Chrome on macOS, OS key mode Mac) passed all eight checks of `tools/u12-verdict.ts` with 464 frames in 17 steps. Its capture is `fixtures/u12-macos.json`, and `testing/u12.test.ts` holds the capture to the kept transcript byte for byte and runs today's verdict on that transcript. U12 adds no registry row, so nothing changes maturity. Its clearance names the attach reads, both override reads, the three gate rows, and the key write. Build from a clean commit and serve `dist-lab-u12`. Choose the OS key mode and tick the four boxes, then click Start and pick the board. The page applies five layer 0 keys whose usage is the same in every mode: Esc to grave, Z to Y, / to Up, \\ to Backspace, and Right Ctrl to Right. It asks you to press each one, and logs every keydown and keyup `code`. Then it asks you to reload the page. Click Reload this page, then Continue: the page reads the keymap back from storage. Next, unplug USB with the batteries out for 10 seconds and plug USB back in. The page reads the five keys at 0x00FF, applies the stored keymap once, and asks you to press each key again. Last, it applies the empty keymap, which restores all five and closes the gate, and reads them at 0x00FF. A failed apply or read step stops the run there. One run per Start; Discard this run clears a run that stopped after the reload. Click Download transcript, then run `bun tools/u12-verdict.ts <transcript.json> --out fixtures/u12-macos.json`. The verdict splits the transcript at the page's marks and attestations, checks each step where it stands, and checks the frame gate (including that no frame comes after an attestation or the reload mark, and that a read step sends only the attach and cfgReadKey), the plan order, the five writes and their replies in each Apply, the gate closed after each Apply, every keylog, the stored keymap after the reload, the reads after the battery pull and after the restore, and the mode and the boxes. It writes the capture only on a full PASS, and exits 2 and writes nothing for a fake board or a build that no clean commit names. Add `?fake` to run the page on the fake board: a reload replaces the fake with a fresh one, Yes on the battery-pull step power-cycles it, and a button presses the step's key.
-
-## The first write and the U7 lab page
-
-U7's rows are `erase`, `setWriteAddress`, `write`, and `getWriteAddress`, which the user's 2026-10-26 ruling on the U2 audit added. The board run on 2026-10-28 (build bd27069, Chrome 156 on macOS) passed all nine checks of `tools/u7-verdict.ts` and confirmed all four (`fixtures/u7-macos.json`). It sent 745 frames. The link gate saw 30 answered probes over 15.13 s, with the widest gap 0.51 s. The two ERASEs, [0, 0x200) then [0x200, 0x1CE00), were each answered, with no fallback. Both cursor sets were read back. All 663 chunks matched, with none resent. The deep check read SUM 0xF3D3DBD2 and version page `ca529cf6…d345`, and three Bluetooth trials missed 0 of 162 characters. The run also settled four first-contact facts. The IAP answers an ERASE at offset 0x200. Get write address (`1E 00`) returns the value set. Bytes 2..3 held at 0 work on erase, set, get, and write. No FF AA reply came, so the IAP's FF AA format is still unobserved. A shipped kit now sends the four rows, so `capabilities(SHIPPED).flashBlockedBy` is empty and the shipped page offers Make official. The shipped page calls `makeOfficial(image)` with rewrite off, so a board that already holds the target is checked and left alone. `testing/u7.test.ts` holds the capture to the kept transcript byte for byte, and with `TAB60_EXE` set it runs today's `evaluateU7` on that transcript against the real exe.
-
-The flash follows the user's 2026-10-26 rulings on the U2 audit (`docs/protocol.md "Sequences"`). It sends two ERASEs: the version page [0, 0x200), then the app region [0x200, 0x1CE00). The vendor never erases from an offset above 0. If the IAP refuses the second ERASE with FF AA, or leaves it unanswered three times, the job sends the vendor's one ERASE over [0, 0x1CE00). It does this only after the version-page ERASE was answered (D1). Every set write address is read back with get write address, and the pair is retried as one unit (D4). A WRITE whose ack is missing or names the wrong next offset is resent from its block's start, after the cursor is set back and read back. After three tries the flash loop observes the board and decides (D5). Before any of these resends, the session waits 1 s, the vendor's pause, and drops pending reports, so a late answer to the failed frame cannot answer the resend. An FF AA reply counts only when it names the command sent, and every other IAP reply must repeat bytes 0..3 of the request. The update-mode session keeps the safety order as state: writeImage refuses to run unless eraseWindow completed on that session, and writeVersionBlock refuses unless the session's latest SUM matched the image.
-
-The shipped page's Board, result, and Stopped screens take the vendor updater from a file picker and show each image's admission. An admitted image adds Make official. While the board cannot type, the page shows a hold-still banner and blocks unload.
-
-`dist-lab-u7/u7.html` runs plan U7 on the board: `makeOfficial(image, { rewrite: true })` over V1.01.13, a deep check, and three keylog trials over Bluetooth on batteries. Build from a clean commit and serve `dist-lab-u7`. The page's link wrap (`lab/u7-frames.ts`) refuses, by bytes, any erase other than the three above and any write address other than a block start. Choose `Tab60firmwareV1.01.13.exe` in the file picker; the page admits it against the catalog. Tick the eight boxes, read the do-not-press list, then click Start and pick the board each time the page asks. While a pick waits for you, the summary says "Waiting for you: click Pick the TAB 60, then choose" and names the row, and the Pick button shows large and focused; the U10, U11, and U12 pages do the same (`lab/pick-wait.ts`), and the U1 page and the shipped page open their pick line with "Waiting for you" next to the same large Pick button. Keep the cable still and the tab in front until the flash step reports. Then unplug USB, switch to Bluetooth, answer Yes, and type the harness phrase three times, each time ending with Enter. Click Download transcript, then run `bun tools/u7-verdict.ts <transcript.json> --exe Tab60firmwareV1.01.13.exe --out fixtures/u7-macos.json` (or set `TAB60_EXE`). The verdict takes the expected chunk hashes from the exe and checks nine things:
-
-- every frame is a U7 row, in a step that may send it
-- the plan order
-- the link gate: at least 15 s of answered probes, no more than 1 s apart, before the first ERASE
-- exactly the two planned ERASEs, each answered before the next frame (a fallback window erase fails this check by name)
-- a get write address after every set, reading it back
-- all 663 write payload hashes, followed through the board's cursor, with resends counted
-- the deep check's SUM 0xF3D3DBD2 and version page `ca529cf6…d345`
-- the keylog bar: at most 1 of 162 characters missing, no autorepeat, no lost key-up, and the first key every trial
-- the preconditions
-
-It writes the capture only on a full PASS, and exits 2 and writes nothing for a fake board, a dirty build, or an exe without the catalog's V1.01.13. Add `?fake` to run the page on the fake board with a synthetic image; a button types each trial. The verdict tool refuses that transcript, because a fake board is not evidence, but `evaluateU7`, the function the tool runs, passes it on all nine checks against the synthetic image (`testing/u7.test.ts` runs the same path).
-
-## The U1 lab page
-
-Plan unit U1 sends the first frames to the board: seven registry rows, nine wire commands, all reads and resets. The run on the user's board on 2026-10-12 moved the seven rows to "confirmed", citing its capture in `fixtures/u1-macos.json`, so a shipped build may send them too. The core's egress audit checks every frame. Behind it, the page's link wrap refuses any frame that is not byte for byte one of the nine (`lab/u1-frames.ts`) before it reaches the board. The transcript keeps the attempt as an `out` entry followed by a `send-failed` entry, and the verdict's frames gate fails on it. The page is not shipped and lives outside both package entries.
-
-```sh
-bun run build
-python3 -m http.server --bind 127.0.0.1 --directory dist-lab 8000
-```
-
-Build from a clean tree. The page prints the commit it was built from, and the verdict refuses a transcript from a build marked `-dirty`.
-
-Open `http://127.0.0.1:8000/u1.html`. Before you click Connect, tick the three boxes at the top of the page: the cable is in, Karabiner's LED manipulation is off, and a second keyboard is at hand. Connect stays disabled until all three are ticked, in every mode, `?fake` included. Tick them before any click that sends a frame, Try again and Restart included. The boxes lock when the first frame goes out, so what they say holds for the whole run. A page that sent a frame before all three were ticked keeps Connect disabled until you reload it. Deep check is enabled only while the page is connected, all three boxes were ticked when they locked, and no RESET to IAP (11 00) has gone out since the page loaded. So each page load sends RESET to IAP at most once. To run another Deep check, reload the page. Try again and Restart stay enabled without the boxes and after an 11 00, because they bring the board home. The transcript records each box change as a `precondition` entry, and each box in its `environment` as `yes` or `no`.
-
-Keep the tab visible while a run is going. Connect picks "USB-HID Keyboard", observes, and probes READ MODE thirty times. Deep check restarts into update mode, picks "USB-HID IAP", observes (version page and SUM), probes again, and comes back to normal mode.
-
-The Deep check takes about 15 s in update mode. Chrome's click activation lasts 5 s, so the last pick, which confirms the board is back in normal mode, usually waits for a click. The Pick button then names the device it waits for, and the line next to it says what to choose. After the run, type in the typing field. That records that the TAB 60 types, which plan check 8 needs.
-
-From RESET to IAP until a normal-mode link opens, the board may be in update mode, where it cannot type, and closing the tab asks first. While an update-mode link is open, Cancel reads "Stop and send the board home", because a Cancel then sends RESET to app. At any other time it reads "Stop" and only stops the run.
-
-When a run ends while the board may be in update mode, the page enters the away state. It shows the recovery text with Try again, which repeats the update-mode checks and then sends the board home, and Restart into normal mode, which sends RESET to app and then asks you to confirm the keyboard. Connect is there too, for a board that already types again. The recovery text also shows while a run waits on a parked pick and the board may be in update mode.
-
-A page that loads while the browser still grants USB-HID IAP starts in the away state, because an earlier page left the board in update mode. It sends no frame until you click.
-
-Download transcript saves the capture. `bun tools/u1-verdict.ts <transcript.json> --types` writes `fixtures/u1-macos.json` with plan U1's nine checks, the frames gate, and the environment. It exits 0 only when every frame sent is one of the nine golden frames and all nine checks pass. `--no-types` records that the board did not type afterwards. The verdict writes nothing and exits 2 for a file it cannot read. It does the same for a transcript from a fake board, from a build that is not a clean commit, or with a precondition box that was not ticked when the first frame went out or changed after it.
-
-`http://127.0.0.1:8000/u1.html?fake` runs the same page over the fake board and the fake WebHID, with no hardware. Every `?fake` page shows check 6 as FAIL, because the fake's version page is synthetic and does not hash to the catalog's version block. `?fake=slow` also fails check 9, by design. Each mode other than `?fake` sends the page down one failure path:
-
-| URL | What the fake does | The way back |
-|---|---|---|
-| `?fake` | Answers every command | none needed |
-| `?fake=parked` | The update-mode chooser misses its row, so that pick waits for a click | Pick |
-| `?fake=deaf` | The bootloader ignores every frame | Try again or Restart into normal mode |
-| `?fake=cancelled` | Every chooser from the Deep check click on closes with no device. The first closed chooser only parks the pick. Click Pick, and the second chooser also closes with no device, which leaves the page in the away state | Try again or Restart into normal mode |
-| `?fake=refused` | BL info in update mode reports fw_pages 0xE8 instead of 0xE7, so the update-mode attach refuses | Restart into normal mode |
-| `?fake=sum-refused` | SUM answers FF AA once, and the page sends the board home | Connect |
-| `?fake=drop` | The link drops on the fifth update-mode probe, and the board comes back in update mode | Try again |
-| `?fake=slow` | The fifth update-mode probe answers after 700 ms. Check 9 records it and fails on the 1.2 s gap between answers, as plan U1's rule says | none needed |
-| `?fake=reloaded` | The board starts in update mode, and the browser still grants USB-HID IAP, as after a reload past the warning. The page starts in the away state | Try again or Restart into normal mode |
-
-The drop mode counts frames from page load, so click Connect once before the Deep check. A fake run's download name ends in `-fake-<mode>`.
-
-`bun run sweep` runs the full U1 sweep in `testing/u1-sweep.ts` over the fake board and the fake WebHID. Each scenario is one page session: Connect, Deep check, and a recovery click where the session needs one. The sweep loses the link at every packet, with and without an MCU reset, cancels after every transcript entry, and cancels at every point inside Restart and Try again. A scenario fails on a frame off the golden list, a second RESET to IAP, a board violation, a run that a Cancel cannot end, a board left in update mode without the away state, a leaked link, a Restart that leaves the board in update mode, or the wrong frames after a Cancel. A Cancel that lands while an update-mode link is open, before that link's RESET to app, must be followed by exactly that one RESET to app. Any other Cancel must be followed by no frame. The script exits 1 on any failure. It runs 153 scenarios in about 10 s on an Apple M4 Max. `bun test` runs a reduced set of 26 scenarios from `testing/u1-sweep.test.ts`.
-
-## Package entries
-
-`package.json` exports two entries, and the resolver refuses any other path into `core/`:
-
-- `@tab60kit/core` (`core/index.ts`) is for UI code.
-- `@tab60kit/core/port` (`core/port.ts`) is for a shell, today `web/webhid-port.ts`.
-
-Code in `web/` reaches the core only through these two names, and `probes/boundaries.ts` enforces it. Code in `lab/`, `testing/`, `tools/`, and `probes/` is maintainer code and imports core files by relative path.
+MIT. See [LICENSE](LICENSE).

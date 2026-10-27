@@ -51,14 +51,14 @@ Each structure owns one rule.
 
 ## How a flash runs
 
-Firmware flashing is not in this release (unit U7). The flash job exists and is tested against the fake board.
+Unit U7 ran this flash on a real board on 2026-10-28, on macOS, and confirmed it. The same job is tested against the fake board, including the fallbacks below that the board run did not need.
 
 A job observes the board, asks the policy for a step, does the step, and observes again. It keeps no cursor of its own, so the board is the record of progress.
 
 | Observation | Policy says | Then |
 |---|---|---|
 | normal mode, unknown version page | `enter-iap` | Reset. Pick "USB-HID IAP" in the chooser |
-| update mode, unknown page, unrecognized image | `erase-and-write-image` | The link gate probes READ MODE every 500 ms until the link has answered for 15 s with no timeout or loss. Then ERASE the version page, ERASE the app region, and write 659 chunks of 52 bytes |
+| update mode, unknown page, unrecognized image | `erase-and-write-image` | The link gate probes READ MODE every 500 ms until the link has answered for 15 s with no timeout or loss. Then ERASE the version page, ERASE the app region, and write 659 chunks of 52 bytes. If the IAP refuses the app-region ERASE, send the vendor's one ERASE over the whole window instead |
 | update mode, erased page, image SUM matches the catalog | `write-version-block` | Write the block in four chunks. The 0x5AA5 magic is in the last chunk. Read the page back |
 | update mode, catalog page over the catalog image | `exit-to-app` | Reset into normal mode |
 | normal mode, catalog page, verified this job | `done` | |
