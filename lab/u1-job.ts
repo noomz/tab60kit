@@ -31,7 +31,7 @@ export const U1_PROBES: ProbeSeries = { probes: 30, everyMs: PROBE_EVERY_MS };
 const V1_01_13 = CATALOG.find((entry) => entry.version === "V1.01.13");
 if (V1_01_13 === undefined) throw new Error("the catalog lost V1.01.13");
 
-/** What the user's board, flashed with V1.01.13 by the vendor updater, must answer (docs/units.md U1 checks 2 to 7 and 9). */
+/** What the maintainer's board, flashed with V1.01.13 by the vendor updater, must answer (docs/units.md U1 checks 2 to 7 and 9). */
 export const U1_EXPECTED: U1Expected = {
 	appProductId: TAB60.productId.app,
 	iapProductId: TAB60.productId.iap,

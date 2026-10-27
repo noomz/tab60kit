@@ -1,5 +1,5 @@
 /**
- * Plan U10's verdict on a saved lab/u10 transcript. It decodes every cfgReadKeys and cfgReadKey reply from the
+ * Unit U10's verdict on a saved lab/u10 transcript. It decodes every cfgReadKeys and cfgReadKey reply from the
  * transcript's own frames, with its own byte rules, and compares each entry with `predictLayers` for the board's OS key
  * mode; the page's results are never read. A difference passes only when the approved list names it (layer, usage,
  * and the entry read), and an approval that matches nothing fails, so the list cannot go stale. Only a full PASS
@@ -32,7 +32,7 @@ export interface U10Fixture {
 	readonly transcript: Transcript;
 }
 
-/** A difference from the prediction the user accepted, with why. `read` is the entry as the verdict prints it. */
+/** A difference from the prediction the maintainer accepted, with why. `read` is the entry as the verdict prints it. */
 export interface ApprovedDifference {
 	readonly layer: Layer;
 	readonly usage: number;

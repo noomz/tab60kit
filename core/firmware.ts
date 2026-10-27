@@ -11,7 +11,7 @@
  * Nothing in v1 produces a foreign candidate, and no setting flips the refusal.
  *
  * The catalog holds hashes and checksums only. The tool never ships vendor bytes, and UI code never reads them:
- * a FlashableImage is a handle whose bytes sit in module-private state (candidate A).
+ * a FlashableImage is a handle whose bytes sit in module-private state.
  */
 import { EXPECTED_LAYOUT } from "./device";
 import { type UpdaterRefusal, parseMaav102 } from "./updater";
@@ -37,7 +37,7 @@ export interface WireImage {
 	readonly crc32: Crc32;
 }
 
-/** The 180-byte version block, verbatim from the package. Never synthesized: both pok3rtool builds write a different block (R1). */
+/** The 180-byte version block, verbatim from the package. Never synthesized: both pok3rtool builds write a different block (docs/protocol.md). */
 export interface VersionBlock {
 	readonly bytes: Uint8Array;
 	readonly sha256: Sha256;
@@ -120,7 +120,7 @@ export interface ImageCandidate {
 	readonly provenance: Provenance;
 	readonly layoutName: string;
 	readonly plainSha256: Sha256;
-	/** From the vector table and the Keil reset stub, as R2 computes it. null when no single base fits. */
+	/** From the vector table and the Keil reset stub, as docs/updater-package.md computes it. null when no single base fits. */
 	readonly impliedBase: number | null;
 	readonly wire: WireImage;
 	/** Foreign images carry none. */

@@ -1,5 +1,5 @@
 /**
- * Plan U11's verdict on a saved lab/u11 transcript. It walks the transcript's own frames and attestations against
+ * Unit U11's verdict on a saved lab/u11 transcript. It walks the transcript's own frames and attestations against
  * U11_STEPS, byte for byte: every request, the reply each one got, and each keylog the user attested. The page's
  * results are never read. Only a full PASS writes the capture that moves the four U11 rows to "confirmed".
  *

@@ -1,5 +1,5 @@
 /**
- * Plan U10's hardware check. After a battery pull, choose the board's OS key mode, tick the preconditions, and Read
+ * Unit U10's hardware check. After a battery pull, choose the board's OS key mode, tick the preconditions, and Read
  * the store: every entry is compared with `predictLayers` for that mode, and the transcript must carry only the U10
  * rows. The mode goes into the transcript's environment as `osKeyMode`, which the verdict holds its --os-mode to. Download it and run tools/u10-verdict.ts,
  * which writes the capture for the commit that moves cfgReadKeys and cfgReadKey to "confirmed". `?fake` runs on the fake board; `?fake=override` seeds one override on layer 1 so a difference shows.

@@ -1,6 +1,6 @@
 /**
  * DevicePort over WebHID. Everything browser-specific lives here and nowhere else: chooser picks and user
- * activation, the input-report queue, disconnect detection, per-call timeouts (Chromium adds none, R3 C12),
+ * activation, the input-report queue, disconnect detection, per-call timeouts (Chromium adds none, docs/webhid.md C12),
  * stale handles, the Linux permission error, and the cross-tab lock.
  *
  * The port never leaves this module. `startWebHid` builds it, hands it to a kit, and returns the kit and a Chooser,
@@ -34,7 +34,7 @@ import {
 
 /** What the UI may do with the chooser: answer a parked pick from a click, and know whether one is parked. */
 export interface Chooser {
-	/** Call only from a click handler: the click is the user activation that `requestDevice` consumes (R3 C5). */
+	/** Call only from a click handler: the click is the user activation that `requestDevice` consumes (docs/webhid.md C5). */
 	pick(): void;
 	/**
 	 * A device request that needs a click to open the chooser, or null. JobState "awaiting-device" says the job is
@@ -151,7 +151,7 @@ const hasVendorCollection = (device: HIDDevice): boolean =>
 
 const TIMED_OUT = Symbol("timed out");
 
-/** Chromium adds no timeout to HID calls (R3 C12). */
+/** Chromium adds no timeout to HID calls (docs/webhid.md C12). */
 async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const late = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -219,9 +219,9 @@ class WebHidPort implements DevicePort {
 	}
 
 	/**
-	 * After any reset the new connection has no grant (R3 C1, C3), so `granted` finds only the current connection. A
+	 * After any reset the new connection has no grant (docs/webhid.md C1, C3), so `granted` finds only the current connection. A
 	 * chooser opened inside the click's activation stays open and lists the bootloader row when the board
-	 * re-enumerates (R3 C7).
+	 * re-enumerates (docs/webhid.md C7).
 	 */
 	async open(want: DeviceWant, signal: AbortSignal): Promise<Link> {
 		signal.throwIfAborted();
@@ -376,7 +376,7 @@ class WebHidLink implements Link {
 		this.hid.removeEventListener("disconnect", this.#onDisconnect);
 	}
 
-	/** Raced against a timer, because a stale handle may hang and Chromium adds no HID timeout (R3 E2). */
+	/** Raced against a timer, because a stale handle may hang and Chromium adds no HID timeout (docs/webhid.md E2). */
 	async send(report: OutReport): Promise<void> {
 		if (this.#ended !== null) throw this.#ended;
 		let timer: ReturnType<typeof setTimeout> | undefined;

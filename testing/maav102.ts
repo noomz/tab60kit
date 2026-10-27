@@ -1,6 +1,6 @@
 /**
  * Builds maav102 updater packages for tests. CI holds no vendor bytes, so its packages come from here.
- * `scramble` is written from R2's description, not from core/updater.ts's `unscramble`, so the two check each other.
+ * `scramble` is written from docs/updater-package.md "Scramble", not from core/updater.ts's `unscramble`, so the two check each other.
  */
 import { EXPECTED_LAYOUT } from "../core/device";
 import { xorWords } from "../core/firmware";

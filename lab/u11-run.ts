@@ -1,5 +1,5 @@
 /**
- * Plan U11's hardware run, DOM-free so testing/u11.test.ts runs it against the fake board. One guided sequence: query
+ * Unit U11's hardware run, DOM-free so testing/u11.test.ts runs it against the fake board. One guided sequence: query
  * and open the gate, write Caps Lock to Left Control on layer 0, read it back, have the user type it over USB and over
  * Bluetooth, restore it, close the gate, then write it again and have the user power-cycle the board with no save.
  * Each run of wire steps opens its own normal-mode session, so the user can unplug USB between them.

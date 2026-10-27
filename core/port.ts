@@ -64,7 +64,7 @@ export interface DevicePort {
 
 	/**
 	 * Runs `job` with exclusive use of the board across this machine's tabs or processes, or rejects with Busy.
-	 * The board has one command buffer (R4), so two writers would interleave packets inside one request.
+	 * The board has one command buffer (docs/app-firmware.md), so two writers would interleave packets inside one request.
 	 */
 	exclusive<T>(job: () => Promise<T>): Promise<T>;
 
@@ -95,7 +95,7 @@ export class LinkLost extends Error {
 	override readonly name = "LinkLost";
 }
 
-/** A call got no answer in time. Treated like a lost link: the handle may be stale (R3 C12). */
+/** A call got no answer in time. Treated like a lost link: the handle may be stale (docs/webhid.md C12). */
 export class LinkTimeout extends Error {
 	override readonly name = "LinkTimeout";
 }
@@ -113,7 +113,7 @@ export class OsPermissionDenied extends Error {
 	}
 }
 
-/** device.open() did not settle in time. The handle may be stale (R3 C12), so the shell does not retry it. */
+/** device.open() did not settle in time. The handle may be stale (docs/webhid.md C12), so the shell does not retry it. */
 export class OpenTimedOut extends Error {
 	override readonly name = "OpenTimedOut";
 }

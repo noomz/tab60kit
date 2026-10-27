@@ -1,7 +1,7 @@
 /**
  * Live keymap editing on stock firmware.
  *
- * The board rebuilds its active keymap from ROM at every boot and applies a per-key override store on top. R4 said
+ * The board rebuilds its active keymap from ROM at every boot and applies a per-key override store on top. An early read said
  * the app has no flash-write path; the U10 static read found a serial-flash save of the block that holds the store,
  * and the U11 static read found that a host key write lands in RAM only, so a power cycle restores the saved store.
  * The host document is the user's intent, and applying it is another convergence: read what the board holds, write
@@ -33,7 +33,7 @@ import type { Brand } from "./units";
 
 /**
  * A key layer of the override store. sub_5E98 bounds its index at 0x2FF (layer << 8 | usage), and the reset clears
- * 3 x (80 + 20) bytes, so there are three (U10 research, VERIFIED). Layer 0 is the base layer, INFERRED.
+ * 3 x (80 + 20) bytes, so there are three (docs/app-firmware.md, VERIFIED). Layer 0 is the base layer, INFERRED.
  */
 export type Layer = 0 | 1 | 2;
 
@@ -43,7 +43,7 @@ export type KeyId = Brand<number, "KeyId">;
 /** HID keyboard-page usage, 0x00..0xE7. Built only by `usage`. */
 export type Usage = Brand<number, "Usage">;
 
-/** R4: cmd 0x51/0x00 accepts values below 5. */
+/** docs/app-firmware.md: cmd 0x51/0x00 accepts values below 5. */
 export type OsMode = 0 | 1 | 2 | 3 | 4;
 
 export function keyId(n: number): KeyId {
@@ -194,8 +194,8 @@ export function romKeymap(): readonly Usage[] {
 /**
  * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Fn+Q, Fn+W, and Fn+E (factory codes
  * 0x13D, 0x13E, 0x13F) set 0x10, 0x20, and 0x40. sub_5F4C swaps usages in the active keymap per mode with the pairs
- * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not R4's OsMode (0x2000000F): that
- * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the user's report.
+ * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not the OsMode byte 0x2000000F that an early read named: that
+ * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the maintainer's report.
  */
 export type OsKeyMode = "windows" | "mac" | "caps-ctrl";
 
@@ -222,7 +222,7 @@ const FACTORY_FLAGS = 1;
 /**
  * The factory function code (flags 1, as flags << 8 | code) that the store reset writes on `key`, or null. The reset
  * writes FACTORY_LAYER2 by cell under the Windows keymap, so the cell does not move with the OS key mode. Whether the
- * board still holds it depends on its history (U10 board run 3 found Esc's pair missing), so this is what the reset
+ * board still holds it depends on its history (the passing U10 board run, `fixtures/u10-macos.json`, found Esc's pair missing), so this is what the reset
  * leaves, not a read.
  */
 export function factoryFunction(layer: Layer, key: KeyId): number | null {
@@ -257,7 +257,8 @@ export function presentUsages(mode: OsKeyMode): readonly number[] {
 }
 
 /**
- * What a read of each layer returns, for usages 0..255, from a store the reset left as it is (U10 board run 1). The
+ * What a read of each layer returns, for usages 0..255, from a store the reset left as it is (the first U10 board run,
+ * `testing/fixtures/tab60kit-u10-2026-10-19T07-42-46-288Z.json`). The
  * reset writes FACTORY_LAYER2 by cell under the "windows" keymap; the board now runs in `mode`, and a read finds the
  * cell by its active usage. So in "mac", usage 0xE2 reads the entry written for 0xE3. Layers 0 and 1 hold no overrides.
  */

@@ -12,7 +12,7 @@ const window = windowFor(info) as FlashWindow;
 const plain = (span: Span | null) => (span === null ? null : { offset: Number(span.offset), length: span.length });
 const plainRegion = (region: Region) => ({ ...region, from: Number(region.from), to: Number(region.to) });
 
-test("parseBlInfo reads every field of R1's struct", () => {
+test("parseBlInfo reads every field of the struct in docs/protocol.md", () => {
 	expect(payload).toHaveLength(60);
 	expect(info).toMatchObject({
 		bootVid: 0x04d9,

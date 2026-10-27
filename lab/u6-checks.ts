@@ -1,5 +1,5 @@
 /**
- * Plan U6's verdict on two hardware transcripts of the shipped page's checks: Connect, then Deep check. Like
+ * Unit U6's verdict on two hardware transcripts of the shipped page's checks: Connect, then Deep check. Like
  * u1-checks.ts it never borrows the host codec: frames are U1's written-out literals, and replies are read by offset.
  */
 import { CATALOG, type CatalogEntry } from "../core/firmware";

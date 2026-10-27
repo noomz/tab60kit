@@ -8,7 +8,7 @@ import { createKit } from "../core/kit";
 import { type Clearance, labClearance } from "../core/protocol";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 
-/** Where a run starts. "holds-target" is the board the user has today: it converges with no write unless asked. */
+/** Where a run starts. "holds-target" is the maintainer's board today: it converges with no write unless asked. */
 export const STARTS = [
 	"official-image",
 	"untrusted-image",

@@ -1,5 +1,5 @@
 /**
- * Plan U12's verdict on a saved lab/u12 transcript. It walks the transcript's own marks, attestations, and frames
+ * Unit U12's verdict on a saved lab/u12 transcript. It walks the transcript's own marks, attestations, and frames
  * against U12_STEPS: each wire step's frames are the ones between its "begin" mark and the next mark or attestation.
  * Frames before the first mark, after an attestation or the reload mark, and anything but cfgReadKey and the attach in a
  * read step fail the frame check. Each step is checked where it stands, so a run that stopped early still shows which

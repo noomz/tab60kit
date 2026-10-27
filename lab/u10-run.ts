@@ -1,5 +1,5 @@
 /**
- * Plan U10's hardware read, DOM-free so testing/u10.test.ts runs it against the fake board. One Connect in normal mode,
+ * Unit U10's hardware read, DOM-free so testing/u10.test.ts runs it against the fake board. One Connect in normal mode,
  * layer 0 of the override store in 16 frames, then layers 1 and 2 one entry at a time for each usage present in the
  * active keymap of the board's OS key mode. Each entry is compared with `predictLayers` for that mode.
  */

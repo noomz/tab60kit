@@ -70,7 +70,7 @@ export type TranscriptEntry =
 	| { readonly t: number; readonly kind: "granted"; readonly productId: number }
 	/** The page's visibility, at its start and on each change. A hidden tab slows timers, which check 9 measures. */
 	| { readonly t: number; readonly kind: "visibility"; readonly state: "visible" | "hidden" }
-	/** The typing field changed while a normal-mode link was the last one opened. Plan check 8 reads it as the board typing. */
+	/** The typing field changed while a normal-mode link was the last one opened. U1 check 8 reads it as the board typing. */
 	| { readonly t: number; readonly kind: "typing"; readonly chars: number }
 	| { readonly t: number; readonly kind: "precondition"; readonly key: string; readonly met: boolean }
 	/** The user finished a step of a guided lab run: their yes or no, and each key code the page logged during it. */

@@ -129,7 +129,7 @@ export const AWAY_RECOVERY = [
 	"Restart into normal mode sends RESET to app and then asks you to confirm the keyboard.",
 	"If the keyboard already types again, Connect confirms that it is back in normal mode.",
 	"If none of these works, unplug the cable, take the batteries out for 10 seconds, and put them back. A cold boot clears the SRAM magic that RESET to IAP set.",
-	"Or run the vendor updater with -force on MaruStation.",
+	"Or run the vendor updater with -force on a Windows PC.",
 	"Keep this tab visible during a run. A hidden tab slows its timers.",
 ].join("\n");
 

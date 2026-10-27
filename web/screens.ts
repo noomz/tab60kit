@@ -40,7 +40,7 @@ export interface FlashOffer {
 }
 
 export type Screen =
-	/** Firefox and Safari ship no WebHID (R3 B1, B2). */
+	/** Firefox and Safari ship no WebHID (docs/webhid.md B1, B2). */
 	| { readonly name: "browser-gate"; readonly why: "no-webhid" | "insecure-context" }
 	| { readonly name: "connect"; readonly linuxRule: string }
 	/** The pick button calls port.pick() from its click. `pickRow` is the chooser row to choose. */

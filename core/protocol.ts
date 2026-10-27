@@ -26,7 +26,7 @@ import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32L
 export type Effect = "read" | "reboot" | "erase" | "write" | "sram-write";
 
 /**
- * Where the command is known from. The user's G1 ruling allows, after review, "the commands the vendor updater
+ * Where the command is known from. The maintainer's G1 ruling allows, after review, "the commands the vendor updater
  * itself sends". So "vendor-updater" is the only source that can carry an erase or write row above "unreviewed".
  */
 export type Evidence =
@@ -35,8 +35,8 @@ export type Evidence =
 	| { readonly source: "app-disassembly"; readonly at: string };
 
 /**
- * G1 as evidence maturity, per command (candidate A's ladder). A row moves up only in a reviewed commit:
- *   unreviewed -> reviewed    the user reviewed the row. A lab clearance that names it may send it.
+ * G1 as evidence maturity, per command. A row moves up only in a reviewed commit:
+ *   unreviewed -> reviewed    the maintainer reviewed the row. A lab clearance that names it may send it.
  *   reviewed   -> confirmed   a capture of this command on this board exists. Shipped builds may send it.
  * The ladder breaks the loop a single "approved" state had: approval needed a capture, and the capture needed
  * the command sent. probes/policy.test.ts fails when an erase or write row sits above "unreviewed" with evidence
@@ -48,7 +48,7 @@ export type Maturity =
 	| { readonly level: "confirmed"; readonly by: string; readonly on: string; readonly capture: string };
 
 /**
- * Where a frame carries flash addresses, so the audit decodes them the way the board will (R1 "Packet framing").
+ * Where a frame carries flash addresses, so the audit decodes them the way the board will (docs/protocol.md "Packet framing").
  *   none         no address
  *   range        u32 offset at byte 4, u32 length at byte 8 (ERASE, SUM, CRC)
  *   set-cursor   u32 offset at byte 4 becomes the board's write cursor (set write address)
@@ -70,7 +70,7 @@ export interface ByteBounds {
 }
 
 /**
- * What request bytes 2..3 may carry, read as the u16 LE argument the app firmware takes (U10 research, 0x7BA6
+ * What request bytes 2..3 may carry, read as the u16 LE argument the app firmware takes (docs/app-firmware.md, 0x7BA6
  * `ldrh r5,[r4,#2]`): bounds for its high byte and for its low byte.
  */
 export interface ArgRule {
@@ -114,16 +114,16 @@ const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "20
 const CONFIRMED_BY_U7 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-28", capture: "fixtures/u7-macos.json" } as const;
 
 /**
- * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
+ * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (docs/protocol.md "Packet framing", VERIFIED in its source),
  * which U1 captured on this board and U7 captured on erase, set and get write address, and write; the app treats the field as an argument, and these rows take none.
  */
 const NO_ARG = { high: { min: 0, max: 0 }, low: { min: 0, max: 0 } } as const satisfies ArgRule;
 
 /**
  * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, and the patched-firmware
- * READ 0xFF) are left out on purpose, so the audit refuses them. Evidence addresses for vendor-updater rows are the
- * U2 audit's (docs/protocol.md "Sequences"), each one a call site `x86.py dump` prints. G1 forbids a row until
- * the user reviews it and a lab session captures it (docs/units.md U1, U7, U10, U11).
+ * READ 0xFF) are left out on purpose, so the audit refuses them. Evidence addresses for vendor-updater rows are call
+ * sites in the V1.01.13 updater exe, each one a place its disassembly shows the frame built or sent. G1 forbids a row
+ * until the maintainer reviews it and a lab session captures it (docs/units.md U1, U7, U10, U11).
  */
 export const COMMANDS = {
 	readBlInfo: {
@@ -178,7 +178,7 @@ export const COMMANDS = {
 	readVersionPage: {
 		label: "Read version page",
 		cmd: 0x12,
-		/** The board serves parts 0 to 7, 60 bytes each from absolute 0x3000 + 60 * i (R4 0x7620, VERIFIED). The tool reads the 180-byte block, parts 0 to 2. */
+		/** The board serves parts 0 to 7, 60 bytes each from absolute 0x3000 + 60 * i (docs/app-firmware.md 0x7620, VERIFIED). The tool reads the 180-byte block, parts 0 to 2. */
 		sub: { first: 0x20, count: 3 },
 		modes: ["app", "iap"],
 		effect: "read",
@@ -470,7 +470,7 @@ export const SHIPPED: Clearance = { kind: "shipped" };
 
 /**
  * Lifts G1 for one hardware session (docs/units.md U1, U7, U10, U11). Refuses a command whose row is still unreviewed,
- * so the user's review lands in a commit before the first packet. The session's transcript is the capture that
+ * so the maintainer's review lands in a commit before the first packet. The session's transcript is the capture that
  * later moves the rows to "confirmed".
  */
 export function labClearance(only: readonly CommandName[], purpose: string): Clearance {
@@ -627,7 +627,7 @@ export function decodeCommand(cmd: number, sub: number): CommandName | null {
 }
 
 /**
- * The egress audit (candidate A, merged into the one write path). Pure. Decodes the exact bytes about to leave, with
+ * The egress audit, merged into the one write path. Pure. Decodes the exact bytes about to leave, with
  * no help from the encoder, and checks them against the registry, the clearance, the mode, every byte the row does not
  * declare, and the window.
  * The only place in the tree that makes an OutReport. Default deny: a pair the registry does not list is refused.
@@ -896,7 +896,7 @@ async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (don
 	}
 }
 
-/** READ MODE's payload byte 0 (R1 "Commands"). */
+/** READ MODE's payload byte 0 (docs/protocol.md "Commands"). */
 const MODE_BYTE = { iap: 0, app: 1 } as const satisfies Record<Mode, number>;
 
 async function readModeByte(ch: Channel, signal: AbortSignal): Promise<number> {
@@ -982,7 +982,7 @@ export function overrideValueWord(value: OverrideValue): number {
 }
 
 /**
- * Decodes one u16 the board returns for an entry (U10 research, 0x807C..0x80DE and sub_5E98 mode 3 at 0x5F0E):
+ * Decodes one u16 the board returns for an entry (docs/app-firmware.md, 0x807C..0x80DE and sub_5E98 mode 3 at 0x5F0E):
  * 0x0003 absent, 0x00FF default, otherwise flags << 8 | code. Throws RangeError on a word that fits none of them:
  * flags above 3, which the firmware masks to 2 bits, or a code of 0xFF with flags set, which it reports as 0x00FF.
  */
@@ -1006,7 +1006,7 @@ export interface GateState {
 /**
  * The live config channel (app mode). Each method throws NotCleared, before anything leaves, unless the clearance
  * clears its commands. The reads return the per-key override store, not the active keymap, which no command returns
- * (U10 research). A write lands in RAM only and needs the gate open; a power cycle restores the saved store (U11).
+ * (docs/app-firmware.md). A write lands in RAM only and needs the gate open; a power cycle restores the saved store (U11).
  */
 export interface ConfigChannel {
 	/**
@@ -1078,7 +1078,7 @@ export interface LinkContext {
 
 /**
  * Normal mode. Reads, the live config channel, and the restart into update mode.
- * Nothing on this type can address flash, and the app firmware has no flash-write code anyway (R4).
+ * Nothing on this type can address flash, and the app firmware has no flash-write code anyway (docs/app-firmware.md).
  * A method that takes the job's `signal` rejects with its reason, before its next command leaves, once it is aborted.
  */
 export interface AppSession {
@@ -1092,7 +1092,7 @@ export interface AppSession {
 	 * Restarts the board into update mode and returns the bootloader session, or the refusal that attach found
 	 * there. This session is closed afterwards. The update-mode link is requested before the reset frame leaves,
 	 * because a chooser opened inside the click's activation stays open and adds the row when the bootloader
-	 * appears (R3 C7). No reset leaves when that request has already failed or `ctx.signal` is aborted. An attach
+	 * appears (docs/webhid.md C7). No reset leaves when that request has already failed or `ctx.signal` is aborted. An attach
 	 * that throws rejects with IapAttachFailed, which holds the update-mode link open.
 	 */
 	enterIap(ctx: LinkContext): Promise<IapSession | IapRefused>;
@@ -1116,8 +1116,8 @@ export interface IapSession {
 	/**
 	 * ERASE the version page (`versionPage(window)`), wait for its echo, then ERASE the app region (`appRegion(window)`).
 	 * The page is gone before any app byte changes, whatever order the IAP erases pages within one command, so no
-	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, R1; candidate A).
-	 * The vendor never erases from an offset above 0 (U2 D1). If the IAP refuses the app-region erase with FF AA, or
+	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, docs/protocol.md "Sequences").
+	 * The vendor never erases from an offset above 0. If the IAP refuses the app-region erase with FF AA, or
 	 * leaves it unanswered TRIES times, this sends the vendor's one ERASE over the whole window (`wholeWindow`). Only the
 	 * answered version-page erase makes that safe, so any failure of the first erase propagates instead.
 	 */
@@ -1145,7 +1145,7 @@ export type Session = AppSession | IapSession;
 
 /**
  * A board that attach refused, with its link still open so the caller can send it home. RESET to app does what the
- * board's next power cycle would do, because the IAP boots the app only over a version page with its magic (R1,
+ * board's next power cycle would do, because the IAP boots the app only over a version page with its magic (docs/protocol.md,
  * INFERRED), and without it a refused board stays in update mode, where the keyboard cannot type.
  */
 export interface AppRefused {
