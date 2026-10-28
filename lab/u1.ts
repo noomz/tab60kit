@@ -2,6 +2,7 @@ import { TAB60 } from "../core/device";
 import { type DeviceWant, PickCancelled } from "../core/port";
 import type { Transcript, TranscriptEntry } from "../testing/transcript";
 import { type PortEvent, startWebHidLab } from "../web/webhid-port";
+import { prominent } from "./pick-wait";
 import { evaluateU1 } from "./u1-checks";
 import { FAKE_MODES, type FakeMode, fakeHardware, isFakeMode } from "./u1-fake";
 import { u1Wrap } from "./u1-frames";
@@ -156,7 +157,10 @@ async function start(): Promise<void> {
 
 	const render = () => {
 		const want = chooser.needsClick;
-		if (want !== null && want !== parked) log(`pick parked (${want.reason}): click "${pickLabel(want)}"`);
+		if (want !== null && want !== parked) {
+			log(`pick parked (${want.reason}): click "${pickLabel(want)}"`);
+			ui.pick.focus();
+		}
 		parked = want;
 		const away = phase.kind === "away";
 		const on = tickedBoxes(entries);
@@ -242,6 +246,7 @@ async function start(): Promise<void> {
 	ui.tryAgain.addEventListener("click", () => run("try-again"));
 	ui.restart.addEventListener("click", () => run("restart"));
 	ui.pick.addEventListener("click", () => chooser.pick());
+	prominent(ui.pick);
 	ui.cancel.addEventListener("click", () => controller?.abort(new DOMException("cancelled from the page", "AbortError")));
 	ui.typing.addEventListener("input", () => {
 		if (lastOpened === TAB60.productId.app) record({ t: now(), kind: "typing", chars: ui.typing.value.length });

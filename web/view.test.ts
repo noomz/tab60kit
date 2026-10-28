@@ -2,12 +2,13 @@ import { expect, test } from "bun:test";
 import { type Admission, CATALOG, type ChipReport, type FlashableImage, type UpdaterReading } from "@tab60kit/core";
 import { admittedImage, viewFor } from "./view";
 
-test("a parked pick shows a Pick button that names the row; an open chooser only says which row to pick", () => {
+test("a parked pick says the page waits for the user and shows a Pick button that names the row; an open chooser only says which row to pick", () => {
 	const prompt = { name: "device-prompt", reason: "enter-update-mode", pickRow: "USB-HID IAP", skippable: false } as const;
 	const parked = viewFor(prompt, { modes: ["iap"], reason: "enter-update-mode" });
 	expect(parked.actions).toEqual(["pick", "cancel"]);
 	expect(parked.pickLabel).toBe("Pick USB-HID IAP");
 	expect(parked.holdStill).toBe(true);
+	expect(parked.lines[0]).toBe("Waiting for you: click Pick USB-HID IAP, then choose USB-HID IAP.");
 	const open = viewFor(prompt, null);
 	expect(open.actions).toEqual(["cancel"]);
 	expect(open.lines[0]).toBe("In the chooser, pick USB-HID IAP.");

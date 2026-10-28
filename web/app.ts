@@ -207,12 +207,18 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		for (const line of view.lines) nodes.push(element("p", line));
 		if (EDITS_ON.includes(screen.name) && kit.state.board !== null) nodes.push(exePicker());
 		if (view.linuxRule !== null) nodes.push(element("pre", view.linuxRule));
+		let pick: HTMLButtonElement | null = null;
 		if (view.actions.length > 0) {
 			const bar = element("p");
 			for (const action of view.actions) {
 				const button = element("button", action === "pick" ? (view.pickLabel ?? "Pick") : LABEL[action]);
 				button.type = "button";
 				button.addEventListener("click", act[action]);
+				if (action === "pick") {
+					button.style.fontWeight = "bold";
+					button.style.fontSize = "1.25em";
+					pick = button;
+				}
 				bar.append(button, " ");
 			}
 			nodes.push(bar);
@@ -221,6 +227,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		if (view.boot !== null) nodes.push(element("p", view.boot));
 		if (EDITS_ON.includes(screen.name) && kit.state.board !== null) nodes.push(editor());
 		root.replaceChildren(...nodes);
+		pick?.focus();
 	}
 
 	const holdStill = (event: BeforeUnloadEvent) => {

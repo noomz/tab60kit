@@ -112,15 +112,15 @@ export function pickLabel(want: DeviceWant | null): string {
 }
 
 const HINT: Readonly<Record<WantReason, string>> = {
-	connect: `Click Pick and choose the TAB 60 keyboard, listed as ${TAB60.productName.app}.`,
-	"enter-update-mode": `Click Pick and choose ${TAB60.productName.iap}.`,
-	"confirm-normal-mode": `Click Pick and choose the TAB 60 keyboard, listed as ${TAB60.productName.app}, so the page can confirm the board is back in normal mode.`,
-	"after-link-loss": `Click Pick and choose the TAB 60 keyboard or ${TAB60.productName.iap}.`,
+	connect: `click Pick and choose the TAB 60 keyboard, listed as ${TAB60.productName.app}.`,
+	"enter-update-mode": `click Pick and choose ${TAB60.productName.iap}.`,
+	"confirm-normal-mode": `click Pick and choose the TAB 60 keyboard, listed as ${TAB60.productName.app}, so the page can confirm the board is back in normal mode.`,
+	"after-link-loss": `click Pick and choose the TAB 60 keyboard or ${TAB60.productName.iap}.`,
 };
 
 /** The line next to the Pick button (F12). A long run lets the click's activation lapse, so the confirm pick parks. */
 export function pickHint(want: DeviceWant | null): string | null {
-	return want === null ? null : HINT[want.reason];
+	return want === null ? null : `Waiting for you: ${HINT[want.reason]}`;
 }
 
 export const AWAY_RECOVERY = [

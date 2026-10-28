@@ -236,7 +236,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 		case "connect":
 			return { ...idle, title: "Connect your TAB 60", lines: ["Plug the keyboard in by USB, then click Connect and pick it in the chooser."], flashMap: null, boot: null, actions: ["connect"] };
 		case "device-prompt": {
-			const lines = [needsClick === null ? `In the chooser, pick ${screen.pickRow}.` : `Click Pick, then choose ${screen.pickRow}.`];
+			const lines = [needsClick === null ? `In the chooser, pick ${screen.pickRow}.` : `Waiting for you: click Pick ${screen.pickRow}, then choose ${screen.pickRow}.`];
 			if (screen.reason === "enter-update-mode") lines.push("The board is restarting into update mode. It shows up as a new device.");
 			if (screen.skippable) lines.push("Skip if you do not need the confirmation; the board is already home.");
 			return {

@@ -12,6 +12,7 @@ import { FakeHid, FakeLocks } from "../testing/fake-webhid";
 import { type Transcript, type TranscriptEntry, parseTranscript, recording } from "../testing/transcript";
 import { targetOf } from "../web/usages";
 import { startWebHidLab } from "../web/webhid-port";
+import { showParkedPick } from "./pick-wait";
 import { U1_EXPECTED } from "./u1-job";
 import { preconditionsLocked, tickedBoxes } from "./u1-state";
 import { type Attestation, RELOAD_INDEX, U12_KEYS, U12_PRECONDITIONS, U12_ROWS, type UserStep, attestEntry, framesOutsideU12, runU12, u12Clearance, u12Preconditions } from "./u12-run";
@@ -214,10 +215,7 @@ try {
 		onEvent: (event) => entries.push({ t: now(), ...event }),
 	});
 	ui.about.textContent = `Lab clearance: ${U12_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : "Fake board."}${resumed === null ? "" : " Resumed after the reload: click Continue."}`;
-	chooser.subscribe(() => {
-		ui.pick.hidden = chooser.needsClick === null;
-	});
-	ui.pick.addEventListener("click", () => chooser.pick());
+	showParkedPick(chooser, ui.pick, ui.summary);
 	const run = (from: number) => {
 		const mode = chosenMode();
 		if (mode === null) return;

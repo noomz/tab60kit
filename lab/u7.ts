@@ -13,6 +13,7 @@ import type { Transcript, TranscriptEntry } from "../testing/transcript";
 import { activityText } from "../web/view";
 import { startWebHidLab } from "../web/webhid-port";
 import { type KeyEvent, type KeylogTrial, PHRASE, perfectTrial } from "./keylog-trial";
+import { showParkedPick } from "./pick-wait";
 import { preconditionsLocked, tickedBoxes } from "./u1-state";
 import { u7Wrap } from "./u7-frames";
 import { type Attestation, DONT_PRESS, type TrialStep, U7_PRECONDITIONS, U7_ROWS, type UserStep, attestEntry, catalogImage, framesOutsideU7, runU7, u7Clearance, u7Preconditions } from "./u7-run";
@@ -237,10 +238,7 @@ try {
 		ui.image.textContent = `Fake board: the synthetic image ${fakeImage.entry.id}.`;
 	}
 	ui.about.textContent = `Lab clearance: ${U7_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : "Fake board."}`;
-	chooser.subscribe(() => {
-		ui.pick.hidden = chooser.needsClick === null;
-	});
-	ui.pick.addEventListener("click", () => chooser.pick());
+	showParkedPick(chooser, ui.pick, ui.summary);
 	ui.start.addEventListener("click", () => {
 		const flashing = image;
 		if (flashing === null) return;
