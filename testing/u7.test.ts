@@ -1,11 +1,11 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { imageBytes } from "../core/firmware";
 import type { DevicePort } from "../core/port";
 import { type KeylogTrial, PHRASE, perfectTrial } from "../lab/keylog-trial";
-import { U7_PRECONDITIONS, U7_STEPS, type UserStep, attestEntry, framesOutsideU7, runU7, u7Clearance, u7Preconditions } from "../lab/u7-run";
+import { U7_PRECONDITIONS, U7_STEPS, type UserStep, attestEntry, catalogImage, framesOutsideU7, runU7, u7Clearance, u7Preconditions } from "../lab/u7-run";
 import { FrameNotAllowed, U7_CURSORS, U7_ERASES, onlyU7Targets, u7Wrap } from "../lab/u7-frames";
 import { TITLES, evaluateU7, expectedFor, verdictMain } from "../tools/u7-verdict";
 import { startWebHidLab } from "../web/webhid-port";
@@ -13,7 +13,7 @@ import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { FakeHid, FakeLocks } from "./fake-webhid";
 import { ScriptedLink, fromHex } from "./scripted";
 import { syntheticFlashable } from "./synthetic-image";
-import { type Transcript, type TranscriptEntry, replayPort } from "./transcript";
+import { type Transcript, type TranscriptEntry, parseTranscript, replayPort } from "./transcript";
 
 const image = await syntheticFlashable();
 const expected = expectedFor(image);
@@ -294,4 +294,36 @@ test("L2: a version block written with no SUM of the written image before it fai
 	const fails = failing(unsummed);
 	expect(titlesOf(fails)).toEqual([TITLES.writes]);
 	expect(fails[0]).toContain("the version-block WRITE at 0x0 went out before a SUM read the written image");
+});
+
+const U7_CAPTURE = "fixtures/u7-macos.json";
+const U7_TRANSCRIPT = "testing/fixtures/tab60kit-u7-2026-10-28T06-59-25-729Z.json";
+const repoFile = (path: string) => JSON.parse(readFileSync(join(import.meta.dir, "..", path), "utf8"));
+const exe = process.env.TAB60_EXE;
+
+test(`${U7_CAPTURE} holds the 2026-10-28 board run byte for byte, from build bd27069 on a real board, with all nine checks passing`, () => {
+	const fixture = repoFile(U7_CAPTURE);
+	expect(fixture.format).toBe("tab60kit-u7-verdict/1");
+	expect(fixture.transcriptFile).toBe(U7_TRANSCRIPT);
+	expect(fixture.transcript).toEqual(repoFile(U7_TRANSCRIPT));
+	expect(fixture.environment).toMatchObject({ fake: "no", tool: "bd27069", image: "tab60-v1.01.13-us" });
+	expect(fixture.checks.map((c: { title: string; pass: boolean }) => [c.title, c.pass])).toEqual(Object.values(TITLES).map((title) => [title, true]));
+});
+
+test.skipIf(exe === undefined)("today's verdict passes the raw board transcript on every check against the real exe (set TAB60_EXE)", async () => {
+	const real = await catalogImage(new Uint8Array(readFileSync(exe ?? "")));
+	if (typeof real === "string") throw new Error(real);
+	const checks = evaluateU7(parseTranscript(repoFile(U7_TRANSCRIPT)), expectedFor(real));
+	expect(checks.filter(({ pass }) => !pass)).toEqual([]);
+	expect(checks.map(({ detail }) => detail)).toEqual([
+		"745 frames, all U7 rows, each in a step that sends it",
+		`${U7_STEPS.length} steps in plan order`,
+		"30 probes answered over 15.13 s, widest gap 0.51 s, last 0.50 s before the erase",
+		"[0x0, 0x200) then [0x200, 0x1ce00), each answered",
+		"2 sets, each read back",
+		"663 of 663 chunks match and were acked, 0 resent",
+		"SUM 0xf3d3dbd2 and version page ca529cf6…d345",
+		"3 trials, 0 of 162 characters missing",
+		"all ticked before the first frame, none changed",
+	]);
 });

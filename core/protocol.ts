@@ -109,16 +109,13 @@ export interface CommandSpec {
 
 const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
-/** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
-const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
-/** The user's ruling on U2 audit item D4 (2026-10-26): "Add it, 1000 ms". No capture yet: U7. */
-const REVIEWED_FOR_U7 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-26" } as const;
 const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
 const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-24", capture: "fixtures/u11-macos.json" } as const;
+const CONFIRMED_BY_U7 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-28", capture: "fixtures/u7-macos.json" } as const;
 
 /**
  * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
- * which U1 captured on this board; the app treats the field as an argument, and these rows take none.
+ * which U1 captured on this board and U7 captured on erase, set and get write address, and write; the app treats the field as an argument, and these rows take none.
  */
 const NO_ARG = { high: { min: 0, max: 0 }, low: { min: 0, max: 0 } } as const satisfies ArgRule;
 
@@ -241,7 +238,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "U2: built 0x408754 (offset 0, length EDI), sent 0x405164 (window), 0x405885 (version page), 0x405CC8 (failure)" },
-		maturity: REVIEWED_FOR_U5,
+		maturity: CONFIRMED_BY_U7,
 	},
 	sum: {
 		label: "Sum of a range",
@@ -290,7 +287,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "U2: built 0x408919, sent 0x404F78 inside 0x404F60, called from 0x4051B2 (BL[0x24]), 0x405538 (0), and the write retries 0x4052CF, 0x405653" },
-		maturity: REVIEWED_FOR_U5,
+		maturity: CONFIRMED_BY_U7,
 	},
 	getWriteAddress: {
 		label: "Get write address",
@@ -306,7 +303,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "U2: built 0x4089F9..0x408A01, sent 0x404F90 inside 0x404F60" },
-		maturity: REVIEWED_FOR_U7,
+		maturity: CONFIRMED_BY_U7,
 	},
 	write: {
 		label: "Write up to 52 bytes",
@@ -322,7 +319,7 @@ export const COMMANDS = {
 		value: null,
 		unlocks: null,
 		evidence: { source: "vendor-updater", at: "U2: built 0x408B2D (sub = length, memcpy to byte 4), sent 0x4052B2 (image), 0x405632 (version block)" },
-		maturity: REVIEWED_FOR_U5,
+		maturity: CONFIRMED_BY_U7,
 	},
 	cfgReadKeys: {
 		label: "Read 16 layer-0 key overrides (cmd 0x52/0x21)",

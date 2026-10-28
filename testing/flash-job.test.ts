@@ -4,7 +4,7 @@ import { type FlashableImage, imageBytes } from "../core/firmware";
 import type { JobState } from "../core/job";
 import { createKit } from "../core/kit";
 import { Busy, type DevicePort, PickCancelled } from "../core/port";
-import { FlashOrderBroken, connect } from "../core/protocol";
+import { FlashOrderBroken, connect, labClearance } from "../core/protocol";
 import { type TranscriptEntry, recording } from "./transcript";
 import { FLASH_CLEARANCE } from "./drop-sweep";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
@@ -87,9 +87,25 @@ test("a board that already holds the target is checked in update mode and left a
 	await bootsTarget(rewritten, image);
 });
 
-test("a shipped kit stops at G1 before it sends anything, so the board stays in normal mode and types", async () => {
+/** The seven U1 rows and none of the flash rows: what a shipped kit cleared before U7's board run. */
+const READS_ONLY = labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "test");
+
+test("a shipped kit makes official with rewrite off: it flashes a board in normal mode and leaves one that holds the target alone", async () => {
 	const board = fake();
-	const end = await createKit(board.port()).makeOfficial(image);
+	expect(await createKit(board.port()).makeOfficial(image)).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(ofCommand(board, 0x1d, 0x00)).toHaveLength(2);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+
+	const holds = fake(holdsTarget);
+	expect(await createKit(holds.port()).makeOfficial(image)).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(ofCommand(holds, 0x1d, 0x00)).toHaveLength(0);
+	expect(ofCommand(holds, 0x1f)).toHaveLength(0);
+});
+
+test("a kit whose clearance lacks the flash rows stops at G1 before it sends anything, so the board stays in normal mode and types", async () => {
+	const board = fake();
+	const end = await createKit(board.port(), READS_ONLY).makeOfficial(image);
 	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "gate" } });
 	expect(end.kind === "stopped" && end.reason.kind === "gate" ? end.reason.blocked : "").toContain("Erase pages");
 	expect(board.received).toEqual([]);
@@ -402,9 +418,10 @@ test("F4: writeVersionBlock throws FlashOrderBroken, sending nothing, unless the
 	expect(board.violations).toEqual([]);
 });
 
-test("a shipped kit lists every flash row as blocked by G1, so the page hides Make official; the flash clearance lists none", () => {
-	const blocked = createKit(fake().port()).capabilities().flashBlockedBy;
-	expect(blocked).toHaveLength(4);
-	expect(blocked[0]).toBe("Erase pages: reviewed, needs a capture on this board (gate G1)");
+test("a shipped kit and the flash clearance list no flash row as blocked, so the page offers Make official; a clearance without them lists all four", () => {
+	expect(createKit(fake().port()).capabilities().flashBlockedBy).toEqual([]);
 	expect(createKit(fake().port(), FLASH_CLEARANCE).capabilities().flashBlockedBy).toEqual([]);
+	const blocked = createKit(fake().port(), READS_ONLY).capabilities().flashBlockedBy;
+	expect(blocked).toHaveLength(4);
+	expect(blocked[0]).toStartWith("Erase pages: ");
 });
