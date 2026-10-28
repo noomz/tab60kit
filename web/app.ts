@@ -3,12 +3,12 @@
  * state change, after a pick (the two moments the chooser's parked request can change), and after each editor edit.
  * Once a board was read, the Board, result, and Stopped screens carry the keymap editor below the flash map.
  */
-import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, canRemap, usage } from "@tab60kit/core";
+import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
 import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, screenFor } from "./screens";
 import { TARGETS, usageName } from "./usages";
-import { type Action, OS_KEY_MODE_NAME, type PageView, viewFor } from "./view";
+import { type Action, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, admittedImage, viewFor } from "./view";
 import type { Chooser } from "./webhid-port";
 
 const EDITS_ON: readonly Screen["name"][] = ["board", "result", "stopped"];
@@ -17,6 +17,7 @@ const KEY_UNIT_EM = 3;
 const LABEL: Readonly<Record<Exclude<Action, "pick">, string>> = {
 	connect: "Connect",
 	"deep-check": "Deep check",
+	"make-official": "Make official",
 	apply: "Apply",
 	cancel: "Stop",
 	skip: "Skip",
@@ -77,6 +78,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	let storageProblem = stored.problem;
 	let layer: Layer = 0;
 	let selected: KeyId | null = null;
+	let reading: UpdaterReading | null = null;
 	const edit = (next: KeymapDoc, nextMode: OsKeyMode | null = mode) => {
 		doc = next;
 		mode = nextMode;
@@ -90,6 +92,10 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	const act: Readonly<Record<Action, () => void>> = {
 		connect: () => run(kit.check("quick")),
 		"deep-check": () => run(kit.check("deep")),
+		"make-official": () => {
+			const image = admittedImage(reading);
+			if (image !== null) run(kit.makeOfficial(image));
+		},
 		apply: () => {
 			if (mode !== null) run(kit.applyKeymap(doc, mode));
 		},
@@ -167,18 +173,52 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		return section;
 	}
 
+	function exePicker(): HTMLElement {
+		const input = element("input");
+		input.type = "file";
+		input.accept = ".exe";
+		input.addEventListener("change", () => {
+			const file = input.files?.[0];
+			if (file === undefined) return;
+			void file
+				.arrayBuffer()
+				.then((buffer) => readUpdater(new Uint8Array(buffer)))
+				.then((read) => {
+					reading = read;
+				})
+				.finally(render);
+		});
+		const label = element("label", "Vendor updater: ");
+		label.append(input);
+		const line = element("p");
+		line.append(label);
+		return line;
+	}
+
 	function render(): void {
-		const screen = screenFor({ kind: "kit", state: kit.state, reading: null, keymap: doc, caps: kit.capabilities() });
+		const screen = screenFor({ kind: "kit", state: kit.state, reading, keymap: doc, caps: kit.capabilities() });
 		view = viewFor(screen, chooser.needsClick);
 		const nodes: Node[] = [element("h1", view.title)];
+		if (view.holdStill) {
+			const banner = element("p", HOLD_STILL_BANNER);
+			banner.setAttribute("role", "alert");
+			nodes.push(banner);
+		}
 		for (const line of view.lines) nodes.push(element("p", line));
+		if (EDITS_ON.includes(screen.name) && kit.state.board !== null) nodes.push(exePicker());
 		if (view.linuxRule !== null) nodes.push(element("pre", view.linuxRule));
+		let pick: HTMLButtonElement | null = null;
 		if (view.actions.length > 0) {
 			const bar = element("p");
 			for (const action of view.actions) {
 				const button = element("button", action === "pick" ? (view.pickLabel ?? "Pick") : LABEL[action]);
 				button.type = "button";
 				button.addEventListener("click", act[action]);
+				if (action === "pick") {
+					button.style.fontWeight = "bold";
+					button.style.fontSize = "1.25em";
+					pick = button;
+				}
 				bar.append(button, " ");
 			}
 			nodes.push(bar);
@@ -187,6 +227,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		if (view.boot !== null) nodes.push(element("p", view.boot));
 		if (EDITS_ON.includes(screen.name) && kit.state.board !== null) nodes.push(editor());
 		root.replaceChildren(...nodes);
+		pick?.focus();
 	}
 
 	const holdStill = (event: BeforeUnloadEvent) => {

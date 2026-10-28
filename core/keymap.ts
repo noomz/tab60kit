@@ -21,6 +21,7 @@ import {
 	type CommandName,
 	type CommandSpec,
 	DeviceRefused,
+	FLASH_ROWS,
 	type OverrideEntry,
 	type OverrideValue,
 	type Session,
@@ -286,6 +287,8 @@ export interface ConfigCapabilities {
 	readonly canSetOsMode: boolean;
 	/** One line per config command the clearance does not clear, for the locked editor's explanation. */
 	readonly blockedBy: readonly string[];
+	/** One line per flash row (protocol.ts FLASH_ROWS) the clearance does not clear. Empty: Make official may run. */
+	readonly flashBlockedBy: readonly string[];
 }
 
 type Unlock = NonNullable<CommandSpec["unlocks"]>;
@@ -302,6 +305,7 @@ export function capabilities(clearance: Clearance): ConfigCapabilities {
 		blockedBy: COMMAND_NAMES.filter((name) => unlocks(name) !== null && !clears(clearance, name)).map((name) =>
 			gateMessage(name, clearance),
 		),
+		flashBlockedBy: FLASH_ROWS.filter((name) => !clears(clearance, name)).map((name) => gateMessage(name, clearance)),
 	};
 }
 

@@ -9,6 +9,7 @@ import { FakeTab60 } from "../testing/fake-tab60";
 import { FakeHid, FakeLocks } from "../testing/fake-webhid";
 import { type Transcript, type TranscriptEntry, recording } from "../testing/transcript";
 import { startWebHidLab } from "../web/webhid-port";
+import { showParkedPick } from "./pick-wait";
 import { U1_EXPECTED } from "./u1-job";
 import { preconditionsLocked, tickedBoxes } from "./u1-state";
 import { U10_PRECONDITIONS, U10_ROWS, diffAgainstPrediction, framesOutsideU10, readStore, u10Clearance, u10Preconditions } from "./u10-run";
@@ -109,10 +110,7 @@ try {
 		onEvent: (event) => entries.push({ t: now(), ...event }),
 	});
 	ui.about.textContent = `Lab clearance: ${U10_ROWS.join(", ")}. Tool ${TAB60KIT_COMMIT}. ${fakeMode === null ? "Real WebHID." : "Fake board."}`;
-	chooser.subscribe(() => {
-		ui.pick.hidden = chooser.needsClick === null;
-	});
-	ui.pick.addEventListener("click", () => chooser.pick());
+	showParkedPick(chooser, ui.pick, ui.summary);
 	ui.osKeyMode.addEventListener("change", render);
 	ui.read.addEventListener("click", () => {
 		const mode = chosenMode();

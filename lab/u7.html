@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'self'; connect-src 'none'; script-src 'self'; object-src 'none'; base-uri 'none'"
+		/>
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>tab60kit lab U7</title>
+		<script type="module" src="./u7.js"></script>
+	</head>
+	<body>
+		<h1>tab60kit lab: U7 first write, V1.01.13 over itself</h1>
+		<p id="about"></p>
+		<fieldset id="preconditions">
+			<legend>Before Start</legend>
+			<label>The vendor updater, Tab60firmwareV1.01.13.exe: <input id="exe" type="file" accept=".exe" /></label>
+			<p id="image"></p>
+		</fieldset>
+		<section>
+			<h2>Do not press</h2>
+			<p>Each of these saves the profile to flash. Press none of them from Start to the end of the run.</p>
+			<ul id="dont-press"></ul>
+		</section>
+		<p>
+			<button id="start" type="button" disabled>Start</button>
+			<button id="pick" type="button" hidden>Pick the TAB 60</button>
+			<button id="download" type="button" disabled>Download transcript</button>
+		</p>
+		<p id="hold-still" role="alert" hidden>
+			Hold still. The keyboard cannot type now. Do not unplug the cable, close this tab, or switch away from it.
+		</p>
+		<p id="activity"></p>
+		<section id="step" hidden>
+			<h2>Your step</h2>
+			<p id="step-label"></p>
+			<p id="phrase-line" hidden>Phrase: <code id="phrase"></code></p>
+			<textarea id="box" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="3" cols="60" hidden></textarea>
+			<p>
+				<button id="simulate" type="button" hidden>Type the phrase on the fake board</button>
+			</p>
+			<p id="step-question"></p>
+			<p id="answers">
+				<button id="yes" type="button">Yes</button>
+				<button id="no" type="button">No</button>
+			</p>
+		</section>
+		<p id="summary"></p>
+		<ol id="outcomes"></ol>
+		<pre id="log"></pre>
+	</body>
+</html>

@@ -75,6 +75,7 @@ function independence(rule: string, from: string, allowed: readonly string[]): v
 independence("fake-board-independence", "testing/fake-tab60.ts", ["core/port.ts", "core/units.ts"]);
 independence("u1-checks-independence", "lab/u1-checks.ts", ["core/device.ts", "core/firmware.ts", "core/updater.ts", "core/port.ts", "core/units.ts"]);
 independence("u1-frames-independence", "lab/u1-frames.ts", ["core/port.ts", "core/units.ts"]);
+independence("u7-frames-independence", "lab/u7-frames.ts", ["core/port.ts", "core/units.ts"]);
 
 // keymap.ts takes the registry from protocol.ts at runtime, so protocol.ts may take only types back. Under
 // verbatimModuleSyntax an `import { type X }` still loads the module, so only `import type` and `export type` count.

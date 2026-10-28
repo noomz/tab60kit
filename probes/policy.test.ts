@@ -127,7 +127,7 @@ check("udev rule: R3's rule byte for byte", () =>
 	),
 );
 
-// G1 today, shipped: the confirmed reads, gate, and key write unlock reading and writing; the unreviewed 0x51/0x00 says what it lacks.
+// G1 today, shipped: the confirmed reads, gate, key write, and flash rows unlock reading, writing, and Make official; the unreviewed 0x51/0x00 says what it lacks.
 const caps = capabilities(SHIPPED);
 check("shipped caps: reading and writing, not the OS mode", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, true, false]));
 check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lacks", () =>
@@ -136,6 +136,7 @@ check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lack
 		["needs review and a capture on this board (gate G1)"],
 	),
 );
+check("shipped caps: no flash row is blocked, so the page offers Make official", () => assert.deepEqual(caps.flashBlockedBy, []));
 const u10Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "readMode", "readBlInfo"], "U10"));
 check("U10 lab caps: the two reads unlock reading and nothing else", () => assert.deepEqual([u10Caps.canRead, u10Caps.canWrite, u10Caps.canSetOsMode], [true, false, false]));
 const u11Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "gateQuery", "gateOpen", "gateClose", "cfgWriteKey"], "U11"));
@@ -157,21 +158,21 @@ const clearing: readonly [Clearance, CommandName, Maturity, boolean, string][] =
 ];
 for (const [clearance, name, maturity, want, why] of clearing) check(`clearance: ${why}`, () => assert.equal(clears(clearance, name, maturity), want));
 const U1_ROWS: readonly CommandName[] = ["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"];
-const REVIEWED_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "write"];
+const U7_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "getWriteAddress", "write"];
 const U10_ROWS: readonly CommandName[] = ["cfgReadKeys", "cfgReadKey"];
 const U11_ROWS: readonly CommandName[] = ["gateQuery", "gateOpen", "gateClose", "cfgWriteKey"];
 const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgSetOsMode"];
 check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
 check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
-check("clearance: a lab session for the reviewed erase, set write address, and write rows", () => assert.equal(labClearance(REVIEWED_ROWS, "U5").kind, "lab"));
+check("clearance: a lab session for the four confirmed U7 flash rows", () => assert.equal(labClearance(U7_ROWS, "U7").kind, "lab"));
 check("clearance: a lab session for the two confirmed override-store reads and the U1 rows an app session needs", () =>
 	assert.equal(labClearance([...U10_ROWS, "readMode", "readBlInfo"], "U10").kind, "lab"),
 );
 check("clearance: a lab session for the four confirmed U11 rows", () => assert.equal(labClearance(U11_ROWS, "U11").kind, "lab"));
-check("clearance: the shipped build sends exactly the seven U1 rows, the two U10 reads, and the four U11 rows, and refuses erase, crc, set write address, write, and 0x51/0x00", () =>
+check("clearance: the shipped build sends exactly the seven U1 rows, the two U10 reads, the four U11 rows, and the four U7 flash rows, and refuses crc and 0x51/0x00", () =>
 	assert.deepEqual(
 		{ sends: new Set(COMMAND_NAMES.filter((name) => clears(SHIPPED, name))), refuses: new Set(COMMAND_NAMES.filter((name) => !clears(SHIPPED, name))) },
-		{ sends: new Set([...U1_ROWS, ...U10_ROWS, ...U11_ROWS]), refuses: new Set([...REVIEWED_ROWS, ...UNREVIEWED_ROWS]) },
+		{ sends: new Set([...U1_ROWS, ...U10_ROWS, ...U11_ROWS, ...U7_ROWS]), refuses: new Set(UNREVIEWED_ROWS) },
 	),
 );
 for (const name of UNREVIEWED_ROWS) {
@@ -190,7 +191,19 @@ const U10_CAPTURE = "fixtures/u10-macos.json";
 const U10_TRANSCRIPT = "testing/fixtures/tab60kit-u10-2026-10-19T08-46-35-778Z.json";
 const U11_CAPTURE = "fixtures/u11-macos.json";
 const U11_TRANSCRIPT = "testing/fixtures/tab60kit-u11-2026-10-24T10-59-37-545Z.json";
-check(`capture: every confirmed row cites ${CAPTURE}, ${U10_CAPTURE}, or ${U11_CAPTURE}`, () => assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE, U11_CAPTURE])));
+const U7_CAPTURE = "fixtures/u7-macos.json";
+check(`capture: every confirmed row cites ${CAPTURE}, ${U10_CAPTURE}, ${U11_CAPTURE}, or ${U7_CAPTURE}`, () =>
+	assert.deepEqual(captures, new Set([CAPTURE, U10_CAPTURE, U11_CAPTURE, U7_CAPTURE])),
+);
+check(`capture: the U7 flash rows cite ${U7_CAPTURE}, whose transcript testing/u7.test.ts holds byte for byte`, () =>
+	assert.deepEqual(
+		U7_ROWS.map((name) => {
+			const maturity: Maturity = COMMANDS[name].maturity;
+			return maturity.level === "confirmed" ? maturity.capture : maturity.level;
+		}),
+		U7_ROWS.map(() => U7_CAPTURE),
+	),
+);
 check(`capture: the U10 reads cite ${U10_CAPTURE}`, () =>
 	assert.deepEqual(
 		U10_ROWS.map((name) => {
@@ -297,8 +310,9 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
 );
 
-// From R1 "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length.
-const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub" } as const;
+// From R1 "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length. A get-address
+// carries one u32 too, the all-ones word (U2, 0x404F88).
+const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub", "read-cursor": 4 } as const;
 check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
 	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),
 );
@@ -354,6 +368,9 @@ const egress: readonly [string, ReturnType<typeof audited>, ReturnType<typeof au
 	["WRITE before a set-address", audited(frame(0x1f, 52), "write"), { refused: "no-write-cursor" }],
 	["set the write address to the image", audited(frame(0x1e, 0x01, 0x200), "setWriteAddress"), { ok: "setWriteAddress", cursor: 0x200 }],
 	["set the write address in the bootloader", audited(frame(0x1e, 0x01, 0xfffffff0), "setWriteAddress"), { refused: "outside-window" }],
+	["get the write address, which leaves the cursor alone", audited(frame(0x1e, 0x00, 0xffffffff), "getWriteAddress", { ...iap, cursor: 0x200 }), { ok: "getWriteAddress", cursor: 0x200 }],
+	["get the write address with an address in place of the all-ones word", audited(frame(0x1e, 0x00, 0x200), "getWriteAddress"), { refused: "value-not-allowed" }],
+	["get the write address in normal mode", audited(frame(0x1e, 0x00, 0xffffffff), "getWriteAddress", app), { refused: "wrong-mode" }],
 	["WRITE 52 bytes at the image start", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x200 }), { ok: "write", cursor: 0x234 }],
 	["WRITE past the window end", audited(frame(0x1f, 52), "write", { ...iap, cursor: 0x1ce00 - 10 }), { refused: "outside-window" }],
 	["a 63-byte frame", audited(frame(0x12, 0x02, 0, 0, 63), "readMode"), { refused: "bad-length" }],
@@ -427,5 +444,5 @@ check("image handle: no bytes behind a handle admit() did not build", () =>
 );
 
 console.log(
-	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 4 G1 caps, ${clearing.length + 5 + UNREVIEWED_ROWS.length} clearance, 1 maturity, 2 capture, 11 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
+	`policy checks: ${checks} cases (25 update-mode, 3 normal-mode, 2 boot, 6 window, udev rule, 5 G1 caps, ${clearing.length + 5 + UNREVIEWED_ROWS.length} clearance, 1 maturity, 2 capture, 11 registry, ${egress.length + 1} egress audit, ${gate.length} link gate, 1 image handle)`,
 );

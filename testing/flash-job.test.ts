@@ -4,11 +4,14 @@ import { type FlashableImage, imageBytes } from "../core/firmware";
 import type { JobState } from "../core/job";
 import { createKit } from "../core/kit";
 import { Busy, type DevicePort, PickCancelled } from "../core/port";
+import { FlashOrderBroken, connect, labClearance } from "../core/protocol";
+import { type TranscriptEntry, recording } from "./transcript";
 import { FLASH_CLEARANCE } from "./drop-sweep";
 import { FakeTab60, type FakeOptions } from "./fake-tab60";
 import { syntheticFlashable } from "./synthetic-image";
 
 const image = await syntheticFlashable();
+const live = new AbortController().signal;
 const target = { imageBytes: image.entry.image.bytes, wireSum32: image.entry.image.wireSum32 };
 /** A board that starts in update mode with this block over an image summing to the target already holds the target. */
 const holdsTarget: Partial<FakeOptions> = { starting: "update-mode-official-image", versionBlock: imageBytes(image).versionBlock.bytes };
@@ -84,9 +87,25 @@ test("a board that already holds the target is checked in update mode and left a
 	await bootsTarget(rewritten, image);
 });
 
-test("a shipped kit stops at G1 before it sends anything, so the board stays in normal mode and types", async () => {
+/** The seven U1 rows and none of the flash rows: what a shipped kit cleared before U7's board run. */
+const READS_ONLY = labClearance(["readMode", "readBlInfo", "readFwInfo", "readVersionPage", "sum", "resetToIap", "resetToApp"], "test");
+
+test("a shipped kit makes official with rewrite off: it flashes a board in normal mode and leaves one that holds the target alone", async () => {
 	const board = fake();
-	const end = await createKit(board.port()).makeOfficial(image);
+	expect(await createKit(board.port()).makeOfficial(image)).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(ofCommand(board, 0x1d, 0x00)).toHaveLength(2);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+
+	const holds = fake(holdsTarget);
+	expect(await createKit(holds.port()).makeOfficial(image)).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(ofCommand(holds, 0x1d, 0x00)).toHaveLength(0);
+	expect(ofCommand(holds, 0x1f)).toHaveLength(0);
+});
+
+test("a kit whose clearance lacks the flash rows stops at G1 before it sends anything, so the board stays in normal mode and types", async () => {
+	const board = fake();
+	const end = await createKit(board.port(), READS_ONLY).makeOfficial(image);
 	expect(end).toMatchObject({ kind: "stopped", reason: { kind: "gate" } });
 	expect(end.kind === "stopped" && end.reason.kind === "gate" ? end.reason.blocked : "").toContain("Erase pages");
 	expect(board.received).toEqual([]);
@@ -259,4 +278,150 @@ test("report draws the four regions, fingerprints the bootloader, and splits the
 	const deep = await createKit(fake({ starting: "update-mode-erased" }).port(), FLASH_CLEARANCE).check("deep");
 	if (deep.board?.mode !== "iap") throw new Error("not in update mode");
 	expect(report(deep.board).regions.map((r) => r.finding.kind)).toEqual(["not-checkable-over-usb", "erased", "unrecognized", "not-checkable-over-usb"]);
+});
+
+const WINDOW_BYTES = 0x1ce00;
+const VERSION_PAGE: readonly [number, number] = [0, 0x200];
+const APP_REGION: readonly [number, number] = [0x200, WINDOW_BYTES - 0x200];
+const WHOLE_WINDOW: readonly [number, number] = [0, WINDOW_BYTES];
+const IMAGE_CHUNKS = Math.ceil(target.imageBytes / 52);
+const erasesOf = (board: FakeTab60) => ofCommand(board, 0x1d, 0x00).map((r) => r.words);
+/** Each set write address, get write address, and WRITE, as "set 0x200", "get", or "write". */
+const cursorTrail = (board: FakeTab60) =>
+	board.received.flatMap((r) => (r.cmd === 0x1e ? [r.sub === 0x01 ? `set 0x${r.words[0].toString(16)}` : "get"] : r.cmd === 0x1f ? ["write"] : []));
+
+test("D1: an IAP that refuses the app-region erase with FF AA gets the vendor's one window erase, after the version page is gone", async () => {
+	const board = fake({ ...holdsTarget, offsetErase: "error-marker" });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, WHOLE_WINDOW]);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+test("D1: an IAP that never answers the app-region erase gets it three times, 15 s each, then the window erase", async () => {
+	const board = fake({ ...holdsTarget, offsetErase: "silent" });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	const erases = ofCommand(board, 0x1d, 0x00);
+	expect(erases.map((r) => r.words)).toEqual([VERSION_PAGE, APP_REGION, APP_REGION, APP_REGION, WHOLE_WINDOW]);
+	expect((erases[4]?.t ?? 0) - (erases[1]?.t ?? 0)).toBeGreaterThanOrEqual(3 * 15_000);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+test("D1: no window erase follows a version-page erase that went unanswered; the job reconnects and erases page by page", async () => {
+	const board = fake({ ...holdsTarget, offsetErase: "error-marker", slowOnce: { cmd: 0x1d, sub: 0x00, mode: "iap", ms: Number.POSITIVE_INFINITY } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, VERSION_PAGE, APP_REGION, WHOLE_WINDOW]);
+	expect(board.violations).toEqual([]);
+});
+
+test("D4: every set write address is read back, and a read-back that differs sends the pair again", async () => {
+	const board = fake({ ...holdsTarget, cursorFault: { at: 0, times: 2 } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	const trail = cursorTrail(board);
+	expect(trail.slice(0, 7)).toEqual(["set 0x200", "get", "set 0x200", "get", "set 0x200", "get", "write"]);
+	expect(trail.filter((step) => step.startsWith("set"))).toEqual(["set 0x200", "set 0x200", "set 0x200", "set 0x0"]);
+	expect(trail.filter((step) => step === "write")).toHaveLength(IMAGE_CHUNKS + 4);
+	await bootsTarget(board, image);
+});
+
+test("D4: three read-backs that differ end the step as a refusal; the loop observes, gates a new link, and writes again", async () => {
+	const board = fake({ ...holdsTarget, cursorFault: { at: 0, times: 3 } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, VERSION_PAGE, APP_REGION]);
+	expect(cursorTrail(board).slice(0, 7)).toEqual(["set 0x200", "get", "set 0x200", "get", "set 0x200", "get", "set 0x200"]);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+for (const kind of ["no-reply", "mute", "wrong-next"] as const) {
+	test(`D5: a WRITE with ${kind} goes again from its block's start, after the cursor is set back and read back`, async () => {
+		const board = fake({ ...holdsTarget, writeFault: { at: 100, times: 1, kind } });
+		const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+		expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+		const trail = cursorTrail(board);
+		const writes = trail.flatMap((step, i) => (step === "write" ? [i] : []));
+		const faulty = writes[100] ?? -1;
+		expect(trail.slice(faulty, faulty + 4)).toEqual(["write", `set 0x${(0x200 + 100 * 52).toString(16)}`, "get", "write"]);
+		expect(writes).toHaveLength(IMAGE_CHUNKS + 4 + 1);
+		expect(erasesOf(board)).toHaveLength(2);
+		expect(board.violations).toEqual([]);
+		await bootsTarget(board, image);
+	});
+}
+
+test("D5: a block that fails three times hands off to the loop, which erases and writes the image again", async () => {
+	const board = fake({ ...holdsTarget, writeFault: { at: 100, times: 3, kind: "wrong-next" } });
+	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, VERSION_PAGE, APP_REGION]);
+	expect(ofCommand(board, 0x1f)).toHaveLength(100 + 3 + IMAGE_CHUNKS + 4);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+test("a late echo of a timed-out ERASE arrives during the 1 s wait before the resend and is dropped, so the resend waits for its own answer", async () => {
+	const board = fake({ ...holdsTarget, slowOnce: { cmd: 0x1d, sub: 0x00, mode: "iap", ms: 15_500, skip: 1 } });
+	const entries: TranscriptEntry[] = [];
+	const base = board.port();
+	const port: DevicePort = { ...base, open: async (want, signal) => recording(await base.open(want, signal), (entry) => entries.push(entry), () => board.clock.now()) };
+	const end = await createKit(port, FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
+	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
+	expect(erasesOf(board)).toEqual([VERSION_PAGE, APP_REGION, APP_REGION]);
+	const appErase = `1d000000${"00020000"}`;
+	const [first, second] = entries.flatMap((entry, i) => (entry.kind === "out" && entry.hex.startsWith(appErase) ? [i] : []));
+	if (first === undefined || second === undefined) throw new Error("no resend");
+	const between = entries.slice(first + 1, second);
+	expect(between.map((entry) => entry.kind)).toEqual(["discarded"]);
+	expect((entries[second]!.t) - (entries[first]!.t)).toBeGreaterThanOrEqual(15_000 + 1_000);
+	expect(entries[second + 1]).toMatchObject({ kind: "in", hex: expect.stringMatching(/^1d000000/) });
+	expect((entries[second + 1]!.t) - (entries[second]!.t)).toBeGreaterThan(0);
+	expect(board.violations).toEqual([]);
+	await bootsTarget(board, image);
+});
+
+async function iapSession(options: Partial<FakeOptions>) {
+	const board = fake(options);
+	const session = await connect({ port: board.port(), clearance: FLASH_CLEARANCE, signal: new AbortController().signal }, { modes: ["iap"], reason: "connect" });
+	if ("refusal" in session) throw new Error(session.refusal.code);
+	return { board, session };
+}
+const flashFrames = (board: FakeTab60) => board.received.filter((r) => r.cmd === 0x1d && r.sub === 0x00 || r.cmd === 0x1e || r.cmd === 0x1f).length;
+
+test("F4: writeImage throws FlashOrderBroken, sending nothing, unless eraseWindow completed on the same session", async () => {
+	const { board, session } = await iapSession({ starting: "update-mode-erased" });
+	await expect(session.writeImage(image, () => undefined)).rejects.toBeInstanceOf(FlashOrderBroken);
+	expect(flashFrames(board)).toBe(0);
+	await session.eraseWindow();
+	await session.writeImage(image, () => undefined);
+	await expect(session.writeImage(image, () => undefined)).rejects.toThrow("writeImage after image-written");
+	await session.close();
+});
+
+test("F4: writeVersionBlock throws FlashOrderBroken, sending nothing, unless the session's latest SUM matched the image", async () => {
+	const { board, session } = await iapSession({ ...holdsTarget, starting: "update-mode-damaged-image" });
+	await expect(session.writeVersionBlock(image)).rejects.toThrow("writeVersionBlock after none");
+	await session.checksum(target.imageBytes, live);
+	await expect(session.writeVersionBlock(image)).rejects.toThrow(`writeVersionBlock after a SUM of 0x${((target.wireSum32 + 1) >>> 0).toString(16)}`);
+	expect(flashFrames(board)).toBe(0);
+	await session.eraseWindow();
+	await session.writeImage(image, () => undefined);
+	await expect(session.writeVersionBlock(image)).rejects.toThrow("writeVersionBlock after image-written");
+	await session.checksum(target.imageBytes, live);
+	await session.writeVersionBlock(image);
+	await session.close();
+	expect(board.violations).toEqual([]);
+});
+
+test("a shipped kit and the flash clearance list no flash row as blocked, so the page offers Make official; a clearance without them lists all four", () => {
+	expect(createKit(fake().port()).capabilities().flashBlockedBy).toEqual([]);
+	expect(createKit(fake().port(), FLASH_CLEARANCE).capabilities().flashBlockedBy).toEqual([]);
+	const blocked = createKit(fake().port(), READS_ONLY).capabilities().flashBlockedBy;
+	expect(blocked).toHaveLength(4);
+	expect(blocked[0]).toStartWith("Erase pages: ");
 });

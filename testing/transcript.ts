@@ -2,8 +2,8 @@
  * Recorded sessions with a real board: the golden fixtures behind the fake board and the replay tests, and the
  * capture that moves a G1 row from "reviewed" to "confirmed" (protocol.ts Maturity).
  *
- * A transcript never carries firmware. `recording` refuses a WRITE frame until U7 stores write payloads as their
- * length and SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
+ * A transcript never carries firmware. `recording` stores a WRITE frame as its first four bytes, its payload length,
+ * and its payload's SHA-256; replay then compares the hash of what the core sends against the recorded hash, so golden
  * tests stay byte-exact without redistributing vendor bytes.
  */
 import { type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type Mode, type OutReport, type WantReason, asInReport, modeOf } from "../core/port";
@@ -90,9 +90,12 @@ export function recording(link: Link, sink: (entry: TranscriptEntry) => void, no
 		mode: link.mode,
 		lost: link.lost,
 		async send(report) {
-			if (report[0] === WRITE_CMD) throw new Error("recording: WRITE frames are not recordable before U7 hashes their payloads");
-			const hex = hexOf(report);
-			sink({ t: now(), kind: "out", hex });
+			let hex = hexOf(report);
+			if (report[0] === WRITE_CMD) {
+				const payloadBytes = report[1] ?? 0;
+				sink({ t: now(), kind: "out-write", header: hex.slice(0, 8), payloadBytes, payloadSha256: await sha256Hex(report.subarray(4, 4 + payloadBytes)) });
+				hex = hex.slice(0, 8).padEnd(hex.length, "0");
+			} else sink({ t: now(), kind: "out", hex });
 			try {
 				await link.send(report);
 			} catch (error) {
@@ -312,8 +315,8 @@ function describeEntry(entry: WireEntry | undefined): string {
  * "out" entry (or match an "out-write" by header and payload hash), and each read gets the next "in" entry. An open
  * waits until the transcript reaches its "opened" entry, because the core asks for the update-mode link before the
  * RESET that makes it appear. A read that finds no "in" next times out, as it did when recorded. The clock is the
- * transcript's: it reads the time of the last entry consumed, and a sleep returns at once.
- * Entries the core does not cause (picks, visibility, typing, preconditions, discarded reports) are skipped.
+ * transcript's: it reads the time of the last entry consumed, and a sleep returns at once with the clock moved by its
+ * length. Entries the core does not cause (picks, visibility, typing, preconditions, discarded reports) are skipped.
  */
 export function replayPort(transcript: Transcript): ReplayPort {
 	const wire = transcript.entries.flatMap((entry, index) => (isWire(entry) ? [{ index, entry }] : []));
@@ -445,7 +448,11 @@ export function replayPort(transcript: Transcript): ReplayPort {
 		exclusive: (job) => job(),
 		clock: {
 			now: () => now,
-			sleep: async (_ms, signal) => signal.throwIfAborted(),
+			// A sleep moves the clock by its length, so the link gate judges the quiet time the recording saw.
+			sleep: async (ms, signal) => {
+				signal.throwIfAborted();
+				now += ms;
+			},
 		},
 		get divergence() {
 			return divergence;

@@ -17,7 +17,7 @@
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
-import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, windowFor } from "./flashmap";
+import { type BlInfo, type FlashWindow, type LayoutRefusal, type Span, appRegion, imageSpan, inWindow, parseBlInfo, versionPage, versionSpan, wholeWindow, windowFor } from "./flashmap";
 import type { Layer, OsMode, Usage } from "./keymap";
 import { type Clock, type DevicePort, type DeviceWant, type InReport, type Link, LinkLost, LinkTimeout, type OutReport, type WantReason } from "./port";
 import { type Crc32, type Mode, type Sum32, crc32Literal, notImplemented, sum32Literal } from "./units";
@@ -53,8 +53,9 @@ export type Maturity =
  *   range        u32 offset at byte 4, u32 length at byte 8 (ERASE, SUM, CRC)
  *   set-cursor   u32 offset at byte 4 becomes the board's write cursor (set write address)
  *   at-cursor    the payload lands at the write cursor, and the sub byte is its length (WRITE)
+ *   read-cursor  u32 0xFFFFFFFF at byte 4 asks for the board's write cursor, which the reply carries (get write address)
  */
-export type Addressing = "none" | "range" | "set-cursor" | "at-cursor";
+export type Addressing = "none" | "range" | "set-cursor" | "at-cursor" | "read-cursor";
 
 /** Sub-commands `first` to `first + count - 1`. Part i of a request is sub `first + i`. */
 export interface SubRange {
@@ -85,9 +86,9 @@ export interface CommandSpec {
 	readonly modes: readonly Mode[];
 	readonly effect: Effect;
 	/**
-	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument. echo-cmd: byte 0
-	 * repeats cmd and bytes 1..3 carry an answer. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets
-	 * instead.
+	 * echo: bytes 0..1 repeat cmd and sub. echo-arg: bytes 0..3 repeat cmd, sub, and the argument; the vendor's reply
+	 * filter accepts nothing less (U2, 0x4076FB..0x40770D), so every IAP row takes it. echo-cmd: byte 0 repeats cmd and
+	 * bytes 1..3 carry an answer. write-ack: 0x1E 0x02 then the u32 next offset. none: the board resets instead.
 	 */
 	readonly reply: "echo" | "echo-arg" | "echo-cmd" | "write-ack" | "none";
 	readonly timeoutMs: number;
@@ -108,20 +109,20 @@ export interface CommandSpec {
 
 const UNREVIEWED = { level: "unreviewed" } as const;
 const CONFIRMED_BY_U1 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-12", capture: "fixtures/u1-macos.json" } as const;
-/** The flash-write rows, reviewed so the U5 drop sweep can drive the sessions against the fake board. No capture yet: U7. */
-const REVIEWED_FOR_U5 = { level: "reviewed", by: "Siriwat Uamngamsup", on: "2026-10-18" } as const;
 const CONFIRMED_BY_U10 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-19", capture: "fixtures/u10-macos.json" } as const;
 const CONFIRMED_BY_U11 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-24", capture: "fixtures/u11-macos.json" } as const;
+const CONFIRMED_BY_U7 = { level: "confirmed", by: "Siriwat Uamngamsup", on: "2026-10-28", capture: "fixtures/u7-macos.json" } as const;
 
 /**
  * Bytes 2..3 held at zero. The IAP rows send 0x0000 as pok3rtool does (R1 "Packet framing", VERIFIED in its source),
- * which U1 captured on this board; the app treats the field as an argument, and these rows take none.
+ * which U1 captured on this board and U7 captured on erase, set and get write address, and write; the app treats the field as an argument, and these rows take none.
  */
 const NO_ARG = { high: { min: 0, max: 0 }, low: { min: 0, max: 0 } } as const satisfies ArgRule;
 
 /**
- * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, get write address,
- * and the patched-firmware READ 0xFF) are left out on purpose, so the audit refuses them. G1 forbids a row until
+ * Every command the tool can send. Commands the design does not use (PING, DISCONNECT, and the patched-firmware
+ * READ 0xFF) are left out on purpose, so the audit refuses them. Evidence addresses for vendor-updater rows are the
+ * U2 audit's (docs/protocol.md "Sequences"), each one a call site `x86.py dump` prints. G1 forbids a row until
  * the user reviews it and a lab session captures it (docs/units.md U1, U7, U10, U11).
  */
 export const COMMANDS = {
@@ -131,14 +132,14 @@ export const COMMANDS = {
 		sub: 0x00,
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x404E80 identity compare reads 16 bytes (command INFERRED, U2)" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x40839D, sent 0x404749 (GetInfo) and 0x4050B9 (flash); identity compare 0x404E80" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	readFwInfo: {
@@ -147,14 +148,14 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "pok3rtool", at: "cykb.py:46,283-291, 4 bytes at 0x3C00, unused" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4084C9, sent 0x40482C; payload[2..3] picks version part 0x20+x" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	readMode: {
@@ -163,7 +164,7 @@ export const COMMANDS = {
 		sub: 0x02,
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		/** At least WRITE_LINK_RULE.maxProbeGapMs (flash.ts), so a slow answer is judged by the link gate and check 9 instead of thrown. */
 		timeoutMs: 1_000,
 		address: "none",
@@ -181,14 +182,14 @@ export const COMMANDS = {
 		sub: { first: 0x20, count: 3 },
 		modes: ["app", "iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 500,
 		address: "none",
 		payloadBytes: 0,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x405789..0x405879 version block read-back; R1 proto_cykb.cpp:116-121 reads parts 0..2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x408613, sent 0x4047C7, 0x404841, 0x4057E1 (read-back of parts 0..2)" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	resetToIap: {
@@ -204,7 +205,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "board re-enumerated during the vendor flash; exact call site U2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4082DB (sub 0 when arg = 1), sent 0x4068A7, no reply wait" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	resetToApp: {
@@ -220,7 +221,7 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "board returned as 0x0304 after the vendor flash; exact call site U2" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x405A58, sent 0x405A95, no reply wait" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	erase: {
@@ -229,15 +230,15 @@ export const COMMANDS = {
 		sub: 0x00,
 		modes: ["iap"],
 		effect: "erase",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 15_000,
 		address: "range",
 		payloadBytes: 8,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: 'R2 0x404FE0 flash routine, "Fail to Erase Flash!"' },
-		maturity: REVIEWED_FOR_U5,
+		evidence: { source: "vendor-updater", at: "U2: built 0x408754 (offset 0, length EDI), sent 0x405164 (window), 0x405885 (version page), 0x405CC8 (failure)" },
+		maturity: CONFIRMED_BY_U7,
 	},
 	sum: {
 		label: "Sum of a range",
@@ -245,14 +246,14 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x408780 asks the board for its sum" },
+		evidence: { source: "vendor-updater", at: "U2: built 0x4087E2, sent 0x405422 over (BL[0x24], size)" },
 		maturity: CONFIRMED_BY_U1,
 	},
 	crc: {
@@ -261,7 +262,7 @@ export const COMMANDS = {
 		sub: 0x02,
 		modes: ["iap"],
 		effect: "read",
-		reply: "echo",
+		reply: "echo-arg",
 		timeoutMs: 2_000,
 		address: "range",
 		payloadBytes: 8,
@@ -277,15 +278,32 @@ export const COMMANDS = {
 		sub: 0x01,
 		modes: ["iap"],
 		effect: "write",
-		reply: "echo",
-		timeoutMs: 500,
+		reply: "echo-arg",
+		/** The vendor's wait (U2, 0x408975), raised from pok3rtool's 500 ms by the user's D4 ruling. */
+		timeoutMs: 1_000,
 		address: "set-cursor",
 		payloadBytes: 4,
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 calls to 0x404F60 at 0x405538 and 0x4051B2" },
-		maturity: REVIEWED_FOR_U5,
+		evidence: { source: "vendor-updater", at: "U2: built 0x408919, sent 0x404F78 inside 0x404F60, called from 0x4051B2 (BL[0x24]), 0x405538 (0), and the write retries 0x4052CF, 0x405653" },
+		maturity: CONFIRMED_BY_U7,
+	},
+	getWriteAddress: {
+		label: "Get write address",
+		cmd: 0x1e,
+		sub: 0x00,
+		modes: ["iap"],
+		effect: "read",
+		reply: "echo-arg",
+		timeoutMs: 500,
+		address: "read-cursor",
+		payloadBytes: 4,
+		arg: NO_ARG,
+		value: null,
+		unlocks: null,
+		evidence: { source: "vendor-updater", at: "U2: built 0x4089F9..0x408A01, sent 0x404F90 inside 0x404F60" },
+		maturity: CONFIRMED_BY_U7,
 	},
 	write: {
 		label: "Write up to 52 bytes",
@@ -300,8 +318,8 @@ export const COMMANDS = {
 		arg: NO_ARG,
 		value: null,
 		unlocks: null,
-		evidence: { source: "vendor-updater", at: "R2 0x40511F and 0x405204, write_block_size 52" },
-		maturity: REVIEWED_FOR_U5,
+		evidence: { source: "vendor-updater", at: "U2: built 0x408B2D (sub = length, memcpy to byte 4), sent 0x4052B2 (image), 0x405632 (version block)" },
+		maturity: CONFIRMED_BY_U7,
 	},
 	cfgReadKeys: {
 		label: "Read 16 layer-0 key overrides (cmd 0x52/0x21)",
@@ -427,6 +445,9 @@ export const COMMANDS = {
 
 export type CommandName = keyof typeof COMMANDS;
 
+/** The rows a flash needs beyond the read and reset rows. A kit that cannot send them stops before the first frame. */
+export const FLASH_ROWS = ["erase", "setWriteAddress", "getWriteAddress", "write"] as const satisfies readonly CommandName[];
+
 /** Every command name, in registry order. Object.keys of a const object is exactly its key union. */
 export const COMMAND_NAMES = Object.keys(COMMANDS) as readonly CommandName[];
 
@@ -510,6 +531,33 @@ export class ReadBackMismatch extends Error {
 	override readonly name = "ReadBackMismatch";
 }
 
+/** A flash step on an IapSession out of the safety order. A bug in the caller: nothing was sent. */
+export class FlashOrderBroken extends Error {
+	override readonly name = "FlashOrderBroken";
+}
+
+/** A WRITE ack named a next offset other than the cursor plus the chunk length. */
+export class WrongNextOffset extends Error {
+	override readonly name = "WrongNextOffset";
+	constructor(
+		readonly expected: number,
+		readonly got: number,
+	) {
+		super(`the write ack named next offset 0x${got.toString(16)}, expected 0x${expected.toString(16)}`);
+	}
+}
+
+/** Get write address, right after a set, read back an address other than the one set. */
+export class CursorMismatch extends Error {
+	override readonly name = "CursorMismatch";
+	constructor(
+		readonly set: number,
+		readonly got: number,
+	) {
+		super(`the write address reads back 0x${got.toString(16)} after a set to 0x${set.toString(16)}`);
+	}
+}
+
 /** Why the egress audit refused a frame. Every code but "not-cleared" means a bug in the core. */
 export type EgressRefusal =
 	| { readonly code: "bad-length"; readonly bytes: number }
@@ -519,7 +567,7 @@ export type EgressRefusal =
 	| { readonly code: "wrong-mode"; readonly command: CommandName; readonly mode: Mode }
 	/** Bytes 2..3, as a u16 LE, outside what the row's `arg` allows. */
 	| { readonly code: "arg-not-allowed"; readonly command: CommandName; readonly arg: number }
-	/** Bytes 4..5, as a u16 LE, outside what the row's `value` allows. */
+	/** Bytes 4..5, as a u16 LE, outside what the row's `value` allows, or get write address without its all-ones word. */
 	| { readonly code: "value-not-allowed"; readonly command: CommandName; readonly value: number }
 	/** `at` is the first nonzero byte past the payload the command's row declares. */
 	| { readonly code: "payload-overrun"; readonly at: number }
@@ -556,6 +604,8 @@ export type EgressVerdict =
 	| { readonly ok: false; readonly refusal: EgressRefusal };
 
 const PAYLOAD_OFFSET = 4;
+/** What get write address carries: the vendor's in/out word, preset to all ones (U2, 0x404F88). */
+const CURSOR_QUERY = 0xffff_ffff;
 const MAX_PAYLOAD_BYTES = TAB60.reportBytes - PAYLOAD_OFFSET;
 
 const within = (bounds: ByteBounds, byte: number) => byte >= bounds.min && byte <= bounds.max;
@@ -629,6 +679,11 @@ export function auditEgress(frame: Uint8Array, requested: CommandName, ctx: Egre
 				cursor = ctx.cursor + sub;
 				break;
 			}
+			case "read-cursor": {
+				const asked = view.getUint32(4, true);
+				if (asked !== CURSOR_QUERY) return refuse({ code: "value-not-allowed", command, value: asked });
+				break;
+			}
 			default: {
 				const exhaustive: never = spec.address;
 				return exhaustive;
@@ -692,15 +747,25 @@ function encode(name: CommandName, request: Request): Uint8Array {
 	return frame;
 }
 
-type ReplyVerdict = { readonly kind: "ack" } | { readonly kind: "refused"; readonly detail: number } | { readonly kind: "stale" };
+type ReplyVerdict =
+	| { readonly kind: "ack" }
+	| { readonly kind: "refused"; readonly detail: number }
+	| { readonly kind: "wrong-next"; readonly next: number }
+	| { readonly kind: "stale" };
 
+/**
+ * The error marker counts only when bytes 4..5 name the command sent, as the vendor's reply filter requires (U2,
+ * 0x407731..0x407748); any other marker is someone else's answer.
+ */
 function classifyReply(spec: CommandSpec, sent: Uint8Array, reply: InReport, cursor: number | null): ReplyVerdict {
 	const view = viewOf(reply);
-	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) return { kind: "refused", detail: view.getUint16(4, true) };
+	if (reply[0] === ERROR_MARKER[0] && reply[1] === ERROR_MARKER[1]) {
+		return reply[4] === sent[0] && reply[5] === sent[1] ? { kind: "refused", detail: view.getUint16(4, true) } : { kind: "stale" };
+	}
 	if (spec.reply === "write-ack") {
 		if (reply[0] !== 0x1e || reply[1] !== 0x02) return { kind: "stale" };
 		const next = view.getUint32(4, true);
-		return next === cursor ? { kind: "ack" } : { kind: "refused", detail: next };
+		return next === cursor ? { kind: "ack" } : { kind: "wrong-next", next };
 	}
 	const echoed = spec.reply === "echo-arg" ? 4 : spec.reply === "echo-cmd" ? 1 : 2;
 	return sent.subarray(0, echoed).every((byte, at) => reply[at] === byte) ? { kind: "ack" } : { kind: "stale" };
@@ -741,9 +806,9 @@ async function transmit(ch: Channel, name: CommandName, request: Request, signal
 			if (remaining <= 0) throw new LinkTimeout(`${spec.label}: no reply within ${spec.timeoutMs} ms`);
 			continue;
 		}
-		if (outcome.kind === "refused") {
+		if (outcome.kind === "refused" || outcome.kind === "wrong-next") {
 			if (spec.address === "set-cursor" || spec.address === "at-cursor") ch.cursor = null;
-			throw new DeviceRefused(name, outcome.detail);
+			throw outcome.kind === "refused" ? new DeviceRefused(name, outcome.detail) : new WrongNextOffset(verdict.cursor ?? 0, outcome.next);
 		}
 		ch.cursor = verdict.cursor;
 		return reply;
@@ -760,15 +825,73 @@ function rangePayload(span: Span): Uint8Array {
 
 const u32Of = (reply: InReport) => viewOf(reply).getUint32(PAYLOAD_OFFSET, true);
 
-/** Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address. */
+function u32Payload(value: number): Uint8Array {
+	const payload = new Uint8Array(4);
+	new DataView(payload.buffer).setUint32(0, value, true);
+	return payload;
+}
+
+/**
+ * Tries for each unit the vendor retries, by the user's 2026-10-26 rulings: the set and get write address pair, one
+ * WRITE block, and the app-region ERASE before its fallback. The vendor tries 15 times; past these, the convergence
+ * loop observes the board and decides.
+ */
+const TRIES = 3;
+
+/** The vendor's Sleep 1000 between tries (U2 section 3). */
+const RETRY_WAIT_MS = 1_000;
+
+/**
+ * Before a resend on the same link: wait out a late answer to the frame that failed, then drop it, so it cannot
+ * answer the resend, whose bytes it may repeat.
+ */
+async function settle(ch: Channel): Promise<void> {
+	await ch.clock.sleep(RETRY_WAIT_MS, NEVER_ABORTED);
+	ch.link.discardPending();
+}
+
+/**
+ * Sets the write address, reads it back, and requires the address set (U2 D4: the vendor's pair at 0x404F60). The pair
+ * is retried as one unit on a refusal, a silence, or a different read-back; a lost link ends it at once.
+ */
+async function setCursor(ch: Channel, offset: number): Promise<void> {
+	for (let tries = 1; ; tries++) {
+		try {
+			await transmit(ch, "setWriteAddress", { payload: u32Payload(offset) }, NEVER_ABORTED);
+			const got = u32Of(await transmit(ch, "getWriteAddress", { payload: u32Payload(CURSOR_QUERY) }, NEVER_ABORTED));
+			if (got === offset) return;
+			ch.cursor = null;
+			throw new CursorMismatch(offset, got);
+		} catch (error) {
+			const retry = error instanceof DeviceRefused || error instanceof LinkTimeout || error instanceof CursorMismatch;
+			if (!retry || tries === TRIES) throw error;
+			await settle(ch);
+		}
+	}
+}
+
+/**
+ * Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address.
+ * A block whose ack is missing or names another offset goes again from its own start, after the cursor is set back
+ * and read back (U2 D5, the vendor's 0x4052C5..0x4052CF). After TRIES the error goes to the caller's next observation.
+ */
 async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (done: number, total: number) => void): Promise<void> {
-	const address = new Uint8Array(4);
-	new DataView(address.buffer).setUint32(0, span.offset, true);
-	await transmit(ch, "setWriteAddress", { payload: address }, NEVER_ABORTED);
+	await setCursor(ch, span.offset);
 	const size = EXPECTED_LAYOUT.writeChunkBytes;
 	const chunks = Math.ceil(bytes.length / size);
 	for (let i = 0; i < chunks; i++) {
-		await transmit(ch, "write", { payload: bytes.subarray(i * size, (i + 1) * size) }, NEVER_ABORTED);
+		const payload = bytes.subarray(i * size, (i + 1) * size);
+		for (let tries = 1; ; tries++) {
+			try {
+				if (tries > 1) await setCursor(ch, span.offset + i * size);
+				await transmit(ch, "write", { payload }, NEVER_ABORTED);
+				break;
+			} catch (error) {
+				const retry = error instanceof LinkTimeout || error instanceof WrongNextOffset;
+				if (!retry || tries === TRIES) throw error;
+				await settle(ch);
+			}
+		}
 		onChunk(i + 1, chunks);
 	}
 }
@@ -993,20 +1116,24 @@ export interface IapSession {
 	/**
 	 * ERASE the version page (`versionPage(window)`), wait for its echo, then ERASE the app region (`appRegion(window)`).
 	 * The page is gone before any app byte changes, whatever order the IAP erases pages within one command, so no
-	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, R1; candidate A). These are the
-	 * only erases the tool sends.
+	 * interruption leaves a valid page over a damaged image (legacy pok3rtool's order, R1; candidate A).
+	 * The vendor never erases from an offset above 0 (U2 D1). If the IAP refuses the app-region erase with FF AA, or
+	 * leaves it unanswered TRIES times, this sends the vendor's one ERASE over the whole window (`wholeWindow`). Only the
+	 * answered version-page erase makes that safe, so any failure of the first erase propagates instead.
 	 */
 	eraseWindow(): Promise<void>;
 	/**
-	 * Sets the write address to the image offset, then sends WRITE in 52-byte chunks of `imageBytes(image).wire`.
-	 * Each ack must report next offset = cursor + chunk length; anything else throws DeviceRefused and the caller's
-	 * next observation decides what happens.
+	 * Sets the write address to the image offset and reads it back, then sends WRITE in 52-byte chunks of
+	 * `imageBytes(image).wire`. Each ack must report next offset = cursor + chunk length. A block that fails is resent
+	 * from its start (writeAt); one that keeps failing throws, and the caller's next observation decides what happens.
+	 * Throws FlashOrderBroken, before anything leaves, unless eraseWindow completed on this session.
 	 */
 	writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void>;
 	/**
 	 * Sets the write address to 0 and writes `imageBytes(image).versionBlock`, 180 bytes, as chunks of 52, 52, 52, and
 	 * 24. The 0x5AA5 magic at offset 0xB0 sits in the last chunk, so a partial block never carries it. Then reads the
-	 * page back and compares, as the vendor updater does.
+	 * page back and compares, as the vendor updater does. Throws FlashOrderBroken, before anything leaves, unless this
+	 * session's latest SUM matched the image, with no erase or write since.
 	 */
 	writeVersionBlock(image: FlashableImage): Promise<void>;
 	/** Restarts into normal mode. The session is closed afterwards; the board re-enumerates as 0x0304. */
@@ -1113,8 +1240,22 @@ class App implements AppSession {
 	}
 }
 
+/**
+ * What one update-mode session has done to flash, in the safety order: the version page erased, then the window,
+ * then the image written, then a SUM of the image range. writeImage needs the window erased on this session, and
+ * writeVersionBlock needs a SUM that matched the image. Each erase or write step starts by forgetting what came
+ * before, so a step that throws leaves nothing to build on.
+ */
+type FlashProgress =
+	| { readonly kind: "none" }
+	| { readonly kind: "page-erased" }
+	| { readonly kind: "window-erased" }
+	| { readonly kind: "image-written" }
+	| { readonly kind: "summed"; readonly bytes: number; readonly sum: Sum32 };
+
 class Iap implements IapSession {
 	readonly mode = "iap";
+	#progress: FlashProgress = { kind: "none" };
 
 	constructor(
 		private readonly ch: Channel,
@@ -1134,26 +1275,50 @@ class Iap implements IapSession {
 		const span = imageSpan(this.window, imageBytes);
 		if (span === null) throw new RangeError(`an image of ${imageBytes} bytes does not fit the window`);
 		const sum = sum32Literal(u32Of(await transmit(this.ch, "sum", { payload: rangePayload(span) }, signal)));
+		this.#progress = { kind: "summed", bytes: imageBytes, sum };
 		const crc = clears(this.ch.clearance, "crc") ? crc32Literal(u32Of(await transmit(this.ch, "crc", { payload: rangePayload(span) }, signal))) : null;
 		return { sum, crc };
 	}
 
 	async eraseWindow(): Promise<void> {
+		this.#progress = { kind: "none" };
 		await transmit(this.ch, "erase", { payload: rangePayload(versionPage(this.window)) }, NEVER_ABORTED);
-		await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
+		this.#progress = { kind: "page-erased" };
+		for (let tries = 1; tries <= TRIES; tries++) {
+			try {
+				await transmit(this.ch, "erase", { payload: rangePayload(appRegion(this.window)) }, NEVER_ABORTED);
+				this.#progress = { kind: "window-erased" };
+				return;
+			} catch (error) {
+				if (!(error instanceof DeviceRefused || error instanceof LinkTimeout)) throw error;
+				await settle(this.ch);
+				if (error instanceof DeviceRefused) break;
+			}
+		}
+		await transmit(this.ch, "erase", { payload: rangePayload(wholeWindow(this.window)) }, NEVER_ABORTED);
+		this.#progress = { kind: "window-erased" };
 	}
 
 	async writeImage(image: FlashableImage, onChunk: (done: number, total: number) => void): Promise<void> {
 		const { bytes } = imageBytes(image).wire;
 		const span = imageSpan(this.window, bytes.length);
 		if (span === null) throw new RangeError(`an image of ${bytes.length} bytes does not fit the window`);
+		if (this.#progress.kind !== "window-erased") throw new FlashOrderBroken(`writeImage after ${this.#progress.kind}, not after eraseWindow on this session`);
+		this.#progress = { kind: "none" };
 		await writeAt(this.ch, span, bytes, onChunk);
+		this.#progress = { kind: "image-written" };
 	}
 
 	async writeVersionBlock(image: FlashableImage): Promise<void> {
 		const { bytes } = imageBytes(image).versionBlock;
 		const span = versionSpan(this.window);
 		if (bytes.length !== span.length) throw new RangeError(`a version block of ${bytes.length} bytes, expected ${span.length}`);
+		const { image: wanted } = image.entry;
+		const done = this.#progress;
+		if (done.kind !== "summed" || done.bytes !== wanted.bytes || done.sum !== wanted.wireSum32) {
+			throw new FlashOrderBroken(`writeVersionBlock after ${done.kind === "summed" ? `a SUM of 0x${done.sum.toString(16)}` : done.kind}, not after a SUM matching ${image.entry.version}`);
+		}
+		this.#progress = { kind: "none" };
 		await writeAt(this.ch, span, bytes, () => undefined);
 		const back = (await readVersionPage(this.ch, NEVER_ABORTED)).bytes.subarray(0, span.length);
 		if (back.some((byte, at) => byte !== bytes[at])) throw new ReadBackMismatch("the version page read back differs from the block written");

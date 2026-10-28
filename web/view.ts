@@ -3,10 +3,23 @@
  * app.ts draws it. Every Record and switch is exhaustive, so a new activity, finding, or stop reason fails to compile
  * until it has its words.
  */
-import { type Activity, type BootTarget, type ChipReport, type DeviceWant, type Finding, type JobResult, type KeymapProblem, type OsKeyMode, type StopReason, TAB60_KEYS } from "@tab60kit/core";
-import type { Screen } from "./screens";
+import {
+	type Activity,
+	type BootTarget,
+	type ChipReport,
+	type DeviceWant,
+	type Finding,
+	type FlashableImage,
+	type JobResult,
+	type KeymapProblem,
+	type OsKeyMode,
+	type StopReason,
+	TAB60_KEYS,
+	type UpdaterReading,
+} from "@tab60kit/core";
+import type { FlashOffer, Screen } from "./screens";
 
-export type Action = "connect" | "deep-check" | "apply" | "pick" | "cancel" | "skip";
+export type Action = "connect" | "deep-check" | "make-official" | "apply" | "pick" | "cancel" | "skip";
 
 export interface FlashRow {
 	readonly region: string;
@@ -23,7 +36,7 @@ export interface PageView {
 	readonly actions: readonly Action[];
 	/** The Pick button's text, when `actions` has "pick". */
 	readonly pickLabel: string | null;
-	/** The board cannot type right now: the page warns against unplugging and blocks unload. */
+	/** The board cannot type right now: the page shows HOLD_STILL_BANNER and blocks unload. */
 	readonly holdStill: boolean;
 	/** A udev rule to show, on Linux setups. */
 	readonly linuxRule: string | null;
@@ -52,7 +65,7 @@ const BOOT: Readonly<Record<BootTarget, string>> = {
 const ACTIVITY: { readonly [K in Activity["kind"]]: (activity: Extract<Activity, { kind: K }>) => string } = {
 	reading: () => "Reading the board.",
 	restarting: (a) => (a.into === "iap" ? "Restarting the board into update mode." : "Restarting the board into normal mode."),
-	"holding-link": (a) => `Checking that the USB link is steady: ${Math.floor(a.quietMs / 1000)} of ${a.needMs / 1000} s.`,
+	"holding-link": (a) => `Checking that the USB link is steady before the first write: ${Math.floor(a.quietMs / 1000)} of ${a.needMs / 1000} s. Keep the cable still.`,
 	erasing: () => "Erasing.",
 	"writing-image": (a) => `Writing the firmware: ${a.chunk} of ${a.chunks}.`,
 	"writing-version-block": () => "Writing the version block.",
@@ -60,7 +73,7 @@ const ACTIVITY: { readonly [K in Activity["kind"]]: (activity: Extract<Activity,
 	"link-lost": (a) => `The USB link dropped (${a.losses}). Reconnecting.`,
 };
 
-function activityText(activity: Activity): string {
+export function activityText(activity: Activity): string {
 	return (ACTIVITY[activity.kind] as (a: Activity) => string)(activity);
 }
 
@@ -175,6 +188,39 @@ function resultText(result: JobResult): string {
 
 const idle: Pick<PageView, "pickLabel" | "holdStill" | "linuxRule"> = { pickLabel: null, holdStill: false, linuxRule: null };
 
+export const HOLD_STILL_BANNER = "Hold still: the keyboard cannot type now. Do not unplug it, close this tab, or switch away from it.";
+
+/** The first image the dropped exe holds that `admit` let through, which Make official writes. */
+export function admittedImage(reading: UpdaterReading | null): FlashableImage | null {
+	if (reading?.kind !== "read") return null;
+	for (const { admission } of reading.images) if (admission.kind === "admitted") return admission.image;
+	return null;
+}
+
+const canMakeOfficial = ({ reading, blockedBy }: FlashOffer) => admittedImage(reading) !== null && blockedBy.length === 0;
+const boardActions = (flash: FlashOffer): readonly Action[] => ["connect", "deep-check", ...(canMakeOfficial(flash) ? ["make-official" as const] : [])];
+
+/**
+ * What the Board, result, and Stopped screens say about the dropped exe: each image's admission, and either what
+ * Make official does first or why this build cannot flash.
+ */
+function readingLines({ reading, blockedBy }: FlashOffer): readonly string[] {
+	if (reading === null) return ["To flash official firmware, drop Tab60firmwareV1.01.13.exe (from vortexgear.tw) on the file picker below. The page reads it here and uploads nothing."];
+	if (reading.kind === "refused") return [`That file is not a TAB 60 updater this page can read (${reading.refusal.code}).`];
+	const lines = reading.images.map(({ slot, layoutName, admission }) =>
+		admission.kind === "admitted" ? `Slot ${slot + 1}, ${layoutName}: official ${admission.image.entry.version}, ready to flash.` : `Slot ${slot + 1}, ${layoutName}: not flashable (${admission.refusal.code}).`,
+	);
+	if (admittedImage(reading) === null) return lines;
+	if (blockedBy.length > 0) return [...lines, `This build cannot flash yet: ${blockedBy[0]}.`];
+	return [
+		...lines,
+		"Make official first checks the USB link for 15 seconds and writes nothing until it holds. Keep the cable still and this tab in front. The keyboard cannot type from then until the page says the flash is done. If the cable drops, click Reconnect and pick whichever row appears.",
+	];
+}
+
+/** After a job, the exe's lines show once one was dropped; the Board screen alone prompts for one. */
+const droppedLines = (flash: FlashOffer) => (flash.reading === null ? [] : readingLines(flash));
+
 /** `needsClick` is the chooser's parked request: a pick then needs this page's click to open the chooser. */
 export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView {
 	switch (screen.name) {
@@ -190,7 +236,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 		case "connect":
 			return { ...idle, title: "Connect your TAB 60", lines: ["Plug the keyboard in by USB, then click Connect and pick it in the chooser."], flashMap: null, boot: null, actions: ["connect"] };
 		case "device-prompt": {
-			const lines = [needsClick === null ? `In the chooser, pick ${screen.pickRow}.` : `Click Pick, then choose ${screen.pickRow}.`];
+			const lines = [needsClick === null ? `In the chooser, pick ${screen.pickRow}.` : `Waiting for you: click Pick ${screen.pickRow}, then choose ${screen.pickRow}.`];
 			if (screen.reason === "enter-update-mode") lines.push("The board is restarting into update mode. It shows up as a new device.");
 			if (screen.skippable) lines.push("Skip if you do not need the confirmation; the board is already home.");
 			return {
@@ -205,20 +251,20 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 			};
 		}
 		case "board":
-			return { ...idle, title: "Your board", lines: [], ...flashMap(screen.report), actions: ["connect", "deep-check"] };
+			return { ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "progress":
 			return {
 				...idle,
 				title: "Working",
-				lines: [activityText(screen.activity), ...(screen.holdStill ? ["Do not unplug the keyboard."] : [])],
+				lines: [activityText(screen.activity)],
 				...flashMap(screen.report),
 				actions: ["cancel"],
 				holdStill: screen.holdStill,
 			};
 		case "result":
-			return { ...idle, title: resultText(screen.result), lines: [], ...flashMap(screen.report), actions: ["connect", "deep-check"] };
+			return { ...idle, title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "stopped":
-			return { ...idle, title: "Stopped", lines: [stopText(screen.reason)], ...flashMap(screen.report), actions: ["connect", "deep-check"] };
+			return { ...idle, title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), actions: boardActions(screen.flash) };
 		case "os-permission":
 			return {
 				...idle,

@@ -137,6 +137,14 @@ export function appRegion(window: FlashWindow): Span {
 	return { offset: windowOffset(window.imageBase - window.base), length: window.end - window.imageBase };
 }
 
+/**
+ * [0, end - base): the vendor's one ERASE (U2 F2). eraseWindow sends it only as the fallback for an IAP that refuses
+ * appRegion's erase, after versionPage's erase was answered, so the page is already gone whatever order it erases in.
+ */
+export function wholeWindow(window: FlashWindow): Span {
+	return { offset: windowOffset(0), length: window.end - window.base };
+}
+
 /** [fwOffset, fwOffset + imageBytes), or null when the image does not fit before the window end. */
 export function imageSpan(window: FlashWindow, imageBytes: number): Span | null {
 	if (!Number.isInteger(imageBytes) || imageBytes <= 0 || window.imageBase + imageBytes > window.end) return null;
