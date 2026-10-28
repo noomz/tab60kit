@@ -52,7 +52,7 @@ const images: Record<string, ImageCheck> = {
 	unrecognized: { kind: "unrecognized", sum: 0 as never, crc: null },
 };
 
-// Expected next step in update mode, written from R1 "Sequences": prove the image, then write the version block, then boot.
+// Expected next step in update mode, written from docs/protocol.md "Sequences": prove the image, then write the version block, then boot.
 const expected: Record<string, string> = {
 	"target/target": "exit-to-app",
 	"target/erased": "write-version-block",
@@ -116,8 +116,8 @@ check("window: an offset that wraps to absolute 0x0", () => assert.equal(inWindo
 check("window: a negative offset", () => assert.equal(inWindow(window, -1, 4), false));
 check("window: an empty range", () => assert.equal(inWindow(window, 0x200, 0), false));
 
-// The derived udev rule must equal R3's rule byte for byte (docs/webhid.md "Linux udev rule").
-check("udev rule: R3's rule byte for byte", () =>
+// The derived udev rule must equal the rule in docs/webhid.md "Linux udev rule" byte for byte.
+check("udev rule: the documented rule byte for byte", () =>
 	assert.equal(
 		udevRules(),
 		[
@@ -162,7 +162,7 @@ const U7_ROWS: readonly CommandName[] = ["erase", "setWriteAddress", "getWriteAd
 const U10_ROWS: readonly CommandName[] = ["cfgReadKeys", "cfgReadKey"];
 const U11_ROWS: readonly CommandName[] = ["gateQuery", "gateOpen", "gateClose", "cfgWriteKey"];
 const UNREVIEWED_ROWS: readonly CommandName[] = ["crc", "cfgSetOsMode"];
-check("clearance: no lab session before the user's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
+check("clearance: no lab session before the maintainer's review", () => assert.throws(() => labClearance(["readMode", "crc"], "U7"), /send them: crc$/));
 check("clearance: a lab session for the seven confirmed U1 rows", () => assert.equal(labClearance(U1_ROWS, "U1").kind, "lab"));
 check("clearance: a lab session for the four confirmed U7 flash rows", () => assert.equal(labClearance(U7_ROWS, "U7").kind, "lab"));
 check("clearance: a lab session for the two confirmed override-store reads and the U1 rows an app session needs", () =>
@@ -228,7 +228,7 @@ check(`capture: ${U11_CAPTURE} holds the 2026-10-24 run byte for byte, and all e
 	assert.deepEqual(fixture.transcript, JSON.parse(readFileSync(join(import.meta.dir, "..", U11_TRANSCRIPT), "utf8")));
 	assert.ok(fixture.checks.length === 8 && fixture.checks.every((c) => c.pass), "every U11 check passes");
 });
-check(`capture: ${U10_CAPTURE} holds board run 3 byte for byte, in Mac mode with one approved difference, and every check passes`, () => {
+check(`capture: ${U10_CAPTURE} holds the passing U10 board run byte for byte, in Mac mode with one approved difference, and every check passes`, () => {
 	const fixture: { transcriptFile: string; transcript: unknown; osKeyMode: string; approvedDifferences: unknown[]; checks: { pass: boolean }[] } = JSON.parse(
 		readFileSync(join(import.meta.dir, "..", U10_CAPTURE), "utf8"),
 	);
@@ -274,7 +274,7 @@ check("registry: WRITE decodes lengths 1 to 52 only", () =>
 	assert.deepEqual([0, 1, 52, 53].map((sub) => decodeCommand(0x1f, sub)), [null, "write", "write", null]),
 );
 check("registry: PING is left out on purpose", () => assert.equal(decodeCommand(0x10, 0x02), null));
-// The user's U11 ruling: cmd 0x41 carries only gate bytes 0x80, 0x00, and 0xFF; cmd 0x51 only sub 0x20 is reviewed; no 0x50 sub is a row.
+// The maintainer's U11 ruling: cmd 0x41 carries only gate bytes 0x80, 0x00, and 0xFF; cmd 0x51 only sub 0x20 is reviewed; no 0x50 sub is a row.
 const gateRows = Array.from({ length: 256 }, (_, gate) => [gate, decodeCommand(0x41, gate)] as const).filter(([, name]) => name !== null);
 check("registry: cmd 0x41 decodes gate bytes 0x00, 0x80, and 0xFF only, so bit 0, bit 6, and 0x04 have no row", () =>
 	assert.deepEqual(gateRows, [
@@ -296,7 +296,7 @@ check("registry: of cmd 0x50 and 0x51, only 0x51/0x20 decodes to a row any clear
 	),
 );
 
-// The user's ruling: an erase or write row moves above "unreviewed" only with vendor-updater evidence.
+// The maintainer's ruling: an erase or write row moves above "unreviewed" only with vendor-updater evidence.
 const writeRowProblems = (rows: readonly (readonly [string, CommandSpec])[]) =>
 	rows
 		.filter(([, spec]) => (spec.effect === "erase" || spec.effect === "write") && spec.maturity.level !== "unreviewed")
@@ -310,8 +310,8 @@ check("registry: the rule catches a reviewed erase backed only by pok3rtool", ()
 	assert.deepEqual(writeRowProblems([["erase", badErase]]), ["erase"]),
 );
 
-// From R1 "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length. A get-address
-// carries one u32 too, the all-ones word (U2, 0x404F88).
+// From docs/protocol.md "Packet framing", a range is two u32s, a set-address one u32, and WRITE's sub byte is its length. A get-address
+// carries one u32 too, the all-ones word (updater 0x404F88).
 const PAYLOAD_OF_ADDRESSING = { none: 0, range: 8, "set-cursor": 4, "at-cursor": "sub", "read-cursor": 4 } as const;
 check("registry: READ MODE waits as long as the link gate's longest probe gap", () =>
 	assert.ok(COMMANDS.readMode.timeoutMs >= WRITE_LINK_RULE.maxProbeGapMs, `${COMMANDS.readMode.timeoutMs} ms`),
@@ -328,7 +328,7 @@ check("registry: each row's payload is exactly its address fields, plus two byte
 );
 check("registry: only cfgWriteKey carries a value", () => assert.deepEqual(COMMAND_NAMES.filter((name) => (COMMANDS[name] as CommandSpec).value !== null), ["cfgWriteKey"]));
 
-// The egress audit, on frames built by hand from R1 "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
+// The egress audit, on frames built by hand from docs/protocol.md "Packet framing": cmd, sub, two zero bytes, then LE u32 fields.
 const frame = (cmd: number, sub: number, a = 0, b = 0, bytes = 64) => {
 	const out = new Uint8Array(bytes);
 	const view = new DataView(out.buffer);

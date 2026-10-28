@@ -1,4 +1,4 @@
-// Plan U12: the apply job on the fake board, through a shipped kit. The fake models the gate, the RAM override
+// Unit U12: the apply job on the fake board, through a shipped kit. The fake models the gate, the RAM override
 // store, the saved store a power cycle reloads, and the error marker, as the U11 board run confirmed them.
 import { expect, test } from "bun:test";
 import { createKit } from "../core/kit";

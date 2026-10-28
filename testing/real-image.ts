@@ -1,9 +1,9 @@
 /**
- * Plan U9's check on the vendor's own exe: every TAB60_KEYS `defaultUsage` against the ROM keymap at flash 0xB205.
- * Plan U10's: the factory layer 2 table, the OS key mode swaps, and the Fn and Pn cells against their ROM bytes, then
+ * Unit U9's check on the vendor's own exe: every TAB60_KEYS `defaultUsage` against the ROM keymap at flash 0xB205.
+ * Unit U10's: the factory layer 2 table, the OS key mode swaps, and the Fn and Pn cells against their ROM bytes, then
  * `predictLayers` for every mode and layer against a prediction computed from the ROM bytes alone.
  * The exe goes through core's own extractor (`readUpdater`, U3), which holds the image in wire form; `xorWords` gives
- * the plain image, the bytes R2's decoder writes. The exe is never committed, so this runs locally, not in `check`.
+ * the plain image, the bytes tools/oracle/decode_updater.py writes. The exe is never committed, so this runs locally, not in `check`.
  *
  * Run: TAB60_EXE=<Tab60firmwareV1.01.13.exe> bun run real-image
  */
@@ -26,7 +26,7 @@ function check(ok: boolean, label: string): void {
 }
 const hex = (n: number) => `0x${n.toString(16).padStart(2, "0")}`;
 
-/** R4: the firmware copies the 80-byte matrix keymap from here at boot. */
+/** docs/app-firmware.md: the firmware copies the 80-byte matrix keymap from here at boot. */
 const KEYMAP_FLASH = 0xb205;
 /** sub_4540: the factory (usage, code) pairs, ended by 0xD8; the Fn and Pn cells it copies to SRAM 0x20000E50/51. */
 const FACTORY_FLASH = 0xb2d6;
@@ -51,7 +51,7 @@ check(base !== null, `the image's implied base is ${base === null ? "unknown" : 
 
 if (admission?.kind === "admitted" && base !== null) {
 	const plain = xorWords(imageBytes(admission.image).wire.bytes);
-	check((await sha256(plain)) === entry.image.sha256, "the plain image hashes to the catalog's image sha256 (R2's decoded file)");
+	check((await sha256(plain)) === entry.image.sha256, "the plain image hashes to the catalog's image sha256 (the oracle's decoded file)");
 	const at = KEYMAP_FLASH - base;
 	const rom = plain.subarray(at, at + 80);
 	check(rom.length === 80, `80 keymap bytes at image offset 0x${at.toString(16)}`);

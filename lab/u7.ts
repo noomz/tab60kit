@@ -276,7 +276,7 @@ try {
 				ui.summary.textContent = `${failed === 0 && stray.length === 0 ? "PASS" : "FAIL"}: ${outcomes.length} steps, ${failed} failed, ${stray.length} frames outside the U7 rows. The verdict decides.`;
 			})
 			.catch((error: unknown) => {
-				ui.summary.textContent = `FAIL: ${describe(error)}. Click Connect on the main page to see where the board is; the vendor updater on MaruStation is the recovery.`;
+				ui.summary.textContent = `FAIL: ${describe(error)}. Click Connect on the main page to see where the board is; the vendor updater on a Windows PC is the recovery.`;
 				log(`run failed: ${describe(error)}`);
 			})
 			.finally(() => {

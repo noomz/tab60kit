@@ -15,7 +15,7 @@ export interface Kit {
 	/** Calls `listener` on every state change. Returns the unsubscribe function. */
 	subscribe(listener: (state: JobState) => void): () => void;
 	check(depth: "quick" | "deep"): Promise<JobState>;
-	/** `{ rewrite: true }` writes the image even when the board already holds it (plan unit U7). */
+	/** `{ rewrite: true }` writes the image even when the board already holds it (unit U7). */
 	makeOfficial(image: FlashableImage, options?: FlashOptions): Promise<JobState>;
 	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Fn+Q, Fn+W, or Fn+E), which no command reads. */
 	applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Promise<JobState>;

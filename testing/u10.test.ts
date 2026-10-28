@@ -227,7 +227,7 @@ test("the verdict exits 2 and writes nothing without --os-mode or --expect, or o
 	}
 });
 
-test("board run 1 matches the Mac prediction except the approved Esc entry, and its layer 1 and 2 reads miss 0xE7", async () => {
+test("the first U10 board run matches the Mac prediction except the approved Esc entry, and its layer 1 and 2 reads miss 0xE7", async () => {
 	const transcript = parseTranscript(JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "tab60kit-u10-2026-10-19T07-42-46-288Z.json"), "utf8")));
 	const approved = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "u10-expected-diffs.json"), "utf8"));
 	const { code, written, lines, fails } = await runVerdict(transcript, { mode: "mac", approved });

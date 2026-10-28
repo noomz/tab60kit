@@ -1,5 +1,5 @@
 /**
- * Plan U6's hardware check: the shipped page's app (web/app.ts), recorded. The clearance names exactly the seven U1
+ * Unit U6's hardware check: the shipped page's app (web/app.ts), recorded. The clearance names exactly the seven U1
  * rows, which is what SHIPPED sends (probes/policy.test.ts), so the frames are the shipped page's. Run Deep check
  * twice, download each transcript, and give both to tools/u6-verdict.ts. `?fake` runs it on the fake board.
  */

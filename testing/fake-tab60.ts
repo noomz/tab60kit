@@ -1,11 +1,10 @@
 /**
- * A behavioral model of the TAB 60 on the vendor interface, for tests. It is R1's protocol spec, R4's app command
- * map, and the U10 and U11 static reads of the override store and its gate (docs/app-firmware.md,
- * docs/app-firmware.md) in executable form. Every behavior
+ * A behavioral model of the TAB 60 on the vendor interface, for tests. It is the protocol in docs/protocol.md, the app command
+ * map, override store, and gate in docs/app-firmware.md, in executable form. Every behavior
  * it models is INFERRED until a hardware transcript (U1, U7, U10) confirms it; when the two disagree, the transcript
  * wins and this file changes.
  *
- * It must not import the host codec (candidate B). It implements R1's and R4's tables from the documents with its
+ * It must not import the host codec. It implements the tables in docs/protocol.md and docs/app-firmware.md with its
  * own byte handling, so a codec bug in the core and the same bug in the fake cannot cancel out. probes/boundaries.ts
  * fails the build when this file's imports reach core/ anywhere but port.ts, the seam it implements, and units.ts.
  * The facts it checks against (the target image's length and wire sum) come in through FakeOptions from the test.
@@ -56,10 +55,10 @@ export interface FakeOptions {
 	 * the clock to the reply or to the request's timeout. The drop sweep runs the 15 s link gate this way. Default "real".
 	 */
 	readonly clock?: "real" | "virtual";
-	/** The order the IAP erases the pages of one ERASE, which R1 does not document. Default "descending", the order that punishes one ERASE over the whole window. */
+	/** The order the IAP erases the pages of one ERASE, which docs/protocol.md does not document. Default "descending", the order that punishes one ERASE over the whole window. */
 	readonly eraseOrder?: "descending" | "ascending";
 	/**
-	 * An IAP that takes only the vendor's erases, which all start at offset 0 (U2 audit section 5): an ERASE at any other
+	 * An IAP that takes only the vendor's erases, which all start at offset 0 (U2): an ERASE at any other
 	 * offset gets the FF AA marker naming 1D 00, or no answer, and erases nothing. Default: it takes any aligned range.
 	 */
 	readonly offsetErase?: "error-marker" | "silent";
@@ -87,7 +86,7 @@ export type Violation =
 	| { readonly kind: "wrong-mode"; readonly cmd: number; readonly sub: number; readonly mode: Mode }
 	/** An update-mode command this fake does not model: CRC, which no clearance sends yet. */
 	| { readonly kind: "not-modeled"; readonly cmd: number; readonly sub: number }
-	/** A frame the user's U11 ruling forbids: a gate byte other than 0x00, 0x80, or 0xFF, or a key write with flags set. */
+	/** A frame the maintainer's U11 ruling forbids: a gate byte other than 0x00, 0x80, or 0xFF, or a key write with flags set. */
 	| { readonly kind: "unsafe-config"; readonly cmd: number; readonly sub: number; readonly value: number };
 
 /** One output report the board received, stamped with the fake's clock. */
@@ -521,7 +520,7 @@ export class FakeTab60 {
 			out.set(payload.subarray(0, PAYLOAD_BYTES), PAYLOAD_OFFSET);
 			socket.report(out);
 		};
-		// The app's error marker (U10 research, 0x7684..0x76A8): FF AA 00 00, then the request's bytes 0..3.
+		// The app's error marker (docs/app-firmware.md, 0x7684..0x76A8): FF AA 00 00, then the request's bytes 0..3.
 		const refuse = () => {
 			const out = new Uint8Array(REPORT_BYTES);
 			out[0] = 0xff;
@@ -645,7 +644,7 @@ export class FakeTab60 {
 				this.#write(at, bytes.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + sub));
 				this.#cursor = at + sub;
 				if (faulty === "mute") return this.#late(socket, Number.POSITIVE_INFINITY, () => undefined);
-				// R1's write ack: 1E 02, then the next write address, which the host compares with its own cursor.
+				// The write ack (docs/protocol.md "Packet framing"): 1E 02, then the next write address, which the host compares with its own cursor.
 				const out = new Uint8Array(REPORT_BYTES);
 				out[0] = 0x1e;
 				out[1] = 0x02;
@@ -712,7 +711,7 @@ export class FakeTab60 {
 		return sum;
 	}
 
-	/** The IAP boots the app only over a version page with its magic and a non-0xFF word at 0x78 (R1, INFERRED). */
+	/** The IAP boots the app only over a version page with its magic and a non-0xFF word at 0x78 (docs/protocol.md, INFERRED). */
 	#bootMode(): Mode {
 		const view = new DataView(this.#flash.buffer, PROTOCOL_BASE, PAGE_SIZE);
 		const magic = view.getUint16(MAGIC_OFFSET, true) === MAGIC;

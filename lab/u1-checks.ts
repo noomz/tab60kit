@@ -1,5 +1,5 @@
 /**
- * Plan unit U1's verdict from a transcript. Its import closure reaches core/ only through device.ts, firmware.ts,
+ * Unit U1's verdict from a transcript. Its import closure reaches core/ only through device.ts, firmware.ts,
  * port.ts, and units.ts, never protocol.ts, so a codec bug in the core cannot vouch for itself here
  * (probes/boundaries.ts rule u1-checks-independence).
  */
@@ -28,7 +28,7 @@ export interface U1Expected {
 	readonly probeSpacingMs: number;
 }
 
-/** Plan check 8's human half: whether the board types after the run. */
+/** U1 check 8's human half: whether the board types after the run. */
 export type TypingObservation = "types" | "does-not-type" | "not-observed";
 
 export interface CheckResult {

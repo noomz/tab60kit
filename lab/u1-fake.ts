@@ -40,7 +40,7 @@ function packetsBeforeUpdateProbe(probes: number, nth: number): number {
 
 const MODES: Readonly<Record<FakeMode, ModeSpec>> = {
 	plain: {},
-	/** Only the update-mode chooser misses its row, the R3 C7 fallback that the parked pick exists for. */
+	/** Only the update-mode chooser misses its row, the docs/webhid.md C7 fallback that the parked pick exists for. */
 	parked: { rows: ["app"] },
 	deaf: {
 		setup: ({ board }) => {

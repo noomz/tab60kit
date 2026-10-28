@@ -88,7 +88,7 @@ function printablePrefix(bytes: Uint8Array): string {
 	return out;
 }
 
-/** Parses the BL INFO reply payload (struct `<IIHHHHIIIIHHH10sI`, R1). */
+/** Parses the BL INFO reply payload (struct `<IIHHHHIIIIHHH10sI`, docs/protocol.md). */
 export function parseBlInfo(payload: Uint8Array): BlInfo | LayoutRefusal {
 	if (payload.length < BL_INFO_BYTES) return { code: "bl-info-short", bytes: payload.length };
 	const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
@@ -124,7 +124,7 @@ export function windowFor(info: BlInfo): FlashWindow | LayoutRefusal {
 /**
  * [0, pageSize): the version page, the first of the two erases. The IAP boots the image only while this page holds
  * its magic, so erasing it by its own command before any app page changes means an interruption at any later point
- * leaves the board in update mode (R1, INFERRED). One ERASE over the whole window would depend on the IAP erasing
+ * leaves the board in update mode (docs/protocol.md, INFERRED). One ERASE over the whole window would depend on the IAP erasing
  * pages in ascending order, which nothing documents; testing/reconcile-model.ts shows the damaged boot that order
  * risk allows.
  */

@@ -2,7 +2,7 @@
  * What is on the chip, as the board itself reports it. This is the verify job, and it is also the flash job's
  * only record of progress: flash.ts decides every step from a fresh observation.
  *
- * What USB can and cannot check (R1, R4):
+ * What USB can and cannot check (docs/protocol.md, docs/app-firmware.md):
  *   bootloader [0x0, 0x3000)        not checkable. Only the 52-byte BL info window is readable; it is fingerprinted.
  *   version page [0x3000, 0x3200)   read exactly (180 bytes) in either mode, compared with catalog hashes.
  *   image [0x3200, +image length)   SUM (and CRC-32 once cleared under G1) in update mode, compared with the catalog.
@@ -22,7 +22,7 @@ export type PageState =
 	| { readonly kind: "official"; readonly entry: CatalogEntry }
 	/**
 	 * Anything else, including a block cut short by a lost link. `text` is the version string when it decodes. `boots`
-	 * says whether the IAP would boot the app over it: the 0x5AA5 magic and a programmed word at 0x78 (R1, INFERRED).
+	 * says whether the IAP would boot the app over it: the 0x5AA5 magic and a programmed word at 0x78 (docs/protocol.md, INFERRED).
 	 */
 	| { readonly kind: "unknown"; readonly text: string | null; readonly sha256: Sha256; readonly boots: boolean };
 
@@ -82,7 +82,7 @@ async function checkImage(session: IapSession, signal: AbortSignal, catalog: rea
 	return first;
 }
 
-/** The version page (R1): a u32 byte length, the UTF-16LE version string, then fixed words from 0x78. */
+/** The version page (docs/protocol.md): a u32 byte length, the UTF-16LE version string, then fixed words from 0x78. */
 const VERSION_TEXT_OFFSET = 4;
 const FIXED_WORDS_OFFSET = 0x78;
 
@@ -113,7 +113,7 @@ function versionText(bytes: Uint8Array): string | null {
 
 /**
  * Where the board goes on its next reset, as far as the observation shows.
- * The IAP stays in update mode while the version page lacks its magic (INFERRED, R1). An official page over an
+ * The IAP stays in update mode while the version page lacks its magic (INFERRED, docs/protocol.md). An official page over an
  * unrecognized image is the dangerous case: the IAP would jump into an image that failed its checksum.
  */
 export type BootTarget = "normal-mode" | "stays-in-update-mode" | "boots-unchecked-image" | "boots-damaged-image";

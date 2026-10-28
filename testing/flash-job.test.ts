@@ -290,7 +290,7 @@ const erasesOf = (board: FakeTab60) => ofCommand(board, 0x1d, 0x00).map((r) => r
 const cursorTrail = (board: FakeTab60) =>
 	board.received.flatMap((r) => (r.cmd === 0x1e ? [r.sub === 0x01 ? `set 0x${r.words[0].toString(16)}` : "get"] : r.cmd === 0x1f ? ["write"] : []));
 
-test("D1: an IAP that refuses the app-region erase with FF AA gets the vendor's one window erase, after the version page is gone", async () => {
+test("window-erase fallback: an IAP that refuses the app-region erase with FF AA gets the vendor's one window erase, after the version page is gone", async () => {
 	const board = fake({ ...holdsTarget, offsetErase: "error-marker" });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -299,7 +299,7 @@ test("D1: an IAP that refuses the app-region erase with FF AA gets the vendor's 
 	await bootsTarget(board, image);
 });
 
-test("D1: an IAP that never answers the app-region erase gets it three times, 15 s each, then the window erase", async () => {
+test("window-erase fallback: an IAP that never answers the app-region erase gets it three times, 15 s each, then the window erase", async () => {
 	const board = fake({ ...holdsTarget, offsetErase: "silent" });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -310,7 +310,7 @@ test("D1: an IAP that never answers the app-region erase gets it three times, 15
 	await bootsTarget(board, image);
 });
 
-test("D1: no window erase follows a version-page erase that went unanswered; the job reconnects and erases page by page", async () => {
+test("window-erase fallback: no window erase follows a version-page erase that went unanswered; the job reconnects and erases page by page", async () => {
 	const board = fake({ ...holdsTarget, offsetErase: "error-marker", slowOnce: { cmd: 0x1d, sub: 0x00, mode: "iap", ms: Number.POSITIVE_INFINITY } });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -318,7 +318,7 @@ test("D1: no window erase follows a version-page erase that went unanswered; the
 	expect(board.violations).toEqual([]);
 });
 
-test("D4: every set write address is read back, and a read-back that differs sends the pair again", async () => {
+test("cursor read-back: every set write address is read back, and a read-back that differs sends the pair again", async () => {
 	const board = fake({ ...holdsTarget, cursorFault: { at: 0, times: 2 } });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -329,7 +329,7 @@ test("D4: every set write address is read back, and a read-back that differs sen
 	await bootsTarget(board, image);
 });
 
-test("D4: three read-backs that differ end the step as a refusal; the loop observes, gates a new link, and writes again", async () => {
+test("cursor read-back: three read-backs that differ end the step as a refusal; the loop observes, gates a new link, and writes again", async () => {
 	const board = fake({ ...holdsTarget, cursorFault: { at: 0, times: 3 } });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -340,7 +340,7 @@ test("D4: three read-backs that differ end the step as a refusal; the loop obser
 });
 
 for (const kind of ["no-reply", "mute", "wrong-next"] as const) {
-	test(`D5: a WRITE with ${kind} goes again from its block's start, after the cursor is set back and read back`, async () => {
+	test(`block resend: a WRITE with ${kind} goes again from its block's start, after the cursor is set back and read back`, async () => {
 		const board = fake({ ...holdsTarget, writeFault: { at: 100, times: 1, kind } });
 		const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 		expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });
@@ -355,7 +355,7 @@ for (const kind of ["no-reply", "mute", "wrong-next"] as const) {
 	});
 }
 
-test("D5: a block that fails three times hands off to the loop, which erases and writes the image again", async () => {
+test("block resend: a block that fails three times hands off to the loop, which erases and writes the image again", async () => {
 	const board = fake({ ...holdsTarget, writeFault: { at: 100, times: 3, kind: "wrong-next" } });
 	const end = await createKit(board.port(), FLASH_CLEARANCE).makeOfficial(image, { rewrite: true });
 	expect(end).toMatchObject({ kind: "finished", result: { kind: "official" } });

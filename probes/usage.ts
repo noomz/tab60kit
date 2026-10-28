@@ -1,5 +1,5 @@
 // expect: none
-// The call sites from design.md "Usage (caller's view)", compiled against the sketch. If the usage and the types
+// The call sites from docs/design.md "The caller's view", compiled against the sketch. If the usage and the types
 // drift apart, this file stops compiling. Only the UI-facing entry point (core/index) and the shell are imported.
 import {
 	type FlashableImage,

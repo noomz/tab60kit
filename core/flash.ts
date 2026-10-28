@@ -6,7 +6,7 @@
  * the same place: the next observation. Running the job again from any state reaches the same end state,
  * because each step's precondition is read from the board, not remembered.
  *
- * Safety order (R1 Sequences, the vendor updater):
+ * Safety order (docs/protocol.md "Sequences", the vendor updater):
  *   erase the version page -> erase the app region -> write the image -> SUM (+CRC) must match -> only then write
  *   the version block.
  * The version block is what makes the IAP boot the image. It is erased first by its own command, written only after
@@ -72,8 +72,8 @@ export function decideInApp(chip: AppChip, target: FlashableImage, verified: boo
  *   no      | other   | any            | erase-and-write-image
  *
  * A rewrite is owed when the caller asked for one and this job has not finished writing the image yet. Without it,
- * a board that already holds the target converges with no write, so plan unit U7 could not exercise the write path on
- * the user's board, which already runs V1.01.13 (candidate A's reinstall).
+ * a board that already holds the target converges with no write, so unit U7 could not exercise the write path on
+ * the maintainer's board, which already runs V1.01.13.
  */
 export function decideInIap(chip: IapChip, target: FlashableImage, rewrite: boolean): IapStep {
 	if (rewrite || !isTargetImage(chip.image, target)) return "erase-and-write-image";
@@ -96,10 +96,10 @@ export interface LinkRule {
 }
 
 /**
- * The gate before the first step that changes flash on each link (candidate A). Recovery from an interrupted flash
+ * The gate before the first step that changes flash on each link. Recovery from an interrupted flash
  * rests on an INFERRED bootloader rule, and the USB side dropped three times in 24.5 min while Karabiner's LED loop
- * ran (none in 67.6 min with it off, STATE decision log). So the tool waits for evidence of a quiet link instead of
- * trusting the recovery. Hard in v1, with no override; design.md open question 12 asks whether to keep it hard.
+ * ran (none in 67.6 min with it off, in the maintainer's stability test). So the tool waits for evidence of a quiet link instead of
+ * trusting the recovery. Hard in v1, with no override; a later version may offer one (docs/design.md "How a flash runs").
  */
 export const WRITE_LINK_RULE: LinkRule = { quietMs: 15_000, maxProbeGapMs: 1_000 };
 
@@ -137,7 +137,7 @@ export function judgeLink(events: readonly LinkEvent[], now: number, rule: LinkR
 }
 
 export interface FlashOptions {
-	/** Erase and write the image even when the board already holds it. Plan unit U7 runs the first write this way. */
+	/** Erase and write the image even when the board already holds it. Unit U7 runs the first write this way. */
 	readonly rewrite: boolean;
 }
 

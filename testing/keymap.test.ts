@@ -1,4 +1,4 @@
-// Plan U9: the key table, the keymap diff, and the document parse. The table's ROM bytes are checked locally by
+// Unit U9: the key table, the keymap diff, and the document parse. The table's ROM bytes are checked locally by
 // testing/real-image.ts (CI has no vendor bytes); these tests check its shape. The generators are seeded, as in
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
@@ -213,14 +213,14 @@ test("serialize of a parsed canonical string returns the same string, sorted", (
 });
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
-/** docs/app-firmware.md "OS key mode", from predict.py over the V1.01.13 image. */
+/** The usages present in each OS key mode's active keymap, computed from the V1.01.13 image (docs/app-firmware.md "OS key mode"). */
 const WINDOWS_PRESENT = [0x00, ...range(0x04, 0x39), 0x64, 0xc9, 0xd8, 0xd9, ...range(0xe0, 0xe6)];
 const entriesOf = (layer: ReadonlyMap<number, OverrideEntry> | undefined) => [...(layer ?? new Map<number, OverrideEntry>())];
 const kinds = (layer: ReadonlyMap<number, OverrideEntry> | undefined, kind: OverrideEntry["kind"]) => entriesOf(layer).filter(([, entry]) => entry.kind === kind).map(([k]) => k);
 const overridesOf = (layer: ReadonlyMap<number, OverrideEntry> | undefined) =>
 	Object.fromEntries(entriesOf(layer).flatMap(([k, entry]) => (entry.kind === "override" ? [[k, (entry.flags << 8) | entry.code]] : [])));
 
-/** Board run 1 (2026-10-19, Mac mode): the 30 layer 2 overrides it read, as flags << 8 | code by active usage. Esc is the 31st factory pair and read default. */
+/** The first U10 board run (2026-10-19, Mac mode, `testing/fixtures/tab60kit-u10-2026-10-19T07-42-46-288Z.json`): the 30 layer 2 overrides it read, as flags << 8 | code by active usage. Esc is the 31st factory pair and read default. */
 const RUN1_LAYER2: Readonly<Record<number, number>> = {
 	0x04: 0x192, 0x08: 0x13f, 0x0d: 0x131, 0x0e: 0x132, 0x0f: 0x133, 0x10: 0x111, 0x11: 0x110, 0x14: 0x13d, 0x16: 0x193, 0x1a: 0x13e,
 	0x1b: 0x191, 0x1d: 0x190, 0x1e: 0x1a0, 0x1f: 0x1a1, 0x20: 0x1a2, 0x21: 0x182, 0x22: 0x183, 0x26: 0x1ac, 0x27: 0x1ad, 0x2b: 0x135,
@@ -240,7 +240,7 @@ test("in Windows mode every layer reads default for exactly the usages predict.p
 	expect(presentUsages("windows")).toEqual(WINDOWS_PRESENT);
 });
 
-test("in Mac mode 0xE6 is gone and 0xE7 is present, and layer 2 reads what board run 1 read, plus the Esc pair", () => {
+test("in Mac mode 0xE6 is gone and 0xE7 is present, and layer 2 reads what the first U10 board run read, plus the Esc pair", () => {
 	const layers = predictLayers("mac");
 	const macPresent = [...WINDOWS_PRESENT.filter((k) => k !== 0xe6), 0xe7];
 	expect(presentUsages("mac")).toEqual(macPresent);

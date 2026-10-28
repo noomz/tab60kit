@@ -1,5 +1,5 @@
 /**
- * Plan U12's hardware check. Choose the OS key mode, tick the preconditions, and Start: the page runs U12_STEPS,
+ * Unit U12's hardware check. Choose the OS key mode, tick the preconditions, and Start: the page runs U12_STEPS,
  * stopping at each user step until Yes or No, and logging every keydown and keyup `code` during a keylog step. At the
  * reload step it saves its progress to sessionStorage and asks for a reload; after it, Continue reads the keymap back
  * from the editor's storage (localStorage, the shipped page's code) and finishes the run. Download the transcript and

@@ -13,13 +13,13 @@ export const TAB60 = {
 	usage: 0x0001,
 	interfaceNumber: 1,
 	reportBytes: 64,
-	/** iap: the product string of five sibling CYKB bootloaders (R3 D4). */
+	/** iap: the product string of five sibling CYKB bootloaders (docs/webhid.md D4). */
 	productName: { app: "USB-HID Keyboard", iap: "USB-HID IAP" },
 } as const;
 
 /**
  * The flash layout this tool writes to. A board whose BL info disagrees is refused, never adapted to.
- * Source: R1 "Flash map" and "BL info block"; R2 trailer identity.
+ * Source: docs/protocol.md "Flash map" and "BL info block"; docs/updater-package.md trailer identity.
  */
 export const EXPECTED_LAYOUT = {
 	/** ERASE, SUM, CRC, and the write address are offsets from this absolute address. */
@@ -53,7 +53,7 @@ export function modeOf(productId: number): Mode | null {
 	return null;
 }
 
-/** Chooser filters for the given modes. The usage-page filter keeps the keyboard interfaces out of the grant (R3 C8). */
+/** Chooser filters for the given modes. The usage-page filter keeps the keyboard interfaces out of the grant (docs/webhid.md C8). */
 export function hidFilters(modes: readonly Mode[]): readonly HidFilter[] {
 	return modes.map((mode) => ({
 		vendorId: TAB60.vendorId,

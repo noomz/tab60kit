@@ -1,5 +1,5 @@
-// Plan U4: property tests over the layout check, the spans, and the egress audit. The expectations are written here
-// as literals from R1 ("Flash map", "BL info block", "Packet framing"), with no help from flashmap.ts or the audit, so a
+// Unit U4: property tests over the layout check, the spans, and the egress audit. The expectations are written here
+// as literals from docs/protocol.md ("Flash map", "BL info block", "Packet framing"), with no help from flashmap.ts or the audit, so a
 // bug in either cannot cancel out. The generators are seeded, so a failure names a case that repeats, and probes/run.sh
 // counts on the same cases to catch an inWindow that accepts one page past the end.
 import { expect, test } from "bun:test";
@@ -44,7 +44,7 @@ function maxArg(cmd: number, sub: number): number {
 	return 0;
 }
 
-/** The user's U11 ruling: 0x51/0x20 carries a u16 value in bytes 4..5 with flags 0, so its high byte is 0. */
+/** The maintainer's U11 ruling: 0x51/0x20 carries a u16 value in bytes 4..5 with flags 0, so its high byte is 0. */
 const KEY_WRITE_VALUE_MAX = 0x00ff;
 
 const inside = (offset: number, length: number) => Number.isInteger(offset) && offset >= 0 && length >= 1 && offset + length <= WINDOW_BYTES;

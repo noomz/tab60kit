@@ -1,5 +1,5 @@
 // expect: none
-// The drop-sweep call site from design.md, compiled against the sketch's test modules.
+// The drop-sweep call site from docs/design.md, compiled against the sketch's test modules.
 import type { FlashableImage } from "../core/firmware";
 import { createKit } from "../core/kit";
 import { FakeTab60 } from "../testing/fake-tab60";

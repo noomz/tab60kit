@@ -20,7 +20,7 @@ function tap(board: FakeTab60) {
 	return { ask, reports, detached: () => detached };
 }
 
-test("normal mode answers the reads R4 lists and echoes bytes 2..3", async () => {
+test("normal mode answers the reads docs/app-firmware.md lists and echoes bytes 2..3", async () => {
 	const board = new FakeTab60({ starting: "official-image", target });
 	const { ask } = tap(board);
 	expect(await ask("1202beef")).toEqual(["1202beef01".padEnd(128, "0")]);

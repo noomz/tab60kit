@@ -1,5 +1,5 @@
 /**
- * Plan U11's hardware check. Tick the preconditions and Start: the page runs U11_STEPS, stopping at each user step
+ * Unit U11's hardware check. Tick the preconditions and Start: the page runs U11_STEPS, stopping at each user step
  * until Yes or No. While a keylog step shows, every keydown and keyup `code` the page sees is logged with the answer.
  * Download the transcript and run tools/u11-verdict.ts, which writes the capture for the commit that moves the four
  * U11 rows to "confirmed". `?fake` runs on the fake board: Yes on the power-cycle step power-cycles it, and a button

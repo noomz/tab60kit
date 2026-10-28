@@ -1,6 +1,6 @@
 /**
  * Usage: bun tools/u6-verdict.ts <first.json> <second.json>
- * Prints plan U6's checks on two lab/u6 transcripts and exits 1 unless every one passes.
+ * Prints unit U6's checks on two lab/u6 transcripts and exits 1 unless every one passes.
  */
 import { readFileSync } from "node:fs";
 import { evaluateU6 } from "../lab/u6-checks";

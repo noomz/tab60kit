@@ -1,5 +1,5 @@
 /**
- * Plan U12's hardware run, DOM-free so testing/u12.test.ts runs it against the fake board. It applies a five-key
+ * Unit U12's hardware run, DOM-free so testing/u12.test.ts runs it against the fake board. It applies a five-key
  * document with the shipped apply job, has the user type each key, reloads the page and reads the document back from
  * the editor's storage, has the user pull the batteries, reads the five keys back at 0x00FF, applies the stored
  * document once, has the user type each key again, then applies the empty document, which restores all five.

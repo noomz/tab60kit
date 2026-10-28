@@ -1,14 +1,14 @@
 /**
- * Candidate A's drop test (proof/reconcile.ts), adapted to this design's own decision code. It drives the real
+ * A drop test of the flash loop, over this design's own decision code. It drives the real
  * decideInApp, decideInIap, STEPS, and MAX_LINK_LOSSES from core/flash.ts over a toy board (mode, image, version page:
  * no bytes, no addresses), through the loop that makeOfficial runs. Drops land at every combination of up
  * to four of the first 40 drop points, with and without an MCU reset on each drop, from nine starting states, on a
  * board whose image writes all verify and on one whose first two writes fail their checksum, which the vendor's
  * budget of three write attempts must still finish.
  *
- * Three loops run. "as received, descending erase" is candidate C before synthesis: a drop counts as a step attempt,
+ * Three loops run. "as received, descending erase" is an earlier draft of the loop: a drop counts as a step attempt,
  * one ERASE clears the whole window, and no link gate runs; the IAP clears the window's pages from the top, an order
- * nothing rules out. "as received, ascending erase" is the same loop with the order C assumed, which isolates the
+ * nothing rules out. "as received, ascending erase" is the same loop with the order that draft assumed, which isolates the
  * attempt-count defect. "synthesized" is this design: a drop resets the attempt counts, the version page is erased by
  * its own command first, the link gate probes before the first flash write on each link, and rewrite runs as a goal.
  *
@@ -67,7 +67,7 @@ const iapChip = (board: Board): IapChip => ({ mode: "iap", info, blInfoSha256, w
 /** A page with the 0x5AA5 magic: the target's block, or another firmware's. A block cut short has none. */
 const magic = (page: Contents) => page === "target" || page === "other";
 const incomplete = (image: Contents) => image === "erased" || image === "partial";
-/** The IAP's boot rule (R1, INFERRED): it runs the image only while the version page holds its magic. */
+/** The IAP's boot rule (docs/protocol.md, INFERRED): it runs the image only while the version page holds its magic. */
 const bootsInto = (board: Board): Mode => (magic(board.page) ? "app" : "iap");
 
 interface Loop {

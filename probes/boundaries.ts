@@ -51,7 +51,7 @@ const report = (rule: string, problems: readonly string[], ok: string) => {
 	console.log(`FAIL ${rule}: ${problems.join("; ")}`);
 };
 
-// Candidate B's rule: the fake board implements R1 and R4 from the documents with its own byte handling. Its import
+// The fake board implements docs/protocol.md and docs/app-firmware.md with its own byte handling. Its import
 // closure may enter core/ only through the seam it implements, so a host codec bug cannot cancel out in the fake.
 // The U1 verdict and the lab's frame allowlist read frames with their own hex parsing for the same reason.
 function independence(rule: string, from: string, allowed: readonly string[]): void {

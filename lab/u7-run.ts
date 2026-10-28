@@ -18,7 +18,7 @@ import { type Attestation, type StepOutcome, type UserStep, attestationMet } fro
 export { type Attestation, type StepOutcome, type UserStep, attestEntry } from "./u11-run";
 
 export const U7_PURPOSE = "U7: first write, V1.01.13 over itself, then a deep check and the keylog bar";
-/** The seven U1 rows, the three reviewed flash-write rows, and get write address, which the user's D4 ruling added. */
+/** The seven U1 rows, the three reviewed flash-write rows, and get write address, which the maintainer added after the U2 audit. */
 export const U7_ROWS = [
 	"readMode",
 	"readBlInfo",
@@ -61,7 +61,7 @@ export const U7_PRECONDITIONS = [
 	{ key: "karabinerLedOff", label: "Karabiner's Caps Lock LED manipulation is off now" },
 	{ key: "cableIn", label: "The USB cable is in, and I will not touch it until the page says the flash is done" },
 	{ key: "tabInFront", label: "This tab stays in front and visible for the whole flash (a hidden tab slows the link check's probes)" },
-	{ key: "recoveryReady", label: "MaruStation is ready with the vendor updater (Tab60firmwareV1.01.13.exe, run with -force) as recovery" },
+	{ key: "recoveryReady", label: "A Windows PC with the vendor updater (Tab60firmwareV1.01.13.exe, run with -force) is ready as recovery" },
 	{ key: "secondKeyboardAtHand", label: "A second keyboard is at hand" },
 	{ key: "bluetoothReady", label: "The batteries are in and the board is paired with this computer over Bluetooth" },
 	{ key: "noSavingKeys", label: "During the run I will press only the keys the page names, and none on the do-not-press list" },
