@@ -2,7 +2,7 @@
  * What a TAB 60 firmware image is, how it travels on the wire, which images are official, and which ones
  * this tool may write.
  *
- * Policy (user ruling, "vendor images only"): an image is flashable only when its SHA-256 is pinned in CATALOG.
+ * Policy (the maintainer's ruling, "vendor images only"): an image is flashable only when its SHA-256 is pinned in CATALOG.
  * A well-formed vendor-format exe with an unpinned image is refused too. The exe is unsigned, so its format proves
  * nothing about who made it. A new vendor release becomes flashable through a reviewed catalog entry built by
  * tools/catalog-entry.ts.

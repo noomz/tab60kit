@@ -1,7 +1,7 @@
 /**
  * The keylog typing harness as a pure module, so the U7 page records its trials in the
  * transcript and tools/u7-verdict.ts recounts them from the raw events. The phrase, the edit counts, and the per-trial
- * summary are the harness's, line for line; only the pass bar is new, from plan U7.
+ * summary are the harness's, line for line; only the pass bar is new, from unit U7.
  */
 
 /** The harness's phrase: 54 characters, so three trials type 162. */

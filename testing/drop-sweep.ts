@@ -21,8 +21,8 @@ export type Start = (typeof STARTS)[number];
 
 /**
  * How the IAP behaves where the rulings add a path. An ERASE that starts past offset 0, which the vendor never sends
- * (U2 D1): it erases, or it refuses with FF AA, or it never answers; the last two run eraseWindow's fallback, the
- * vendor's one window erase. "mute-write": it writes block 100 and loses the ack, so the block is resent (D5).
+ * (U2): it erases, or it refuses with FF AA, or it never answers; the last two run eraseWindow's fallback, the
+ * vendor's one window erase. "mute-write": it writes block 100 and loses the ack, so the block is resent.
  */
 const IAP_OPTIONS = {
 	erases: {},

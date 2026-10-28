@@ -19,7 +19,8 @@
  * were never run, and no Vortex bytes are in this repository or redistributed. They were read only to learn the
  * commands and data formats needed to talk to the keyboard. Every address in an evidence string cites V1.01.13 (the
  * updater exe, or the app image linked at 0x3200), so anyone with the same files can check it. In those strings, R1
- * means docs/protocol.md, R2 docs/updater-package.md, and R4 docs/app-firmware.md.
+ * means docs/protocol.md, R2 docs/updater-package.md, and R4 docs/app-firmware.md. "U2" marks an address in the
+ * updater exe that the audit of the vendor updater (unit U2, docs/units.md) traced to the frame it builds or sends.
  */
 import { EXPECTED_LAYOUT, TAB60 } from "./device";
 import { type FlashableImage, imageBytes } from "./firmware";
@@ -285,7 +286,7 @@ export const COMMANDS = {
 		modes: ["iap"],
 		effect: "write",
 		reply: "echo-arg",
-		/** The vendor's wait (U2, 0x408975), raised from pok3rtool's 500 ms by the user's D4 ruling. */
+		/** The vendor's wait (U2, 0x408975), raised from pok3rtool's 500 ms by the maintainer's ruling on the U2 audit. */
 		timeoutMs: 1_000,
 		address: "set-cursor",
 		payloadBytes: 4,
@@ -838,13 +839,13 @@ function u32Payload(value: number): Uint8Array {
 }
 
 /**
- * Tries for each unit the vendor retries, by the user's 2026-10-26 rulings: the set and get write address pair, one
+ * Tries for each unit the vendor retries, by the maintainer's 2026-10-26 rulings on the U2 audit: the set and get write address pair, one
  * WRITE block, and the app-region ERASE before its fallback. The vendor tries 15 times; past these, the convergence
  * loop observes the board and decides.
  */
 const TRIES = 3;
 
-/** The vendor's Sleep 1000 between tries (U2 section 3). */
+/** The vendor's Sleep 1000 between tries (U2). */
 const RETRY_WAIT_MS = 1_000;
 
 /**
@@ -857,7 +858,7 @@ async function settle(ch: Channel): Promise<void> {
 }
 
 /**
- * Sets the write address, reads it back, and requires the address set (U2 D4: the vendor's pair at 0x404F60). The pair
+ * Sets the write address, reads it back, and requires the address set (U2: the vendor's pair at 0x404F60). The pair
  * is retried as one unit on a refusal, a silence, or a different read-back; a lost link ends it at once.
  */
 async function setCursor(ch: Channel, offset: number): Promise<void> {
@@ -879,7 +880,7 @@ async function setCursor(ch: Channel, offset: number): Promise<void> {
 /**
  * Sets the write address to the span, then WRITEs `bytes` in chunks of at most 52. Each ack must name the next address.
  * A block whose ack is missing or names another offset goes again from its own start, after the cursor is set back
- * and read back (U2 D5, the vendor's 0x4052C5..0x4052CF). After TRIES the error goes to the caller's next observation.
+ * and read back (U2: the vendor's 0x4052C5..0x4052CF). After TRIES the error goes to the caller's next observation.
  */
 async function writeAt(ch: Channel, span: Span, bytes: Uint8Array, onChunk: (done: number, total: number) => void): Promise<void> {
 	await setCursor(ch, span.offset);

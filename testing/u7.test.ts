@@ -86,7 +86,7 @@ test("the U7 verdict passes the clean fake run on all nine checks", () => {
 	expect(checks.find(({ title }) => title === TITLES.keylog)?.detail).toBe("3 trials, 0 of 162 characters missing");
 });
 
-test("D1: a run whose IAP refuses the app-region erase finishes official, and the verdict fails it on the erase check alone, naming the fallback", async () => {
+test("window-erase fallback: a run whose IAP refuses the app-region erase finishes official, and the verdict fails it on the erase check alone, naming the fallback", async () => {
 	const { outcomes, transcript, board } = await runOnFake({}, { offsetErase: "error-marker" });
 	expect(outcomes.every(({ pass }) => pass)).toBe(true);
 	expect(board.violations).toEqual([]);
@@ -96,13 +96,13 @@ test("D1: a run whose IAP refuses the app-region erase finishes official, and th
 	expect(fails[0]).toContain("[0x0, 0x200), [0x200, 0x1ce00), [0x0, 0x1ce00)");
 });
 
-test("D4: a set whose read-back differs is sent again, and the verdict reports the mismatch on the cursor check alone", async () => {
+test("cursor read-back: a set whose read-back differs is sent again, and the verdict reports the mismatch on the cursor check alone", async () => {
 	const { outcomes, transcript } = await runOnFake({}, { cursorFault: { at: 0, times: 1 } });
 	expect(outcomes.every(({ pass }) => pass)).toBe(true);
 	expect(failing(transcript)).toEqual([`${TITLES.cursor} | set 0x200 read back 1e00000004020000`]);
 });
 
-test("D5: a lost write ack is resent from its block's start, and the verdict passes with one chunk resent", async () => {
+test("block resend: a lost write ack is resent from its block's start, and the verdict passes with one chunk resent", async () => {
 	const { transcript } = await runOnFake({}, { writeFault: { at: 100, times: 1, kind: "mute" } });
 	const checks = evaluateU7(transcript, expected);
 	expect(checks.filter(({ pass }) => !pass)).toEqual([]);

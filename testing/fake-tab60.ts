@@ -58,7 +58,7 @@ export interface FakeOptions {
 	/** The order the IAP erases the pages of one ERASE, which docs/protocol.md does not document. Default "descending", the order that punishes one ERASE over the whole window. */
 	readonly eraseOrder?: "descending" | "ascending";
 	/**
-	 * An IAP that takes only the vendor's erases, which all start at offset 0 (U2 audit section 5): an ERASE at any other
+	 * An IAP that takes only the vendor's erases, which all start at offset 0 (U2): an ERASE at any other
 	 * offset gets the FF AA marker naming 1D 00, or no answer, and erases nothing. Default: it takes any aligned range.
 	 */
 	readonly offsetErase?: "error-marker" | "silent";
