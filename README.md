@@ -67,7 +67,7 @@ bun run build
 python3 -m http.server --bind 127.0.0.1 --directory dist 8000
 ```
 
-Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Fn + Q Windows, Fn + W Mac, Fn + E Caps/Ctrl swap), change keys, and click Apply.
+Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Fn + Q Windows, Fn + W Mac, Fn + E Caps/Ctrl swap), change keys, and click Apply. To write the official firmware, drop your copy of `Tab60firmwareV1.01.13.exe` on the file picker on the Board screen, then click Make official. Read [Safety](#safety) first.
 
 To run the test suite that CI runs:
 

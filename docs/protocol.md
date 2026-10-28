@@ -77,9 +77,9 @@ The table lists every command tab60kit may send for flashing and for reading the
 | `1D/00` | ERASE | u32 offset, u32 length | echo, sent when the erase is done | IAP | VERIFIED. Page granular. Confirmed on the board (U7) |
 | `1D/01` | SUM | u32 offset, u32 length | u32 sum | IAP | VERIFIED |
 | `1D/02` | CRC | u32 offset, u32 length | u32 CRC-32 | IAP | VERIFIED in pok3rtool. The vendor updater never sends it |
-| `1E/01` | SET WRITE ADDRESS | u32 offset | echo | IAP | VERIFIED |
+| `1E/01` | SET WRITE ADDRESS | u32 offset | echo | IAP | VERIFIED. Confirmed on the board (U7) |
 | `1E/00` | GET WRITE ADDRESS | u32 `FF FF FF FF` | u32 cursor | IAP | VERIFIED. Confirmed on the board (U7) |
-| `1F/n` | WRITE n bytes (n up to 52) | n bytes of encoded image | `1E 02` + u32 next offset | IAP | VERIFIED |
+| `1F/n` | WRITE n bytes (n up to 52) | n bytes of encoded image | `1E 02` + u32 next offset | IAP | VERIFIED. Confirmed on the board (U7) |
 
 Notes on single commands:
 
