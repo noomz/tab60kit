@@ -5,16 +5,34 @@
 # Then probes/boundaries.ts checks the import and egress rules the compiler cannot see, on this tree and on copies
 # that each break one rule.
 # Usage: probes/run.sh   (TSC=/path/to/tsc and BUN=/path/to/bun to override; needs TypeScript 5.x and Bun, no packages)
+# PROBES_SHARD=INDEX/COUNT runs one slice, like 0/4. The units (one probe file, one mutation) are numbered in the order
+# below, and slice INDEX takes the units whose number is INDEX modulo COUNT. Each slice prints how many units it ran of
+# how many there are, so the slices can be checked to add up to the whole. Unset, it runs every unit.
 set -u
 cd "$(dirname "$0")/.."
 TSC="${TSC:-tsc}"
 OPTS=(--noEmit --strict --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM
 	--exactOptionalPropertyTypes --noUncheckedIndexedAccess --verbatimModuleSyntax --isolatedModules --skipLibCheck)
 fails=0
+shard=${PROBES_SHARD:-0/1}
+shard_index=${shard%/*}
+shard_count=${shard#*/}
+case "$shard_index$shard_count" in *[!0-9]* | "") echo "FAIL PROBES_SHARD must look like 0/4, got $shard"; exit 1 ;; esac
+[ "$shard_index" -lt "$shard_count" ] || { echo "FAIL PROBES_SHARD index must be below its count, got $shard"; exit 1; }
+units=0
+ran=0
+# mine: true when the next unit belongs to this slice. Call it once per unit, in a fixed order.
+mine() {
+	local n=$units
+	units=$((units+1))
+	[ $((n % shard_count)) -eq "$shard_index" ] || return 1
+	ran=$((ran+1))
+}
 
 for probe in probes/*.ts; do
 	expect=$(sed -n 's#^// expect: ##p' "$probe" | head -1)
 	[ -z "$expect" ] && continue
+	mine || continue
 	out=$("$TSC" "${OPTS[@]}" web/webhid.d.ts "$probe" 2>&1)
 	status=$?
 	if [ "$expect" = "none" ]; then
@@ -30,24 +48,30 @@ for probe in probes/*.ts; do
 	fi
 done
 
-work=$(mktemp -d)
+work=
 trap 'rm -rf "$work"' EXIT
-cp -R core web package.json "$work/"
-perl -0pi -e 's/(export type JobState =\n)/$1\t| { readonly kind: "paused"; readonly board: ChipState | null }\n/' "$work/core/job.ts"
-grep -q '"paused"' "$work/core/job.ts" || { echo "FAIL mutation did not apply"; exit 1; }
-out=$("$TSC" "${OPTS[@]}" "$work/web/webhid.d.ts" "$work/web/screens.ts" 2>&1)
-if printf '%s\n' "$out" | grep -qE "screens\.ts\([0-9]+,[0-9]+\): error TS2322: Type '\{ readonly kind: \"paused\";"; then
-	echo "PASS a new JobState variant without a screen fails to compile: $(printf '%s\n' "$out" | grep -E 'screens\.ts' | head -1 | sed 's#.*error ##')"
-else
-	echo "FAIL adding a JobState variant did not break screens.ts:"; echo "$out"; fails=$((fails+1))
+if mine; then
+	work=$(mktemp -d)
+	cp -R core web package.json "$work/"
+	perl -0pi -e 's/(export type JobState =\n)/$1\t| { readonly kind: "paused"; readonly board: ChipState | null }\n/' "$work/core/job.ts"
+	grep -q '"paused"' "$work/core/job.ts" || { echo "FAIL mutation did not apply"; exit 1; }
+	out=$("$TSC" "${OPTS[@]}" "$work/web/webhid.d.ts" "$work/web/screens.ts" 2>&1)
+	if printf '%s\n' "$out" | grep -qE "screens\.ts\([0-9]+,[0-9]+\): error TS2322: Type '\{ readonly kind: \"paused\";"; then
+		echo "PASS a new JobState variant without a screen fails to compile: $(printf '%s\n' "$out" | grep -E 'screens\.ts' | head -1 | sed 's#.*error ##')"
+	else
+		echo "FAIL adding a JobState variant did not break screens.ts:"; echo "$out"; fails=$((fails+1))
+	fi
 fi
 
 BUN="${BUN:-bun}"
-"$BUN" probes/boundaries.ts .
-fails=$((fails+$?))
+if mine; then
+	"$BUN" probes/boundaries.ts .
+	fails=$((fails+$?))
+fi
 
 lint_mutation() {
 	local why=$1 rule=$2 file=$3 line=$4 copy
+	mine || return 0
 	copy=$(mktemp -d)
 	cp -R core web testing lab tools package.json "$copy/"
 	printf '%s\n' "$line" >> "$copy/$file"
@@ -72,24 +96,27 @@ lint_mutation "a protocol.ts import whose names are all inline types" protocol-k
 lint_mutation "a protocol.ts re-export of a keymap value" protocol-keymap-types-only core/protocol.ts 'export { keyId } from "./keymap";'
 
 # docs/units.md U4: the property test must notice a window check that lets one page past the end through.
-copy=$(mktemp -d)
-cp -R core testing package.json "$copy/"
-perl -0pi -e 's/(offset \+ length <= window\.end - window\.base)/$1 + window.pageSize/' "$copy/core/flashmap.ts"
-grep -q 'window\.base + window\.pageSize' "$copy/core/flashmap.ts" || { echo "FAIL mutation did not apply"; exit 1; }
-out=$(cd "$copy" && "$BUN" test testing/egress-property.test.ts 2>&1)
-status=$?
-if [ $status -ne 0 ] && printf '%s\n' "$out" | grep -q "the audit passed a frame that addresses outside the window"; then
-	echo "PASS the property test catches an inWindow that accepts one page past the end"
-else
-	echo "FAIL the property test missed an inWindow that accepts one page past the end:"; echo "$out" | tail -20; fails=$((fails+1))
+if mine; then
+	copy=$(mktemp -d)
+	cp -R core testing package.json "$copy/"
+	perl -0pi -e 's/(offset \+ length <= window\.end - window\.base)/$1 + window.pageSize/' "$copy/core/flashmap.ts"
+	grep -q 'window\.base + window\.pageSize' "$copy/core/flashmap.ts" || { echo "FAIL mutation did not apply"; exit 1; }
+	out=$(cd "$copy" && "$BUN" test testing/egress-property.test.ts 2>&1)
+	status=$?
+	if [ $status -ne 0 ] && printf '%s\n' "$out" | grep -q "the audit passed a frame that addresses outside the window"; then
+		echo "PASS the property test catches an inWindow that accepts one page past the end"
+	else
+		echo "FAIL the property test missed an inWindow that accepts one page past the end:"; echo "$out" | tail -20; fails=$((fails+1))
+	fi
+	rm -rf "$copy"
 fi
-rm -rf "$copy"
 
 # docs/units.md U5: the drop sweep and the link-gate scenario must each notice the defect they exist for. `files` may name
 # several files, each of which gets the pattern; `applied` must then appear in the first.
 mutation_check() {
 	local why=$1 files=$2 pattern=$3 applied=$4 expect=$5 copy out status file
 	shift 5
+	mine || return 0
 	copy=$(mktemp -d)
 	cp -R core testing package.json "$copy/"
 	for file in $files; do perl -0pi -e "$pattern" "$copy/$file"; done
@@ -116,5 +143,6 @@ mutation_check "the gate scenario catches a job that writes before judgeLink say
 	's/if \(verdict\.kind === "stable"\) return;/if (verdict.kind === "stable" || true) return;/' \
 	'|| true) return;' '(fail) no flash write within 15 s of a timeout' test testing/flash-job.test.ts
 
+echo "slice $shard ran $ran of $units units"
 echo "failures: $fails"
 exit $fails

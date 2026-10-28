@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+# `bun run check` runs every step below in one process tree. CI splits the two slow steps into slices that run in
+# parallel: the drop sweep into 4 and the probes into 3. Each slice takes a disjoint part of the same run set, and the
+# `coverage` job fails unless the slices add up to the whole, so no run and no probe is dropped.
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -18,6 +21,71 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
-      - run: bun run probes
       - run: bun run reconcile
-      - run: bun run drop-sweep
+
+  probes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0/3", "1/3", "2/3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      # shell: bash makes the pipe fail when the probes do (the default shell has no pipefail).
+      - run: PROBES_SHARD=${{ matrix.shard }} bun run probes | tee probes.txt
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probes-${{ strategy.job-index }}
+          path: probes.txt
+
+  drop-sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["0/4", "1/4", "2/4", "3/4"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun testing/drop-sweep.ts --shard=${{ matrix.shard }} | tee sweep.json
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sweep-${{ strategy.job-index }}
+          path: sweep.json
+
+  coverage:
+    needs: [probes, drop-sweep]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: slices
+      - name: The slices add up to the whole run set
+        run: |
+          set -eu
+          # Drop sweep: 4 slices 0/4..3/4, every one reporting the same total, their runs summing to it.
+          test "$(ls slices/sweep-*/sweep.json | wc -l)" -eq 4
+          jq -s -e '
+            (map(.shard) | sort) == ["0/4", "1/4", "2/4", "3/4"]
+            and (map(.total) | unique | length) == 1
+            and (map(.runs) | add) == .[0].total
+            and (map(.failures) | add) == 0
+          ' slices/sweep-*/sweep.json
+          echo "drop sweep: $(jq -s '[.[].runs] | add' slices/sweep-*/sweep.json) of $(jq -s '.[0].total' slices/sweep-*/sweep.json) runs"
+          # Probes: 3 slices 0/3..2/3, every one reporting the same unit total, the units they ran summing to it.
+          test "$(ls slices/probes-*/probes.txt | wc -l)" -eq 3
+          cat slices/probes-*/probes.txt | sed -n 's#^slice \([0-9]*/[0-9]*\) ran \([0-9]*\) of \([0-9]*\) units$#\1 \2 \3#p' | sort > slices/probe-slices.txt
+          cat slices/probe-slices.txt
+          awk 'BEGIN { s = 0 } { s += $2; if (NR > 1 && $3 != t) bad = 1; t = $3 } END { exit (NR == 3 && !bad && s == t) ? 0 : 1 }' slices/probe-slices.txt
+          grep -L '^failures: 0$' slices/probes-*/probes.txt | (! grep .)
