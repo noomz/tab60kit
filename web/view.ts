@@ -185,9 +185,9 @@ function flashMap(report: ChipReport | null): Pick<PageView, "flashMap" | "boot"
 }
 
 export const OS_KEY_MODE_NAME: Readonly<Record<OsKeyMode, string>> = {
-	windows: "Windows (Fn+Q)",
-	mac: "Mac (Fn+W)",
-	"caps-ctrl": "Caps/Ctrl swap (Fn+E)",
+	windows: "Windows (Pn+Q)",
+	mac: "Mac (Pn+W)",
+	"caps-ctrl": "Caps/Ctrl swap (Pn+E)",
 };
 
 const UNDO = "Unplugging USB with the batteries out for 10 seconds undoes every write Apply made.";
@@ -324,7 +324,7 @@ const MODE_CHIP: Readonly<Record<"app" | "iap" | "unconfirmed" | "none", StatusC
 	none: { kind: "idle", label: "Not connected" },
 	app: { kind: "normal", label: "TAB 60 · normal mode" },
 	iap: { kind: "update", label: "TAB 60 · update mode" },
-	unconfirmed: { kind: "idle", label: "TAB 60 · mode not confirmed, click Check again" },
+	unconfirmed: { kind: "idle", label: "TAB 60 · mode unknown, click Check again" },
 };
 
 /** Where the board is: a finished or stopped job's session says it; during a job, the latest observation does. */

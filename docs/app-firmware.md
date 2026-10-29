@@ -161,7 +161,7 @@ The swaps come from sub_5F4C (0x5F4E to 0x5F9A), which reads the mode byte, call
 
 **How the mode is set.** No HID frame writes 0x2000102B directly. VERIFIED. Three things set it:
 
-- The function codes 0x13D (0x10), 0x13E (0x20), and 0x13F (0x40). The factory layer-2 table puts them on usages 0x14 (Q), 0x1A (W), and 0x08 (E). In the tool they are called Fn+Q, Fn+W, and Fn+E. By layer number they sit on layer 2, which is the layer held with the marker 0xD9 (see [Open questions](#open-questions)). Pressing one sets the byte and **saves the profile** (sub_5674 at 0x58DE, save at 0x5898).
+- The function codes 0x13D (0x10), 0x13E (0x20), and 0x13F (0x40). The factory layer-2 table puts them on usages 0x14 (Q), 0x1A (W), and 0x08 (E). They sit on layer 2, the layer held with the marker 0xD9, so they are Pn+Q, Pn+W, and Pn+E. The maintainer confirmed the Pn combinations on the board on 2026-10-29. Pressing one sets the byte and **saves the profile** (sub_5674 at 0x58DE, save at 0x5898).
 - A store reset (sub_4540) sets it to 0x10.
 - A profile switch loads the byte stored in the other profile.
 

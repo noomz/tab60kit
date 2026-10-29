@@ -17,7 +17,7 @@ export interface Kit {
 	check(depth: "quick" | "deep"): Promise<JobState>;
 	/** `{ rewrite: true }` writes the image even when the board already holds it (unit U7). */
 	makeOfficial(image: FlashableImage, options?: FlashOptions): Promise<JobState>;
-	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Fn+Q, Fn+W, or Fn+E), which no command reads. */
+	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Pn+Q, Pn+W, or Pn+E), which no command reads. */
 	applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Promise<JobState>;
 	/** What G1 lets this kit's keymap editor do, derived from COMMANDS and the kit's clearance. */
 	capabilities(): ConfigCapabilities;

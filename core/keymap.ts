@@ -192,7 +192,7 @@ export function romKeymap(): readonly Usage[] {
 }
 
 /**
- * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Fn+Q, Fn+W, and Fn+E (factory codes
+ * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Pn+Q, Pn+W, and Pn+E (factory codes
  * 0x13D, 0x13E, 0x13F) set 0x10, 0x20, and 0x40. sub_5F4C swaps usages in the active keymap per mode with the pairs
  * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not the OsMode byte 0x2000000F that an early read named: that
  * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the maintainer's report.

@@ -40,7 +40,7 @@ Read this before you connect your keyboard.
 | Fn + Left Shift, or Pn + Left Shift | Moves the Fn or Pn key (profiles 1 to 4) and saves the profile |
 | Fn + Right Alt, held while the keyboard powers on | Toggles a profile setting and saves the current profile |
 
-Some single key presses also save the current profile: the OS key mode keys (Fn + Q, W, or E), Win lock, the layout key, and some lighting keys. See [docs/app-firmware.md](docs/app-firmware.md) "Key combinations that save to flash".
+Some single key presses also save the current profile: the OS key mode keys (Pn + Q, W, or E), Win lock, the layout key, and some lighting keys. See [docs/app-firmware.md](docs/app-firmware.md) "Key combinations that save to flash".
 
 From reading the firmware, we believe that a save of the current profile also saves any keys that tab60kit wrote to RAM. We have not tested this on a board. If you do not want your changes saved on the keyboard, do not press these keys while your changes are applied. Switching to another profile reloads it from flash and drops the keys written in RAM.
 
@@ -67,7 +67,7 @@ bun run build
 python3 -m http.server --bind 127.0.0.1 --directory dist 8000
 ```
 
-Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Fn + Q Windows, Fn + W Mac, Fn + E Caps/Ctrl swap), change keys, and click Apply. To write the official firmware, drop your copy of `Tab60firmwareV1.01.13.exe` on the file picker on the Board screen, then click Install official firmware V1.01.13. Read [Safety](#safety) first.
+Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Pn + Q Windows, Pn + W Mac, Pn + E Caps/Ctrl swap), change keys, and click Apply. To write the official firmware, drop your copy of `Tab60firmwareV1.01.13.exe` on the file picker on the Board screen, then click Install official firmware V1.01.13. Read [Safety](#safety) first.
 
 To run the test suite that CI runs:
 

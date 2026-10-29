@@ -28,7 +28,7 @@ Every text color on its background measures at least 4.5:1.
 - **A parked pick is the largest control on the page,** and it takes focus.
 - **Plain words first.** A flash-map row says what it means for the user and why a grey row is normal. The exact technical reason sits in a Details disclosure under the row. A legend under the map says what each dot color means.
 - **Offer an install only when it would do something.** A board that update mode verified to run the dropped version gets "Nothing to install" and no button. A board whose version page alone names it keeps the install as a secondary button. Two short lines say what the install does; the rest sits behind "About the install".
-- **The chip says where the board is now.** A finished or stopped job records `at`, the mode of the session it ended with. A deep check or install keeps its update-mode reading for the flash map, but the chip shows `at`. A job that ended with no session, as after a skipped confirm pick, shows "mode not confirmed".
+- **The chip says where the board is now.** A finished or stopped job records `at`, the mode of the session it ended with. A deep check or install keeps its update-mode reading for the flash map, but the chip shows `at`. A job that ended with no session, as after a skipped confirm pick, shows "mode unknown, click Check again".
 - **"Check again", not "Connect", once a board was read.** It runs the same quick check. It is never the main button.
 - **Layers are named by the key that holds them.** The layer select names the cap in the cell where the firmware puts each layer marker (Fn for layer 1, Pn for layer 2).
 

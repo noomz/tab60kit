@@ -175,6 +175,6 @@ test("after a job the chip says the mode of the session the job ended with, not 
 	const done = (at: "app" | "iap" | null) => statusChips({ kind: "finished", job: "deep-check", result: { kind: "checked", depth: "deep" }, board: iap, at }, null);
 	expect(done("app")).toEqual([{ kind: "normal", label: "TAB 60 · normal mode" }]);
 	expect(done("iap")).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
-	expect(done(null)).toEqual([{ kind: "idle", label: "TAB 60 · mode not confirmed, click Check again" }]);
+	expect(done(null)).toEqual([{ kind: "idle", label: "TAB 60 · mode unknown, click Check again" }]);
 	expect(statusChips({ kind: "working", job: "deep-check", activity: { kind: "reading" }, board: iap }, null)).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
 });
