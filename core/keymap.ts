@@ -220,32 +220,62 @@ export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: nu
 const FACTORY_FLAGS = 1;
 
 /**
- * The factory function code (flags 1, as flags << 8 | code) that the store reset writes on `key`, or null. The reset
- * writes FACTORY_LAYER2 by cell under the Windows keymap, so the cell does not move with the OS key mode. Whether the
- * board still holds it depends on its history (the passing U10 board run, `fixtures/u10-macos.json`, found Esc's pair missing), so this is what the reset
- * leaves, not a read.
+ * The 33 (cell, code) pairs at ROM 0xAAC8 that sub_A364 applies while Fn (marker 0xD8) is held and the layer 1 store
+ * lookup missed, so a layer 1 override wins over them (docs/app-firmware.md "Fn layer"). Keyed by cell, so the OS key
+ * mode swaps do not move them. A code is a keyboard usage, or 0xEC + n for bit n of the consumer report: 0xF0
+ * Play/Pause, 0xF2 previous, 0xF3 next, 0xF4 Mute, 0xF5 Vol-, 0xF6 Vol+. `bun run real-image` checks them byte for byte.
  */
-export function factoryFunction(layer: Layer, key: KeyId): number | null {
-	const table = FACTORY_TABLES[layer];
-	if (table === null) return null;
-	const atReset = reverseMap(activeKeymap("windows"));
-	const pair = table.find(({ usage: k }) => atReset.get(k) === key);
-	return pair === undefined ? null : (FACTORY_FLAGS << 8) | pair.code;
-}
+export const FN_LAYER: readonly { readonly key: KeyId; readonly code: number }[] = (
+	[
+		[0, 0x35], [1, 0x3a], [8, 0x3b], [9, 0x3c], [16, 0x3d], [17, 0x3e], [24, 0x3f], [25, 0x40],
+		[32, 0x41], [33, 0x42], [40, 0x43], [41, 0x44], [48, 0x45], [42, 0x46], [43, 0x47], [50, 0x48],
+		[44, 0x49], [7, 0x65], [49, 0x4c], [3, 0xf2], [10, 0xf0], [11, 0xf3], [12, 0xf5], [13, 0xf6],
+		[20, 0xf4], [34, 0x52], [29, 0x50], [36, 0x51], [37, 0x4f], [28, 0x4a], [30, 0x4d], [27, 0x4b],
+		[35, 0x4e],
+	] as const
+).map(([cell, code]) => ({ key: keyId(cell), code }));
 
 /**
- * The factory function pairs per layer, by the usage they sit on. Layer 0 has none: its keys send their cap. Layer 1
- * (Fn) is null because no one has found its table in the firmware; when a verified one lands, put it here and the
- * editor names its keys. Layer 2 (Pn) is the table the store reset writes.
+ * sub_A410: in OS key mode 0x20 (Mac), with no Shift held, these Fn cells send another code than FN_LAYER's. Code,
+ * not a table; `bun run real-image` checks each `cmp`/`movs` pair. 0x69/0x6A are F14/F15, which macOS takes as
+ * brightness (INFERRED); 0xCA sends nothing and sets a flag whose reader is not traced; 0xCC and 0xCD go out as
+ * plain keyboard usages.
  */
-const FACTORY_TABLES: Readonly<Record<Layer, readonly { readonly usage: Usage; readonly code: number }[] | null>> = {
-	0: [],
-	1: null,
-	2: FACTORY_LAYER2,
-};
+export const FN_LAYER_MAC: readonly { readonly key: KeyId; readonly code: number }[] = (
+	[
+		[1, 0x69], [8, 0x6a], [9, 0xca], [17, 0xcc], [24, 0xcd], [25, 0xf2], [32, 0xf0], [33, 0xf3],
+		[40, 0xf4], [41, 0xf5], [48, 0xf6],
+	] as const
+).map(([cell, code]) => ({ key: keyId(cell), code }));
 
-/** Whether this tool knows what a key with no override sends on `layer`. */
-export const factoryLayerKnown = (layer: Layer): boolean => FACTORY_TABLES[layer] !== null;
+/**
+ * What a key with no override does on a factory layer. `function`: a Pn function code (flags << 8 | code) that the
+ * store reset writes. `fn`: the Fn layer's code in every OS key mode, and the code it sends instead in Mac mode
+ * without Shift (null when Mac mode sends the same).
+ */
+export type FactoryKey = { readonly kind: "function"; readonly code: number } | { readonly kind: "fn"; readonly code: number; readonly mac: number | null };
+
+/**
+ * What `key` does on `layer` with no override, or null when it sends its cap. Layer 0 has no factory functions. On
+ * layer 1 a cell that FN_LAYER does not list sends its cap (the store miss clears the layer, docs/app-firmware.md
+ * "Fn layer", INFERRED). On layer 2 the store reset writes FACTORY_LAYER2 by cell under the Windows keymap, so the
+ * cell does not move with the OS key mode; whether the board still holds it depends on its history (the passing U10
+ * board run, `fixtures/u10-macos.json`, found Esc's pair missing), so this is what the reset leaves, not a read.
+ */
+export function factoryKey(layer: Layer, key: KeyId): FactoryKey | null {
+	if (layer === 1) {
+		const fn = FN_LAYER.find((pair) => pair.key === key);
+		return fn === undefined ? null : { kind: "fn", code: fn.code, mac: FN_LAYER_MAC.find((pair) => pair.key === key)?.code ?? null };
+	}
+	if (layer !== 2) return null;
+	const atReset = reverseMap(activeKeymap("windows"));
+	const pair = FACTORY_LAYER2.find(({ usage: k }) => atReset.get(k) === key);
+	return pair === undefined ? null : { kind: "function", code: (FACTORY_FLAGS << 8) | pair.code };
+}
+
+/** The code an Fn key sends in `mode`: sub_A410 swaps in the Mac code only in Mac mode and only without Shift. */
+export const fnCode = (fn: Extract<FactoryKey, { kind: "fn" }>, mode: OsKeyMode, shift: boolean): number =>
+	mode === "mac" && !shift && fn.mac !== null ? fn.mac : fn.code;
 
 /** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
 function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {

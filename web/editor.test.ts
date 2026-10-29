@@ -33,11 +33,12 @@ test("the target table lists each usage once with a distinct KeyboardEvent code,
 	expect(usageName(usage(0x66))).toBe("usage 0x66");
 });
 
-test("a layer 2 key with a factory function warns that an override removes it until a power loss; other keys do not", () => {
-	expect(factoryNote(2, keyId(3))).toStartWith("This key holds factory function 0x13d (Windows mode) on Layer 2 (hold Pn).");
-	expect(factoryNote(2, keyId(3))).toContain("stays gone until the board loses power");
-	expect(factoryNote(0, keyId(3))).toBeNull();
-	expect(factoryNote(2, keyId(46))).toBeNull();
+test("a Pn factory key warns that an override removes it until a power loss; an Fn key says removing brings it back; other keys say nothing", () => {
+	expect(factoryNote(2, keyId(3), null)).toStartWith("This key holds factory function 0x13d (Windows mode) on Layer 2 (hold Pn).");
+	expect(factoryNote(2, keyId(3), null)).toContain("stays gone until the board loses power");
+	expect(factoryNote(1, keyId(48), "mac")).toBe("On Layer 1 (hold Fn) this key sends Vol+ from the firmware's Fn table. An override replaces it, and removing the override brings it back.");
+	expect(factoryNote(0, keyId(3), null)).toBeNull();
+	expect(factoryNote(2, keyId(46), null)).toBeNull();
 });
 
 test("each layer is named after the cap the firmware puts its layer marker on", () => {
@@ -51,31 +52,36 @@ const storeOf = (entries: readonly (readonly [Layer, string, OverrideEntry])[]) 
 	return store;
 };
 
-test("a key's face: this page's change first, then a board override, then the factory Pn function, then the cap", () => {
+test("a key's face: this page's change first, then a board override, then the factory key, then the cap", () => {
 	const q = capOf("Q");
-	expect(keyFace(q, 2, EMPTY_KEYMAP, null)).toEqual({ kind: "factory", main: "Windows mode", sub: "Q" });
-	expect(keyFace(q, 2, EMPTY_KEYMAP, storeOf([[2, "Q", { kind: "override", code: 0x3d, flags: 1 }]]))).toEqual({ kind: "factory", main: "Windows mode", sub: "Q" });
-	expect(keyFace(q, 2, EMPTY_KEYMAP, storeOf([[2, "Q", { kind: "default" }]]))).toEqual({ kind: "base", main: "Q", sub: null });
-	expect(keyFace(q, 1, EMPTY_KEYMAP, storeOf([[1, "Q", { kind: "override", code: 0x29, flags: 0 }]]))).toEqual({ kind: "board", main: "Esc", sub: "was Q" });
-	expect(keyFace(q, 1, withOverride(EMPTY_KEYMAP, 1, q.id, usage(0x05)), null)).toEqual({ kind: "pending", main: "Q", sub: "→ B" });
-	expect(keyFace(q, 0, EMPTY_KEYMAP, null)).toEqual({ kind: "base", main: "Q", sub: null });
+	expect(keyFace(q, 2, EMPTY_KEYMAP, null, null)).toEqual({ kind: "factory", main: "Windows mode", sub: "Q" });
+	expect(keyFace(q, 2, EMPTY_KEYMAP, storeOf([[2, "Q", { kind: "override", code: 0x3d, flags: 1 }]]), null)).toEqual({ kind: "factory", main: "Windows mode", sub: "Q" });
+	expect(keyFace(q, 2, EMPTY_KEYMAP, storeOf([[2, "Q", { kind: "default" }]]), null)).toEqual({ kind: "base", main: "Q", sub: null });
+	expect(keyFace(q, 1, EMPTY_KEYMAP, storeOf([[1, "Q", { kind: "override", code: 0x29, flags: 0 }]]), null)).toEqual({ kind: "board", main: "Esc", sub: "was Q" });
+	expect(keyFace(q, 1, withOverride(EMPTY_KEYMAP, 1, q.id, usage(0x05)), null, null)).toEqual({ kind: "pending", main: "Q", sub: "→ B" });
+	expect(keyFace(q, 0, EMPTY_KEYMAP, null, null)).toEqual({ kind: "base", main: "Q", sub: null });
 });
 
-test("store entries and layers are named in words, and the Fn layer says its factory functions are unknown", () => {
-	expect(entryName({ kind: "override", code: 0x35, flags: 1 })).toBe("USB");
-	expect(entryName({ kind: "override", code: 0x70, flags: 1 })).toBe("Function 0x170");
-	expect(entryName({ kind: "override", code: 0x52, flags: 0 })).toBe("Up");
-	expect(layerNote(1, null)).toBe('Read keymap to see what the board holds now. Factory Fn functions are unknown, so keys with no override show "?".');
-	expect(layerNote(1, storeOf([]))).toBe('Factory Fn functions are unknown, so keys with no override show "?".');
-	expect(layerNote(0, storeOf([]))).toBeNull();
-});
-
-test("on the Fn layer a key with no override shows unknown, never its cap, in the key and in its select", () => {
+test("Fn keys show the firmware's Fn table: both names until the OS key mode is chosen, then the one that mode sends", () => {
 	const equal = capOf("=");
-	expect(keyFace(equal, 1, EMPTY_KEYMAP, null)).toEqual({ kind: "unknown", main: "?", sub: "=" });
-	expect(keyFace(equal, 1, EMPTY_KEYMAP, storeOf([[1, "=", { kind: "default" }]]))).toEqual({ kind: "unknown", main: "?", sub: "=" });
-	expect(keyFace(equal, 0, EMPTY_KEYMAP, null)).toEqual({ kind: "base", main: "=", sub: null });
-	expect(noOverrideLabel(equal, 1)).toBe("= key on Layer 1 (hold Fn): factory function (unknown), no override");
-	expect(noOverrideLabel(capOf("Q"), 2)).toBe("Q key on Layer 2 (hold Pn): factory Windows mode, no override");
-	expect(noOverrideLabel(equal, 0)).toBe("= (no override)");
+	expect(keyFace(equal, 1, EMPTY_KEYMAP, null, null)).toEqual({ kind: "factory", main: "F12 / Vol+", sub: "=" });
+	expect(keyFace(equal, 1, EMPTY_KEYMAP, null, "mac")).toEqual({ kind: "factory", main: "Vol+", sub: "=" });
+	expect(keyFace(equal, 1, EMPTY_KEYMAP, storeOf([[1, "=", { kind: "default" }]]), "windows")).toEqual({ kind: "factory", main: "F12", sub: "=" });
+	expect(keyFace(capOf("D"), 1, EMPTY_KEYMAP, null, "windows")).toEqual({ kind: "factory", main: "Vol+", sub: "D" });
+	expect(keyFace(capOf("A"), 1, EMPTY_KEYMAP, null, null)).toEqual({ kind: "base", main: "A", sub: null });
+	expect(noOverrideLabel(equal, 1, null)).toBe("= key on Layer 1 (hold Fn): F12, or Vol+ in Mac mode without Shift, no override");
+	expect(noOverrideLabel(equal, 1, "mac")).toBe("= key on Layer 1 (hold Fn): Vol+ (F12 with Shift), no override");
+	expect(noOverrideLabel(capOf("I"), 1, "mac")).toBe("I key on Layer 1 (hold Fn): Up, no override");
+	expect(noOverrideLabel(capOf("Q"), 2, null)).toBe("Q key on Layer 2 (hold Pn): factory Windows mode, no override");
+	expect(noOverrideLabel(equal, 0, null)).toBe("= (no override)");
+});
+
+test("store entries and Pn functions are named in words; lighting has one plain name, since the TAB 60 has no backlight", () => {
+	expect(entryName({ kind: "override", code: 0x35, flags: 1 })).toBe("USB");
+	expect(entryName({ kind: "override", code: 0x70, flags: 1 })).toBe("Lighting (no backlight)");
+	expect(entryName({ kind: "override", code: 0x52, flags: 0 })).toBe("Up");
+	expect(entryName({ kind: "override", code: 0x5f, flags: 1 })).toBe("Key remap recording");
+	expect(layerNote(1, null, null)).toBe("Read keymap to see what the board holds now. Fn keys show the firmware's Fn table. Where two names show, the second is what Mac mode sends; choose the OS key mode to see one.");
+	expect(layerNote(1, storeOf([]), "windows")).toBe("Fn keys show the firmware's Fn table.");
+	expect(layerNote(0, storeOf([]), null)).toBeNull();
 });

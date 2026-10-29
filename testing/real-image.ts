@@ -1,7 +1,8 @@
 /**
  * Unit U9's check on the vendor's own exe: every TAB60_KEYS `defaultUsage` against the ROM keymap at flash 0xB205.
  * Unit U10's: the factory layer 2 table, the OS key mode swaps, and the Fn and Pn cells against their ROM bytes, then
- * `predictLayers` for every mode and layer against a prediction computed from the ROM bytes alone.
+ * `predictLayers` for every mode and layer against a prediction computed from the ROM bytes alone. The Fn layer: its
+ * 33 pairs, the Mac-mode code swap, and the consumer-report bits its media codes set (docs/app-firmware.md "Fn layer").
  * The exe goes through core's own extractor (`readUpdater`, U3), which holds the image in wire form; `xorWords` gives
  * the plain image, the bytes tools/oracle/decode_updater.py writes. The exe is never committed, so this runs locally, not in `check`.
  *
@@ -9,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 import { CATALOG, imageBytes, readUpdater, sha256, xorWords } from "../core/firmware";
-import { FACTORY_LAYER2, LAYER_KEY_MARKERS, NON_CAP_CELLS, OS_KEY_MODES, type OsKeyMode, TAB60_KEYS, predictLayers, romKeymap } from "../core/keymap";
+import { FACTORY_LAYER2, FN_LAYER, FN_LAYER_MAC, LAYER_KEY_MARKERS, NON_CAP_CELLS, OS_KEY_MODES, type OsKeyMode, TAB60_KEYS, predictLayers, romKeymap } from "../core/keymap";
 import type { OverrideEntry } from "../core/protocol";
 import { parseMaav102 } from "../core/updater";
 
@@ -31,6 +32,16 @@ const KEYMAP_FLASH = 0xb205;
 /** sub_4540: the factory (usage, code) pairs, ended by 0xD8; the Fn and Pn cells it copies to SRAM 0x20000E50/51. */
 const FACTORY_FLASH = 0xb2d6;
 const FN_PN_CELLS_FLASH = 0xaa14;
+/** sub_A364: the Fn (cell, code) pairs. */
+const FN_FLASH = 0xaac8;
+/**
+ * sub_A410: for each FN_LAYER_MAC cell, in order, the `cmp r1, #cell` and the `movs r0, #code` it branches to. Thumb:
+ * `cmp r1, #imm` is 0x29ii and `movs r0, #imm` is 0x20ii.
+ */
+const MAC_SITES: readonly (readonly [cmpAt: number, movsAt: number])[] = [
+	[0xa422, 0xa458], [0xa426, 0xa42a], [0xa41c, 0xa45c], [0xa42e, 0xa460], [0xa432, 0xa436], [0xa416, 0xa464],
+	[0xa440, 0xa468], [0xa444, 0xa448], [0xa43a, 0xa46c], [0xa44c, 0xa470], [0xa450, 0xa454],
+];
 /** sub_5F4C: the swap pairs per OS key mode, and the markers it writes into the Fn and Pn cells. */
 const SWAPS_FLASH: Readonly<Record<OsKeyMode, { readonly at: number; readonly pairs: number }>> = { windows: { at: 0, pairs: 0 }, mac: { at: 0xaa25, pairs: 4 }, "caps-ctrl": { at: 0xaa21, pairs: 2 } };
 const MARKERS = [0xd8, 0xd9];
@@ -82,6 +93,21 @@ if (admission?.kind === "admitted" && base !== null) {
 	const cells = Array.from(flash(FN_PN_CELLS_FLASH, 2));
 	const markerCells = LAYER_KEY_MARKERS.map(({ cell }) => cell);
 	check(cells.join() === markerCells.join(), `Fn and Pn cells: table ${markerCells.join(", ")}, ROM 0x${FN_PN_CELLS_FLASH.toString(16)} ${cells.join(", ")}`);
+
+	const halfword = (address: number) => {
+		const [lo, hi] = flash(address, 2);
+		return lo === undefined || hi === undefined ? -1 : lo | (hi << 8);
+	};
+	const fn = pairsAt(FN_FLASH, FN_LAYER.length);
+	const fnDiffers = FN_LAYER.flatMap(({ key, code }, i) => (fn[i]![0] === key && fn[i]![1] === code ? [] : [i]));
+	check(fnDiffers.length === 0, `FN_LAYER equals the ${FN_LAYER.length} (cell, code) pairs at flash 0x${FN_FLASH.toString(16)}${fnDiffers.length === 0 ? "" : `; pairs ${fnDiffers.join(", ")} differ`}`);
+	check(halfword(0xa3bc) === 0x2a00 + FN_LAYER.length, `sub_A364 walks ${FN_LAYER.length} Fn pairs (cmp r2, #0x${FN_LAYER.length.toString(16)} at 0xa3bc)`);
+	check(halfword(0xa388) === 0x7ec9 && halfword(0xa38a) === 0x2920, "the Fn Mac swap runs when 0x2000102B is 0x20 (ldrb r1, [r1, #0x1b]; cmp r1, #0x20 at 0xa388)");
+	FN_LAYER_MAC.forEach(({ key, code }, i) => {
+		const [cmpAt, movsAt] = MAC_SITES[i]!;
+		check(halfword(cmpAt) === (0x2900 | key) && halfword(movsAt) === (0x2000 | code), `Mac Fn cell ${key}: cmp at 0x${cmpAt.toString(16)}, movs ${hex(code)} at 0x${movsAt.toString(16)}`);
+	});
+	check(Array.from(flash(0xaf3b, 4)).map(hex).join(" ") === "0x09 0xea 0x09 0xe9", "consumer report bits 9 and 10 (codes 0xf5, 0xf6) are usages 0xEA Vol- and 0xE9 Vol+");
 
 	const reverseOf = (keymap: readonly number[]) => {
 		const reverse = new Map<number, number>();

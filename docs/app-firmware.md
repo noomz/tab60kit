@@ -338,6 +338,50 @@ reply    51 00 00 00 pp | ..           pp = the OLD current profile (0x52/0x00 r
 
 The tool's registry still names this row `cfgSetOsMode`. The name is wrong. The row is a profile request, and the tool should not call it until its effects are reviewed.
 
+## Fn layer
+
+The keys Fn (marker 0xD8, layer 1) sends are not in the override store. They are a ROM table, read on every key event. VERIFIED.
+
+- **Table.** ROM 0xAAC8 holds 33 (cell, code) pairs. sub_A364 walks them (`cmp r2, #0x21` at 0xA3BC). Keyed by cell, so the OS key mode swaps do not move them.
+- **When it applies.** sub_5A88 (called at 0x51A0) runs sub_A364 only when the layer 1 store lookup missed (bit 7 of 0x2000055D, set on a hit at 0x521A) and Fn, not Pn, is held (0x5A8E to 0x5AA8). So a layer 1 override wins over the table, and removing it brings the table back. A cell the table does not list sends its own usage, because the miss clears the event's layer byte (0x5208). The last part is INFERRED.
+- **Mac mode.** When 0x2000102B is 0x20 and no Shift is held (bit 2 of 0x2000055D, set for 0xE1/0xE5 at 0x50FC), sub_A410 (0xA410 to 0xA472) replaces 11 codes by cell. With Shift, Mac mode sends the table's F-keys.
+- **Codes.** A code is a keyboard usage, or 0xEC + n for bit n of the consumer report (report ID 2, descriptor at ROM 0xAF15): 0xF0 Play/Pause, 0xF2 previous track, 0xF3 next track, 0xF4 Mute, 0xF5 Vol-, 0xF6 Vol+. sub_4698 sets the bit (0x4EE8 to 0x4F06).
+- **Store reads agree.** Every U10 and U12 layer 1 read returned 0x00FF (default), so the store's layer 1 is empty.
+
+| Cap | Fn | Fn in Mac mode, no Shift |
+|---|---|---|
+| Esc | ` | |
+| 1, 2 | F1, F2 | F14, F15 (macOS brightness, INFERRED) |
+| 3 | F3 | 0xCA: sends nothing, sets 0x200000B4 (reader not traced) |
+| 4 | F4 | |
+| 5, 6 | F5, F6 | usages 0xCC, 0xCD |
+| 7, 8, 9 | F7, F8, F9 | previous track, Play/Pause, next track |
+| 0, -, = | F10, F11, F12 | Mute, Vol-, Vol+ |
+| P, [, ], ; | PrintScreen, ScrollLock, Pause, Insert | |
+| Z, Backspace | App, Delete | |
+| Q, W, E | previous track, Play/Pause, next track | |
+| S, D, F | Vol-, Vol+, Mute | |
+| I, J, K, L | Up, Left, Down, Right | |
+| H, N, U, O | Home, End, PageUp, PageDown | |
+
+The maintainer's board run on 2026-10-29 in Mac mode agrees: Fn + = raises the volume, Fn + Shift + = sends F12, Fn + D raises the volume, Fn + I sends Up, and Fn + 8 plays or pauses. `bun run real-image` checks the 33 pairs, the pair count, the Mac gate, each Mac swap's `cmp`/`movs` pair, and the consumer usages for Vol- and Vol+.
+
+## Pn functions
+
+What each factory layer 2 code (flags 1, code 0x100 + n, run by sub_5674 on press) does. The TAB 60 has no backlight, only indicator LEDs under a few keys, so the lighting codes change settings no light shows.
+
+| Cap | Code | Function |
+|---|---|---|
+| N, M, comma, period | 0x110..0x113 | Profile 0..3 |
+| L_Alt | 0x130 | Nothing: sub_5674 has no case for it. Pn + L_Alt held 3 s is a combo instead |
+| J, K, L, ; | 0x131..0x134 | Bluetooth slot 1..4 |
+| Tab, \ | 0x135, 0x136 | USB, Bluetooth |
+| Q, W, E | 0x13D..0x13F | OS key mode Windows, Mac, Caps/Ctrl swap (saves) |
+| L_Ctrl | 0x15F | Starts on-board key remap recording, profiles 1 to 4 only. The stores are VERIFIED; "remap recording" is INFERRED |
+| L_GUI | 0x160 | Win lock (saves) |
+| R_Shift | 0x168 | Layout cycle (saves) |
+| Esc, 1, 2, 3, 4, 5, Z, X, A, S, 9, 0, -, = | 0x170, 0x1A0..0x1A2, 0x182, 0x183, 0x190, 0x191, 0x192, 0x193, 0x1AC, 0x1AD, 0x1A8, 0x1A9 | Lighting: colour picker, colour steps, effect cycles, speed (INFERRED from the speed tables), brightness, per-key custom layers and their edit mode. Most save |
+
 ## Key combinations that save to flash
 
 The firmware has an on-board combo matcher (sub_54B0). It runs from the main loop (0xA6E8) when gate bit 0 is clear. It compares the held keys with the 8-byte entries of the table at ROM 0xAA46 (`{u16 hold, u8 kind, u8 n, keys[4]}`). A combo fires when exactly `n` keys are held and each is in the set, in any order, and the hold counter (u16 at 0x20000556) is above `hold`. After a fire, the counter is set to 0xFFFF, so a combo fires once per hold. VERIFIED (0x5238 to 0x52F8, 0x54BC to 0x54C8, 0x5558 to 0x555E).
@@ -393,7 +437,7 @@ If the chip is dead but reads pass the header check, the board works until the f
 
 ## Open questions
 
-1. Which physical keycap is "Fn" and which is "Pn"? Layer 1 is selected by marker 0xD8 (default cell 60), and layer 2 by 0xD9 (default cell 54). The factory function table (OS key mode, profiles, link switch) is on layer 2. The tool and the printed manual use these names for keys; matching them to the layers needs a check on a board.
+1. Settled on 2026-10-29: the Fn keycap (cell 60, marker 0xD8) holds layer 1, and the Pn keycap (cell 54, marker 0xD9) holds layer 2. The board run confirmed Pn + Q/W/E for the OS key mode and the Fn table above.
 2. Is the physical space bar on cell 72 (usage 0x2C) or on cell 79 (usage 0xC9)? Both type Space. A read cannot tell.
 3. What do bit 1 (boot combo Fn + R_Alt) and bit 4 (L_GUI + R_Alt + Space) of SRAM 0x2000077F do? Both combos save. The consumers were not traced.
 4. What do SRAM 0x20000510 (Pn + L_Alt + `5`) and 0x200000D0 mean?

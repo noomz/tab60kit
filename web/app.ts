@@ -183,7 +183,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	};
 
 	function keyButton(cap: KeyCap): HTMLButtonElement {
-		const face = keyFace(cap, layer, doc, store);
+		const face = keyFace(cap, layer, doc, store, mode);
 		const node = button(
 			face.main,
 			() => {
@@ -215,7 +215,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		);
 		const read = element("div", "settings");
 		read.append(button(LABEL["read-keymap"], act("read-keymap"), "secondary", mode === null || !caps.canRead));
-		const note = layerNote(layer, store);
+		const note = layerNote(layer, store, mode);
 		if (note !== null) read.append(element("p", "note", note));
 		section.append(settings, read);
 		const board = element("div", "keyboard");
@@ -232,12 +232,12 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			const current = doc.overrides.get(layer)?.get(cap.id);
 			const pick = element("div", "settings");
 			pick.append(
-				select(`${cap.legend} on ${LAYER_NAME[layer]} sends`, [["", noOverrideLabel(cap, layer)], ...TARGETS.map((t): [string, string] => [String(t.usage), t.name])], current === undefined ? "" : String(current), (value) =>
+				select(`${cap.legend} on ${LAYER_NAME[layer]} sends`, [["", noOverrideLabel(cap, layer, mode)], ...TARGETS.map((t): [string, string] => [String(t.usage), t.name])], current === undefined ? "" : String(current), (value) =>
 					edit(withOverride(doc, layer, cap.id, value === "" ? null : usage(Number(value)))),
 				),
 			);
 			section.append(pick);
-			const warning = factoryNote(layer, cap.id);
+			const warning = factoryNote(layer, cap.id, mode);
 			if (warning !== null) section.append(element("p", "note tone-attention", warning));
 		}
 		const list = element("ul", "overrides");
