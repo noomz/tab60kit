@@ -162,7 +162,7 @@ test("no flash write within 15 s of a timeout: a probe that times out restarts t
 	await bootsTarget(board, image);
 });
 
-test("a chooser cancelled right after the reset leaves the board in update mode with its old page; Check reports it and Make official finishes it", async () => {
+test("a chooser cancelled right after the reset leaves the board in update mode with its old page; Check reports it and the install finishes it", async () => {
 	const board = fake();
 	const base = board.port();
 	let cancelled = false;
@@ -418,7 +418,7 @@ test("F4: writeVersionBlock throws FlashOrderBroken, sending nothing, unless the
 	expect(board.violations).toEqual([]);
 });
 
-test("a shipped kit and the flash clearance list no flash row as blocked, so the page offers Make official; a clearance without them lists all four", () => {
+test("a shipped kit and the flash clearance list no flash row as blocked, so the page offers Install official firmware; a clearance without them lists all four", () => {
 	expect(createKit(fake().port()).capabilities().flashBlockedBy).toEqual([]);
 	expect(createKit(fake().port(), FLASH_CLEARANCE).capabilities().flashBlockedBy).toEqual([]);
 	const blocked = createKit(fake().port(), READS_ONLY).capabilities().flashBlockedBy;

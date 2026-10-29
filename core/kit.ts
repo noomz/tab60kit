@@ -6,7 +6,7 @@ import { deepCheck, quickCheck } from "./chip";
 import type { FlashableImage } from "./firmware";
 import { type FlashOptions, makeOfficial } from "./flash";
 import type { Activity, Job, JobContext, JobKind, JobState } from "./job";
-import { type ConfigCapabilities, type KeymapDoc, type OsKeyMode, applyKeymap, capabilities } from "./keymap";
+import { type ConfigCapabilities, type KeymapDoc, type OsKeyMode, applyKeymap, capabilities, readKeymap } from "./keymap";
 import { Busy, type DevicePort } from "./port";
 import { type Clearance, SHIPPED, type Session } from "./protocol";
 
@@ -17,8 +17,10 @@ export interface Kit {
 	check(depth: "quick" | "deep"): Promise<JobState>;
 	/** `{ rewrite: true }` writes the image even when the board already holds it (unit U7). */
 	makeOfficial(image: FlashableImage, options?: FlashOptions): Promise<JobState>;
-	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Fn+Q, Fn+W, or Fn+E), which no command reads. */
+	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Pn+Q, Pn+W, or Pn+E), which no command reads. */
 	applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Promise<JobState>;
+	/** Reads the override store under `mode`, the same reads Apply starts with. Writes nothing. */
+	readKeymap(mode: OsKeyMode): Promise<JobState>;
 	/** What G1 lets this kit's keymap editor do, derived from COMMANDS and the kit's clearance. */
 	capabilities(): ConfigCapabilities;
 	/**
@@ -79,15 +81,16 @@ export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit
 				const end = await job(start, ctx);
 				session = end.session;
 				const board = end.board ?? state.board;
-				set(end.kind === "finished" ? { kind: "finished", job: kind, result: end.result, board } : { kind: "stopped", job: kind, reason: end.reason, board });
+				const at = end.session?.mode ?? null;
+				set(end.kind === "finished" ? { kind: "finished", job: kind, result: end.result, board, at } : { kind: "stopped", job: kind, reason: end.reason, board, at });
 				return state;
 			});
 		} catch (error) {
 			if (!(error instanceof Busy)) {
-				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board });
+				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board, at: null });
 				throw error;
 			}
-			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board });
+			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board, at: session?.mode ?? null });
 			return state;
 		} finally {
 			controller = null;
@@ -105,6 +108,7 @@ export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit
 		check: (depth) => run(depth === "quick" ? "quick-check" : "deep-check", depth === "quick" ? quickCheck : deepCheck),
 		makeOfficial: (image, options) => run("make-official", makeOfficial(image, options)),
 		applyKeymap: (doc, mode) => run("apply-keymap", applyKeymap(doc, mode)),
+		readKeymap: (mode) => run("read-keymap", readKeymap(mode)),
 		capabilities: () => capabilities(clearance),
 		cancel: () => controller?.abort(),
 	};

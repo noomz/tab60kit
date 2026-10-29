@@ -3,7 +3,7 @@
 // egress-property.test.ts, so a failure names a case that repeats.
 import { expect, test } from "bun:test";
 import type { OverrideEntry } from "../core/protocol";
-import { FACTORY_LAYER2, type KeyId, type KeyWrite, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, activeKeymap, canRemap, factoryFunction, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
+import { FACTORY_LAYER2, type KeyId, type KeyWrite, type KeymapDoc, type Layer, type OsKeyMode, TAB60_KEYS, type Usage, FN_LAYER, FN_LAYER_MAC, activeKeymap, canRemap, factoryKey, fnCode, keyId, parseKeymapDoc, planKeymap, predictLayers, presentUsages, romKeymap, serializeKeymapDoc, usage } from "../core/keymap";
 
 /** The cells that hold a usage in ROM but are not caps on the ANSI board: ISO #, Grave, ISO \, and 0xC9. */
 const NOT_CAPS = [53, 57, 71, 79];
@@ -265,10 +265,32 @@ test("the active keymap is the ROM keymap with each mode's swaps, then Fn (cell 
 	expect(changed("caps-ctrl")).toEqual([[4, 0xe0], [54, 0xd9], [60, 0xd8], [75, 0x39]]);
 });
 
-test("factoryFunction names the pair the reset writes on each layer 2 cell, by the Windows keymap, and nothing elsewhere", () => {
-	const cells = TAB60_KEYS.flatMap((cap) => (factoryFunction(2, cap.id) === null ? [] : [cap.id]));
+test("factoryKey names the Pn function the reset writes on each layer 2 cell, by the Windows keymap, and nothing on layer 0", () => {
+	const cells = TAB60_KEYS.flatMap((cap) => (factoryKey(2, cap.id) === null ? [] : [cap.id]));
 	expect(cells).toHaveLength(FACTORY_LAYER2.length);
-	expect(factoryFunction(2, keyId(3))).toBe(0x13d);
-	expect(factoryFunction(2, keyId(75))).toBe(0x15f);
-	expect(TAB60_KEYS.every((cap) => factoryFunction(0, cap.id) === null && factoryFunction(1, cap.id) === null)).toBe(true);
+	expect(factoryKey(2, keyId(3))).toEqual({ kind: "function", code: 0x13d });
+	expect(factoryKey(2, keyId(75))).toEqual({ kind: "function", code: 0x15f });
+	expect(TAB60_KEYS.every((cap) => factoryKey(0, cap.id) === null)).toBe(true);
+});
+
+test("the Fn table gives what the board sent in the 2026-10-29 Mac-mode tests, and Windows mode keeps the F-keys", () => {
+	const fn = (legend: string) => {
+		const cap = TAB60_KEYS.find((c) => c.legend === legend)!;
+		const key = factoryKey(1, cap.id);
+		if (key?.kind !== "fn") throw new Error(`${legend} has no Fn key`);
+		return key;
+	};
+	const VOL_UP = 0xf6;
+	const PLAY = 0xf0;
+	expect(fnCode(fn("="), "mac", false)).toBe(VOL_UP);
+	expect(fnCode(fn("="), "mac", true)).toBe(0x45);
+	expect(fnCode(fn("="), "windows", false)).toBe(0x45);
+	expect(fnCode(fn("D"), "mac", false)).toBe(VOL_UP);
+	expect(fnCode(fn("D"), "windows", false)).toBe(VOL_UP);
+	expect(fnCode(fn("I"), "mac", false)).toBe(0x52);
+	expect(fnCode(fn("8"), "mac", false)).toBe(PLAY);
+	expect(fnCode(fn("8"), "caps-ctrl", false)).toBe(0x41);
+	expect(FN_LAYER).toHaveLength(33);
+	expect(FN_LAYER_MAC.every(({ key }) => FN_LAYER.some((pair) => pair.key === key))).toBe(true);
+	expect(factoryKey(1, TAB60_KEYS.find((c) => c.legend === "A")!.id)).toBeNull();
 });

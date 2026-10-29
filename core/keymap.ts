@@ -12,7 +12,7 @@
  * cannot disagree.
  */
 import { MAX_LINK_LOSSES } from "./flash";
-import { type Activity, type Job, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
+import { type Activity, type Job, type JobEnd, type JobResult, type StopReason, isLinkFailure, stopReasonFor } from "./job";
 import {
 	type AppSession,
 	COMMANDS,
@@ -192,7 +192,7 @@ export function romKeymap(): readonly Usage[] {
 }
 
 /**
- * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Fn+Q, Fn+W, and Fn+E (factory codes
+ * The OS key mode, SRAM 0x2000102B, the last byte of the saved config block. Pn+Q, Pn+W, and Pn+E (factory codes
  * 0x13D, 0x13E, 0x13F) set 0x10, 0x20, and 0x40. sub_5F4C swaps usages in the active keymap per mode with the pairs
  * at ROM 0xAA25 (0x20) and 0xAA21 (0x40) before it writes the Fn and Pn markers. Not the OsMode byte 0x2000000F that an early read named: that
  * byte does not touch the keymap. "mac" is INFERRED from the Alt/GUI swap and the maintainer's report.
@@ -220,17 +220,62 @@ export const FACTORY_LAYER2: readonly { readonly usage: Usage; readonly code: nu
 const FACTORY_FLAGS = 1;
 
 /**
- * The factory function code (flags 1, as flags << 8 | code) that the store reset writes on `key`, or null. The reset
- * writes FACTORY_LAYER2 by cell under the Windows keymap, so the cell does not move with the OS key mode. Whether the
- * board still holds it depends on its history (the passing U10 board run, `fixtures/u10-macos.json`, found Esc's pair missing), so this is what the reset
- * leaves, not a read.
+ * The 33 (cell, code) pairs at ROM 0xAAC8 that sub_A364 applies while Fn (marker 0xD8) is held and the layer 1 store
+ * lookup missed, so a layer 1 override wins over them (docs/app-firmware.md "Fn layer"). Keyed by cell, so the OS key
+ * mode swaps do not move them. A code is a keyboard usage, or 0xEC + n for bit n of the consumer report: 0xF0
+ * Play/Pause, 0xF2 previous, 0xF3 next, 0xF4 Mute, 0xF5 Vol-, 0xF6 Vol+. `bun run real-image` checks them byte for byte.
  */
-export function factoryFunction(layer: Layer, key: KeyId): number | null {
+export const FN_LAYER: readonly { readonly key: KeyId; readonly code: number }[] = (
+	[
+		[0, 0x35], [1, 0x3a], [8, 0x3b], [9, 0x3c], [16, 0x3d], [17, 0x3e], [24, 0x3f], [25, 0x40],
+		[32, 0x41], [33, 0x42], [40, 0x43], [41, 0x44], [48, 0x45], [42, 0x46], [43, 0x47], [50, 0x48],
+		[44, 0x49], [7, 0x65], [49, 0x4c], [3, 0xf2], [10, 0xf0], [11, 0xf3], [12, 0xf5], [13, 0xf6],
+		[20, 0xf4], [34, 0x52], [29, 0x50], [36, 0x51], [37, 0x4f], [28, 0x4a], [30, 0x4d], [27, 0x4b],
+		[35, 0x4e],
+	] as const
+).map(([cell, code]) => ({ key: keyId(cell), code }));
+
+/**
+ * sub_A410: in OS key mode 0x20 (Mac), with no Shift held, these Fn cells send another code than FN_LAYER's. Code,
+ * not a table; `bun run real-image` checks each `cmp`/`movs` pair. 0x69/0x6A are F14/F15, which macOS takes as
+ * brightness (INFERRED); 0xCA sends nothing and sets a flag whose reader is not traced; 0xCC and 0xCD go out as
+ * plain keyboard usages.
+ */
+export const FN_LAYER_MAC: readonly { readonly key: KeyId; readonly code: number }[] = (
+	[
+		[1, 0x69], [8, 0x6a], [9, 0xca], [17, 0xcc], [24, 0xcd], [25, 0xf2], [32, 0xf0], [33, 0xf3],
+		[40, 0xf4], [41, 0xf5], [48, 0xf6],
+	] as const
+).map(([cell, code]) => ({ key: keyId(cell), code }));
+
+/**
+ * What a key with no override does on a factory layer. `function`: a Pn function code (flags << 8 | code) that the
+ * store reset writes. `fn`: the Fn layer's code in every OS key mode, and the code it sends instead in Mac mode
+ * without Shift (null when Mac mode sends the same).
+ */
+export type FactoryKey = { readonly kind: "function"; readonly code: number } | { readonly kind: "fn"; readonly code: number; readonly mac: number | null };
+
+/**
+ * What `key` does on `layer` with no override, or null when it sends its cap. Layer 0 has no factory functions. On
+ * layer 1 a cell that FN_LAYER does not list sends its cap (the store miss clears the layer, docs/app-firmware.md
+ * "Fn layer", INFERRED). On layer 2 the store reset writes FACTORY_LAYER2 by cell under the Windows keymap, so the
+ * cell does not move with the OS key mode; whether the board still holds it depends on its history (the passing U10
+ * board run, `fixtures/u10-macos.json`, found Esc's pair missing), so this is what the reset leaves, not a read.
+ */
+export function factoryKey(layer: Layer, key: KeyId): FactoryKey | null {
+	if (layer === 1) {
+		const fn = FN_LAYER.find((pair) => pair.key === key);
+		return fn === undefined ? null : { kind: "fn", code: fn.code, mac: FN_LAYER_MAC.find((pair) => pair.key === key)?.code ?? null };
+	}
 	if (layer !== 2) return null;
 	const atReset = reverseMap(activeKeymap("windows"));
 	const pair = FACTORY_LAYER2.find(({ usage: k }) => atReset.get(k) === key);
-	return pair === undefined ? null : (FACTORY_FLAGS << 8) | pair.code;
+	return pair === undefined ? null : { kind: "function", code: (FACTORY_FLAGS << 8) | pair.code };
 }
+
+/** The code an Fn key sends in `mode`: sub_A410 swaps in the Mac code only in Mac mode and only without Shift. */
+export const fnCode = (fn: Extract<FactoryKey, { kind: "fn" }>, mode: OsKeyMode, shift: boolean): number =>
+	mode === "mac" && !shift && fn.mac !== null ? fn.mac : fn.code;
 
 /** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
 function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
@@ -362,6 +407,43 @@ interface GateHold {
 	open: boolean;
 }
 
+/** The override store as the board holds it, by layer and remappable cap. */
+export type StoreReading = ReadonlyMap<Layer, ReadonlyMap<KeyId, OverrideEntry>>;
+
+/** The active usage each remappable cap is addressed by in `mode`. */
+function usageIn(mode: OsKeyMode): (key: KeyId) => Usage {
+	const active = activeKeymap(mode);
+	return (key) => {
+		if (!canRemap(key)) throw new RangeError(`key ${key} is Fn or Pn, which no override changes`);
+		return usage(active[key]!);
+	};
+}
+
+/**
+ * Reads layer 0 and checks its presence set against `mode`, then reads layers 1 and 2 for each remappable cap. Reads
+ * only: no gate frame, no write. A presence set that disagrees with `mode` stops before the per-key reads.
+ */
+async function readStore(app: AppSession, mode: OsKeyMode, signal: AbortSignal): Promise<{ readonly store: StoreReading } | { readonly problem: KeymapProblem }> {
+	const { config } = app;
+	const layer0 = await config.readLayer0(signal);
+	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
+	const want = new Set(presentUsages(mode));
+	const missing = [...want].filter((k) => !present.has(k));
+	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
+	if (missing.length > 0 || unexpected.length > 0) return { problem: { kind: "mode-disagrees", mode, missing, unexpected } };
+	const usageOf = usageIn(mode);
+	const store = new Map<Layer, ReadonlyMap<KeyId, OverrideEntry>>();
+	for (const layer of LAYERS) {
+		const keys = new Map<KeyId, OverrideEntry>();
+		for (const { id } of TAB60_KEYS) {
+			if (!canRemap(id)) continue;
+			keys.set(id, layer === 0 ? (layer0.get(usageOf(id)) ?? { kind: "absent" }) : await config.readKey(layer, usageOf(id), signal));
+		}
+		store.set(layer, keys);
+	}
+	return { store };
+}
+
 /**
  * One pass on an open normal-mode session: query the gate, read layer 0 and check its presence set against `mode`,
  * read layers 1 and 2 for each remappable cap, write the plan with the gate at 0x80, read every write back, close the
@@ -379,27 +461,10 @@ async function converge(
 	const before = await config.queryGate(signal);
 	if (before.gate !== GATE_CLOSED && before.gate !== GATE_OPEN) return { problem: { kind: "gate", when: "before", gate: before.gate } };
 	hold.open = before.gate === GATE_OPEN;
-	const layer0 = await config.readLayer0(signal);
-	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
-	const want = new Set(presentUsages(mode));
-	const missing = [...want].filter((k) => !present.has(k));
-	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
-	let problem: KeymapProblem | null = missing.length > 0 || unexpected.length > 0 ? { kind: "mode-disagrees", mode, missing, unexpected } : null;
-
-	const active = activeKeymap(mode);
-	const usageOf = (key: KeyId) => {
-		if (!canRemap(key)) throw new RangeError(`key ${key} is Fn or Pn, which no override changes`);
-		return usage(active[key]!);
-	};
-	const observed = new Map<Layer, Map<KeyId, OverrideEntry>>();
-	for (const layer of problem === null ? LAYERS : []) {
-		const keys = new Map<KeyId, OverrideEntry>();
-		for (const { id } of TAB60_KEYS) {
-			if (!canRemap(id)) continue;
-			keys.set(id, layer === 0 ? (layer0.get(usageOf(id)) ?? { kind: "absent" }) : await config.readKey(layer, usageOf(id), signal));
-		}
-		observed.set(layer, keys);
-	}
+	const read = await readStore(app, mode, signal);
+	let problem: KeymapProblem | null = "problem" in read ? read.problem : null;
+	const observed = "store" in read ? read.store : new Map<Layer, ReadonlyMap<KeyId, OverrideEntry>>();
+	const usageOf = usageIn(mode);
 	const writes = problem === null ? planKeymap(doc, observed) : [];
 	const mismatch = (write: KeyWrite, got: OverrideEntry): KeymapProblem => ({ kind: "read-back", layer: write.layer, key: write.key, want: describeOverride(write.value), got: describeOverride(got) });
 	if (writes.length > 0) {
@@ -432,19 +497,17 @@ async function converge(
 	return problem === null ? { writes: writes.length } : { problem };
 }
 
+/** What one pass of a config job does on an open normal-mode session. `hold` tracks the gate for the stop path. */
+type ConfigPass = (app: AppSession, signal: AbortSignal, progress: (activity: Activity) => void, hold: GateHold) => Promise<{ readonly result: JobResult } | { readonly problem: KeymapProblem }>;
+
 /**
- * The apply job, a convergence like the flash job but in SRAM. `mode` is the board's OS key mode, which decides the
- * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
- * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
- * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
- * from the reads, which is safe because the writes are idempotent. Any other stop after the gate opened sends a
- * close first, on its own signal so a Stop still reaches the board. A document with an OS mode stops before any frame:
- * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
+ * The loop both config jobs share: open a normal-mode session, run one pass, and on a lost link reconnect and run
+ * the pass again from the reads. Any other stop after the gate opened sends a close first, on its own signal so a
+ * Stop still reaches the board.
  */
-export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
+function configJob(pass: ConfigPass): Job {
 	return async (start, ctx) => {
 		const stopped = (reason: StopReason, end: Session | null): JobEnd => ({ kind: "stopped", reason, session: end, board: null });
-		if (doc.osMode !== null) return stopped({ kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, start);
 		let session: Session | null = start;
 		let losses = 0;
 		let during: Activity | null = null;
@@ -466,9 +529,9 @@ export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 					}
 					session = opened;
 				}
-				const outcome = await converge(session, doc, mode, ctx.signal, progress, hold);
+				const outcome = await pass(session, ctx.signal, progress, hold);
 				if ("problem" in outcome) return stopped({ kind: "keymap", problem: outcome.problem }, session);
-				return { kind: "finished", result: { kind: "keymap-applied", writes: outcome.writes }, session, board: null };
+				return { kind: "finished", result: outcome.result, session, board: null };
 			} catch (error) {
 				if (hold.open && !isLinkFailure(error) && session?.mode === "app") {
 					await session.config.closeGate(new AbortController().signal).catch(() => undefined);
@@ -488,6 +551,34 @@ export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 			}
 		}
 	};
+}
+
+/**
+ * The apply job, a convergence like the flash job but in SRAM. `mode` is the board's OS key mode, which decides the
+ * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
+ * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
+ * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
+ * from the reads, which is safe because the writes are idempotent. A document with an OS mode stops before any frame:
+ * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
+ */
+export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
+	const apply = configJob(async (app, signal, progress, hold) => {
+		const outcome = await converge(app, doc, mode, signal, progress, hold);
+		return "problem" in outcome ? outcome : { result: { kind: "keymap-applied", writes: outcome.writes } };
+	});
+	return async (start, ctx) =>
+		doc.osMode !== null ? { kind: "stopped", reason: { kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, session: start, board: null } : apply(start, ctx);
+}
+
+/**
+ * The read job: what the override store holds now, for the editor to show. It sends only the reads Apply sends before
+ * it writes (layer 0, then layers 1 and 2 per remappable cap), so it needs no gate and changes nothing.
+ */
+export function readKeymap(mode: OsKeyMode): Job {
+	return configJob(async (app, signal) => {
+		const read = await readStore(app, mode, signal);
+		return "problem" in read ? read : { result: { kind: "keymap-read", mode, store: read.store } };
+	});
 }
 
 const FORMAT = "tab60kit-keymap";

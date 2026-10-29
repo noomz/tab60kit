@@ -16,7 +16,7 @@ Each feature below was tested on a real TAB 60 that runs the official firmware V
 | Deep check: restart into the bootloader, read the version page and the flash checksum, restart back. Reads only, nothing is written | Confirmed | 2026-10-12 and 2026-10-18, macOS, Chrome |
 | Read the per-key override store (three layers) | Confirmed | 2026-10-19, macOS, Chrome |
 | Keymap editor: change keys on three layers, apply them to the board in RAM, keep the keymap in the browser | Confirmed | 2026-10-24, macOS, Chrome |
-| Make official: write the official V1.01.13 firmware, taken from your copy of the official updater, then check it | Confirmed | 2026-10-28, macOS, Chrome |
+| Install official firmware: write the official V1.01.13 firmware, taken from your copy of the official updater, then check it | Confirmed | 2026-10-28, macOS, Chrome |
 | Linux | Expected to work with a udev rule. Not tested | not yet |
 | Windows | Not tested | not yet |
 
@@ -26,7 +26,7 @@ What "confirmed" means: the tool keeps a list of every command it may send. The 
 
 Read this before you connect your keyboard.
 
-**Firmware flashing can brick the keyboard.** Make official erases and rewrites the firmware. It erases the version page first and writes it last, so an interrupted write leaves the keyboard in update mode, where it does not type, and you can run Make official again. Keep the USB cable still and the tab in front until the page reports. The firmware write is tested only on macOS. The official Vortex updater for Windows can usually recover it. If the bootloader itself cannot recover, the board needs an SWD programmer.
+**Firmware flashing can brick the keyboard.** Install official firmware erases and rewrites the firmware. It erases the version page first and writes it last, so an interrupted write leaves the keyboard in update mode, where it does not type, and you can run Install official firmware again. Keep the USB cable still and the tab in front until the page reports. The firmware write is tested only on macOS. The official Vortex updater for Windows can usually recover it. If the bootloader itself cannot recover, the board needs an SWD programmer.
 
 **Key changes are RAM only, and are lost at power off.** The keymap editor writes keys to the keyboard's RAM. It does not save them to the keyboard's flash. Unplug USB with the batteries out, and the keyboard returns to its saved keymap. The page keeps your keymap in the browser, so one click on Apply puts it back.
 
@@ -40,7 +40,7 @@ Read this before you connect your keyboard.
 | Fn + Left Shift, or Pn + Left Shift | Moves the Fn or Pn key (profiles 1 to 4) and saves the profile |
 | Fn + Right Alt, held while the keyboard powers on | Toggles a profile setting and saves the current profile |
 
-Some single key presses also save the current profile: the OS key mode keys (Fn + Q, W, or E), Win lock, the layout key, and some lighting keys. See [docs/app-firmware.md](docs/app-firmware.md) "Key combinations that save to flash".
+Some single key presses also save the current profile: the OS key mode keys (Pn + Q, W, or E), Win lock, the layout key, and some lighting keys. See [docs/app-firmware.md](docs/app-firmware.md) "Key combinations that save to flash".
 
 From reading the firmware, we believe that a save of the current profile also saves any keys that tab60kit wrote to RAM. We have not tested this on a board. If you do not want your changes saved on the keyboard, do not press these keys while your changes are applied. Switching to another profile reloads it from flash and drops the keys written in RAM.
 
@@ -67,7 +67,7 @@ bun run build
 python3 -m http.server --bind 127.0.0.1 --directory dist 8000
 ```
 
-Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Fn + Q Windows, Fn + W Mac, Fn + E Caps/Ctrl swap), change keys, and click Apply. To write the official firmware, drop your copy of `Tab60firmwareV1.01.13.exe` on the file picker on the Board screen, then click Make official. Read [Safety](#safety) first.
+Open `http://127.0.0.1:8000` in Chrome or Edge. Click Connect and choose "USB-HID Keyboard". After a check reads the board, the Board screen shows the keymap editor. Choose the OS key mode your keyboard runs in (Pn + Q Windows, Pn + W Mac, Pn + E Caps/Ctrl swap), change keys, and click Apply. To write the official firmware, drop your copy of `Tab60firmwareV1.01.13.exe` on the file picker on the Board screen, then click Install official firmware V1.01.13. Read [Safety](#safety) first.
 
 To run the test suite that CI runs:
 
@@ -96,6 +96,7 @@ Every command in `core/protocol.ts` names where it is known from and how far it 
 | [docs/updater-package.md](docs/updater-package.md) | How the firmware is stored in the official updater, and how it is extracted |
 | [docs/webhid.md](docs/webhid.md) | Browser and platform facts, and the Linux udev rule |
 | [docs/design.md](docs/design.md) | How the code is shaped, and where each safety rule lives |
+| [docs/ui.md](docs/ui.md) | The page's colors, fonts, and screen states |
 | [docs/units.md](docs/units.md) | The units of work (U0 to U15), their checks, and their status |
 | [docs/development.md](docs/development.md) | Build, tests, lab pages, and hardware checks |
 

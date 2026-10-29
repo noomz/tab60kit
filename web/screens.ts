@@ -5,7 +5,9 @@
 import {
 	type Activity,
 	type ChipReport,
+	type ChipState,
 	type ConfigCapabilities,
+	type FlashableImage,
 	type JobResult,
 	type JobState,
 	type KeymapDoc,
@@ -31,12 +33,34 @@ export type AppView =
 	  };
 
 /**
- * What Make official needs on the Board, result, and Stopped screens: the dropped exe's reading, kept across jobs, and
+ * What the install button needs on the Board, result, and Stopped screens: the dropped exe's reading, kept across jobs, and
  * one line per flash row G1 does not clear for this kit. The action shows only when that list is empty.
  */
 export interface FlashOffer {
 	readonly reading: UpdaterReading | null;
 	readonly blockedBy: readonly string[];
+	/** Whether the board already holds the dropped image (see `installedAs`). */
+	readonly installed: Installed;
+}
+
+/**
+ * "verified": update mode checksummed the image and it is the dropped one, under its version page, so the install
+ * would write nothing (flash.ts decideInIap, rewrite off). "reported": only the version page names it; the image is
+ * unchecked, so the install still checks and writes if it differs. null: anything else.
+ */
+export type Installed = "verified" | "reported" | null;
+
+/** The first image the dropped exe holds that `admit` let through, which the install writes. */
+export function admittedImage(reading: UpdaterReading | null): FlashableImage | null {
+	if (reading?.kind !== "read") return null;
+	for (const { admission } of reading.images) if (admission.kind === "admitted") return admission.image;
+	return null;
+}
+
+export function installedAs(board: ChipState | null, image: FlashableImage | null): Installed {
+	if (board === null || image === null || board.page.kind !== "official" || board.page.entry.id !== image.entry.id) return null;
+	if (board.mode === "app") return "reported";
+	return board.image.kind === "official" && board.image.entry.id === image.entry.id ? "verified" : null;
 }
 
 export type Screen =
@@ -77,7 +101,7 @@ export function screenFor(view: AppView): Screen {
 	if (view.kind === "unsupported") return { name: "browser-gate", why: view.why };
 	const { state } = view;
 	const flashMap = state.board ? report(state.board) : null;
-	const flash: FlashOffer = { reading: view.reading, blockedBy: view.caps.flashBlockedBy };
+	const flash: FlashOffer = { reading: view.reading, blockedBy: view.caps.flashBlockedBy, installed: installedAs(state.board, admittedImage(view.reading)) };
 	switch (state.kind) {
 		case "idle":
 			return state.board

@@ -2,7 +2,7 @@
  * The public entry for UI code. Shells also import ./port. package.json "exports" exposes only these two,
  * so protocol.ts, flashmap.ts, and the sessions are unreachable from outside the package.
  *
- * Functions: createKit, readUpdater, report, bootTarget, udevRules, keyId, usage, canRemap, factoryFunction, and the keymap document parse
+ * Functions: createKit, readUpdater, report, bootTarget, udevRules, keyId, usage, canRemap, factoryKey, fnCode, and the keymap document parse
  * and serialize pair. Everything else here is a type the UI renders.
  *
  * Left out on purpose, and kept out by probes/internals-not-public.ts: `imageBytes` (a FlashableImage is a handle
@@ -41,16 +41,21 @@ export {
 	type KeyId,
 	type KeymapDoc,
 	type KeymapProblem,
+	LAYER_KEY_MARKERS,
 	type Layer,
 	type OsKeyMode,
 	type OsMode,
+	type StoreReading,
 	TAB60_KEYS,
 	type Usage,
 	canRemap,
-	factoryFunction,
+	type FactoryKey,
+	factoryKey,
+	fnCode,
 	keyId,
 	parseKeymapDoc,
 	serializeKeymapDoc,
 	usage,
 } from "./keymap";
 export type { DeviceWant, WantReason } from "./port";
+export type { OverrideEntry } from "./protocol";

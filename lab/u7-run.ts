@@ -51,7 +51,7 @@ export const DONT_PRESS: readonly string[] = [
 	"Left GUI+Right Alt+Space",
 	"Fn+Right Alt held while the board powers on",
 	"Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn)",
-	"Fn+Q, Fn+W, or Fn+E (OS key mode)",
+	"Pn+Q, Pn+W, or Pn+E (OS key mode)",
 	"Win lock",
 	"The LED and layer function keys",
 ];

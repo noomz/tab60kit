@@ -8,12 +8,12 @@ import type { ChipState } from "./chip";
 import type { CatalogEntry } from "./firmware";
 import type { AppStep, IapStep } from "./flash";
 import type { LayoutRefusal } from "./flashmap";
-import type { KeymapProblem } from "./keymap";
+import type { KeymapProblem, OsKeyMode, StoreReading } from "./keymap";
 import { type DeviceWant, LinkLost, LinkTimeout, OsPermissionDenied, PickCancelled } from "./port";
 import { type LinkContext, NotCleared, type Session } from "./protocol";
 import type { Mode } from "./units";
 
-export type JobKind = "quick-check" | "deep-check" | "make-official" | "apply-keymap";
+export type JobKind = "quick-check" | "deep-check" | "make-official" | "apply-keymap" | "read-keymap";
 
 export type Activity =
 	| { readonly kind: "reading" }
@@ -44,10 +44,15 @@ export type StopReason =
 export type JobResult =
 	| { readonly kind: "checked"; readonly depth: "quick" | "deep" }
 	| { readonly kind: "official"; readonly entry: CatalogEntry; readonly confirmedInNormalMode: boolean }
-	| { readonly kind: "keymap-applied"; readonly writes: number };
+	| { readonly kind: "keymap-applied"; readonly writes: number }
+	/** What the override store held when read under `mode`. Reads only. */
+	| { readonly kind: "keymap-read"; readonly mode: OsKeyMode; readonly store: StoreReading };
 
 /**
  * The one state the UI renders. `board` is the latest observation of the chip, or null before the first one.
+ * A finished or stopped job also says `at`: the mode of the session it handed back, or null when it handed none, so
+ * nothing confirms where the board is. `board` can be older than that: a deep check keeps its update-mode reading,
+ * which holds the checksum, after it sends the board home.
  * Derived facts (the flash map, whether the board still boots) come from `report(board)` and `bootTarget(board)`
  * in chip.ts, never from a second stored copy.
  */
@@ -60,8 +65,8 @@ export type JobState =
 			readonly board: ChipState | null;
 	  }
 	| { readonly kind: "working"; readonly job: JobKind; readonly activity: Activity; readonly board: ChipState | null }
-	| { readonly kind: "finished"; readonly job: JobKind; readonly result: JobResult; readonly board: ChipState | null }
-	| { readonly kind: "stopped"; readonly job: JobKind; readonly reason: StopReason; readonly board: ChipState | null };
+	| { readonly kind: "finished"; readonly job: JobKind; readonly result: JobResult; readonly board: ChipState | null; readonly at: Mode | null }
+	| { readonly kind: "stopped"; readonly job: JobKind; readonly reason: StopReason; readonly board: ChipState | null; readonly at: Mode | null };
 
 /**
  * What a running job may use besides its session: the kit's port (wrapped so that a pending `open` shows as

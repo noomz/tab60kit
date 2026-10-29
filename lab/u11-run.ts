@@ -23,12 +23,12 @@ export const u11Clearance = (): Clearance => labClearance(U11_ROWS, U11_PURPOSE)
 
 export const U11_PRECONDITIONS = [
 	{ key: "keyboardFree", label: "No other app holds the keyboard" },
-	{ key: "osModeNotSwapped", label: "The board's OS key mode is Windows (Fn+Q) or Mac (Fn+W), not the Caps/Ctrl swap (Fn+E), so usage 0x39 is the physical Caps Lock" },
+	{ key: "osModeNotSwapped", label: "The board's OS key mode is Windows (Pn+Q) or Mac (Pn+W), not the Caps/Ctrl swap (Pn+E), so usage 0x39 is the physical Caps Lock" },
 	{ key: "noHostRemap", label: "Neither macOS Modifier Keys nor Karabiner remaps Caps Lock or Left Control" },
 	{
 		key: "noSavingKeys",
 		label:
-			"During the run I will press only Caps Lock. Each of these saves the profile to flash and spoils the power-cycle phase: Pn+R (resets the whole current profile, all three layers), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Left GUI+Right Alt+Space, Fn+Right Alt held while the board powers on, Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Fn+Q, Fn+W, or Fn+E (OS key mode), Win lock, and the LED and layer function keys",
+			"During the run I will press only Caps Lock. Each of these saves the profile to flash and spoils the power-cycle phase: Pn+R (resets the whole current profile, all three layers), both Alt keys together (reset all layers; in Mac mode Alt and GUI swap, so both GUI keys too), Left GUI+Right Alt+Space, Fn+Right Alt held while the board powers on, Fn+Left Shift or Pn+Left Shift held 3 s (move Fn or Pn), Pn+Q, Pn+W, or Pn+E (OS key mode), Win lock, and the LED and layer function keys",
 	},
 	{ key: "bluetoothReady", label: "The batteries are in and the board is paired with this computer over Bluetooth" },
 ] as const;
