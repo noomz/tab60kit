@@ -79,11 +79,11 @@ Every edit saves the document (`serializeKeymapDoc`) under the localStorage key 
 
 Apply runs `applyKeymap(doc, mode)`. It queries the gate, reads layer 0 in 16 frames, and refuses a mode whose presence set differs from what layer 0 reports (Windows and Mac differ by 0xE6 and 0xE7; Windows and the Caps/Ctrl swap look the same, so that choice is the user's). It reads layers 1 and 2 for each remappable cap, then plans the writes. A key the document overrides gets its usage. A key the document does not override, but that holds a flags-0 override, gets 0x00FF, so a key removed from the document loses its override at the next Apply. Entries with flags set, such as the factory layer 2 function codes, stay unless the document overrides that key. With writes to send, Apply opens the gate with 0x80, writes each key, reads each one back, closes the gate, and queries it for 0. A board that already holds the document gets no write and no gate frame. Nothing is saved on the board: after a power loss, click Apply again. A refused frame, a read-back that differs, a Stop, or a gate that will not close stops the job with the reason. Any stop after the gate opened sends the close first, on its own signal, because a gate timer of 0 never expires. Unplugging USB with the batteries out undoes every write. A document with an OS mode stops at G1 before any frame: 0x51/0x00 is a profile switch that writes flash. Layers 1 and 2 are named by the 0xD8 and 0xD9 layer keys, since which physical key carries each is still open, and a layer 2 key that the store reset gives a factory function shows a warning before an override replaces it.
 
-`dist-lab-u12/u12.html` checks unit U12 on the board with the same job and the same storage code. The board run on 2026-10-24 (build 57352b7, Chrome on macOS, OS key mode Mac) passed all eight checks of `tools/u12-verdict.ts` with 464 frames in 17 steps. Its capture is `fixtures/u12-macos.json`, and `testing/u12.test.ts` holds the capture to the kept transcript byte for byte and runs today's verdict on that transcript. U12 adds no registry row, so nothing changes maturity. Its clearance names the attach reads, both override reads, the three gate rows, and the key write. Build from a clean commit and serve `dist-lab-u12`. Choose the OS key mode and tick the four boxes, then click Start and pick the board. The page applies five layer 0 keys whose usage is the same in every mode: Esc to grave, Z to Y, / to Up, \\ to Backspace, and Right Ctrl to Right. It asks you to press each one, and logs every keydown and keyup `code`. Then it asks you to reload the page. Click Reload this page, then Continue: the page reads the keymap back from storage. Next, unplug USB with the batteries out for 10 seconds and plug USB back in. The page reads the five keys at 0x00FF, applies the stored keymap once, and asks you to press each key again. Last, it applies the empty keymap, which restores all five and closes the gate, and reads them at 0x00FF. A failed apply or read step stops the run there. One run per Start; Discard this run clears a run that stopped after the reload. Click Download transcript, then run `bun tools/u12-verdict.ts <transcript.json> --out fixtures/u12-macos.json`. The verdict splits the transcript at the page's marks and attestations, checks each step where it stands, and checks the frame gate (including that no frame comes after an attestation or the reload mark, and that a read step sends only the attach and cfgReadKey), the plan order, the five writes and their replies in each Apply, the gate closed after each Apply, every keylog, the stored keymap after the reload, the reads after the battery pull and after the restore, and the mode and the boxes. It writes the capture only on a full PASS, and exits 2 and writes nothing for a fake board or a build that no clean commit names. Add `?fake` to run the page on the fake board: a reload replaces the fake with a fresh one, Yes on the battery-pull step power-cycles it, and a button presses the step's key.
+`dist-lab-u12/u12.html` checks unit U12 on the board with the same job and the same storage code. The board run on 2026-10-24 (build 4de5e8d, recorded as 57352b7: see [History rewrite](#history-rewrite-2026-10-29), Chrome on macOS, OS key mode Mac) passed all eight checks of `tools/u12-verdict.ts` with 464 frames in 17 steps. Its capture is `fixtures/u12-macos.json`, and `testing/u12.test.ts` holds the capture to the kept transcript byte for byte and runs today's verdict on that transcript. U12 adds no registry row, so nothing changes maturity. Its clearance names the attach reads, both override reads, the three gate rows, and the key write. Build from a clean commit and serve `dist-lab-u12`. Choose the OS key mode and tick the four boxes, then click Start and pick the board. The page applies five layer 0 keys whose usage is the same in every mode: Esc to grave, Z to Y, / to Up, \\ to Backspace, and Right Ctrl to Right. It asks you to press each one, and logs every keydown and keyup `code`. Then it asks you to reload the page. Click Reload this page, then Continue: the page reads the keymap back from storage. Next, unplug USB with the batteries out for 10 seconds and plug USB back in. The page reads the five keys at 0x00FF, applies the stored keymap once, and asks you to press each key again. Last, it applies the empty keymap, which restores all five and closes the gate, and reads them at 0x00FF. A failed apply or read step stops the run there. One run per Start; Discard this run clears a run that stopped after the reload. Click Download transcript, then run `bun tools/u12-verdict.ts <transcript.json> --out fixtures/u12-macos.json`. The verdict splits the transcript at the page's marks and attestations, checks each step where it stands, and checks the frame gate (including that no frame comes after an attestation or the reload mark, and that a read step sends only the attach and cfgReadKey), the plan order, the five writes and their replies in each Apply, the gate closed after each Apply, every keylog, the stored keymap after the reload, the reads after the battery pull and after the restore, and the mode and the boxes. It writes the capture only on a full PASS, and exits 2 and writes nothing for a fake board or a build that no clean commit names. Add `?fake` to run the page on the fake board: a reload replaces the fake with a fresh one, Yes on the battery-pull step power-cycles it, and a button presses the step's key.
 
 ## The first write and the U7 lab page
 
-U7's rows are `erase`, `setWriteAddress`, `write`, and `getWriteAddress`. The maintainer added `getWriteAddress` on 2026-10-26, after the audit of the vendor updater (unit U2) showed that the vendor reads back every write address it sets. The board run on 2026-10-28 (build bd27069, Chrome 156 on macOS) passed all nine checks of `tools/u7-verdict.ts` and confirmed all four (`fixtures/u7-macos.json`). It sent 745 frames. The link gate saw 30 answered probes over 15.13 s, with the widest gap 0.51 s. The two ERASEs, [0, 0x200) then [0x200, 0x1CE00), were each answered, with no fallback. Both cursor sets were read back. All 663 chunks matched, with none resent. The deep check read SUM 0xF3D3DBD2 and version page `ca529cf6…d345`, and three Bluetooth trials missed 0 of 162 characters. The run also settled four first-contact facts. The IAP answers an ERASE at offset 0x200. Get write address (`1E 00`) returns the value set. Bytes 2..3 held at 0 work on erase, set, get, and write. No FF AA reply came, so the IAP's FF AA format is still unobserved. A shipped kit now sends the four rows, so `capabilities(SHIPPED).flashBlockedBy` is empty and the shipped page offers Install official firmware. The shipped page calls `makeOfficial(image)` with rewrite off, so a board that already holds the target is checked and left alone. `testing/u7.test.ts` holds the capture to the kept transcript byte for byte, and with `TAB60_EXE` set it runs today's `evaluateU7` on that transcript against the real exe.
+U7's rows are `erase`, `setWriteAddress`, `write`, and `getWriteAddress`. The maintainer added `getWriteAddress` on 2026-10-26, after the audit of the vendor updater (unit U2) showed that the vendor reads back every write address it sets. The board run on 2026-10-28 (build cf0a884, recorded as bd27069: see [History rewrite](#history-rewrite-2026-10-29), Chrome 156 on macOS) passed all nine checks of `tools/u7-verdict.ts` and confirmed all four (`fixtures/u7-macos.json`). It sent 745 frames. The link gate saw 30 answered probes over 15.13 s, with the widest gap 0.51 s. The two ERASEs, [0, 0x200) then [0x200, 0x1CE00), were each answered, with no fallback. Both cursor sets were read back. All 663 chunks matched, with none resent. The deep check read SUM 0xF3D3DBD2 and version page `ca529cf6…d345`, and three Bluetooth trials missed 0 of 162 characters. The run also settled four first-contact facts. The IAP answers an ERASE at offset 0x200. Get write address (`1E 00`) returns the value set. Bytes 2..3 held at 0 work on erase, set, get, and write. No FF AA reply came, so the IAP's FF AA format is still unobserved. A shipped kit now sends the four rows, so `capabilities(SHIPPED).flashBlockedBy` is empty and the shipped page offers Install official firmware. The shipped page calls `makeOfficial(image)` with rewrite off, so a board that already holds the target is checked and left alone. `testing/u7.test.ts` holds the capture to the kept transcript byte for byte, and with `TAB60_EXE` set it runs today's `evaluateU7` on that transcript against the real exe.
 
 The flash follows the maintainer's 2026-10-26 rulings on the vendor-updater audit (see [protocol.md](protocol.md) "Sequences"). It sends two ERASEs: the version page [0, 0x200), then the app region [0x200, 0x1CE00). The vendor never erases from an offset above 0. If the IAP refuses the second ERASE with FF AA, or leaves it unanswered three times, the job sends the vendor's one ERASE over [0, 0x1CE00). It does this only after the version-page ERASE was answered. Every set write address is read back with get write address, and the pair is retried as one unit. A WRITE whose ack is missing or names the wrong next offset is resent from its block's start, after the cursor is set back and read back. After three tries the flash loop observes the board and decides. Before any of these resends, the session waits 1 s, the vendor's pause, and drops pending reports, so a late answer to the failed frame cannot answer the resend. An FF AA reply counts only when it names the command sent, and every other IAP reply must repeat bytes 0..3 of the request. The update-mode session keeps the safety order as state: writeImage refuses to run unless eraseWindow completed on that session, and writeVersionBlock refuses unless the session's latest SUM matched the image.
 
@@ -154,3 +154,197 @@ The drop mode counts frames from page load, so click Connect once before the Dee
 - `@tab60kit/core/port` (`core/port.ts`) is for a shell, today `web/webhid-port.ts`.
 
 Code in `web/` reaches the core only through these two names, and `probes/boundaries.ts` enforces it. Code in `lab/`, `testing/`, `tools/`, and `probes/` is maintainer code and imports core files by relative path.
+
+## History rewrite (2026-10-29)
+
+Before publication, the history was rewritten with git-filter-repo: citations to notes kept outside the repository were removed from every commit, and the author email was unified. The tree did not change, but every commit ID did. Old IDs in `fixtures/`, `testing/fixtures/`, the tests that compare those files byte for byte, and older text refer to the pre-publication history. The fixtures stay as recorded, because each one is the capture of a board run and its build ID is part of what was recorded.
+
+Old IDs still in this tree, and the commit each became:
+
+| Old | New | Commit |
+|---|---|---|
+| 0390b57 | 6daec85 | fix(web): show the Pick button when a pick parks |
+| 4976a67 | 33da2f8 | U10: the verdict takes the OS key mode and an approved-difference list |
+| 57352b7 | 4de5e8d | U12: README describes the gate close on every stop and the verdict's frame placement |
+| 78b0634 | 1e2e5c5 | U10: battery-pull preconditions on the page, and tools/u10-verdict.ts |
+| 97452b0 | 8047379 | fix(lab): keep a refused frame in the transcript |
+| a91615e | 317ca1d | refactor: act on round 5's comment review |
+| bd27069 | cf0a884 | U7 review N1: the fake-board U7 runs go through the lab's byte-level wrap |
+| c088d71 | a18a823 | U11: the lab page names the key combinations that save to flash |
+
+e98134d had nothing left to change after the rewrite, so it has no new ID.
+
+<details>
+<summary>Every old ID and its new ID, oldest first</summary>
+
+```
+e98134d (dropped)
+e399067 a64fdd4
+24ec00b 34be599
+0233a3b 9f91219
+557be55 440256f
+33ec686 494e199
+aaca190 81b3a25
+d14da6a 9874f28
+5977549 1b6202b
+713be15 7c060b3
+072886f 452d11b
+cdc1b6e 763f13a
+336e396 ff2985f
+b7d5434 c91a338
+92b6e11 a704e63
+90cd461 371677f
+e909fde edd91da
+14a8e5a 576a3b6
+cc75d15 ec843af
+ac0cafb f32e8a7
+4d35ee7 edc9ce8
+1970a9c 3ccc6a8
+394567c c93eac2
+f771d62 16421f9
+e420338 63b4504
+09776f8 592c599
+fd2db3c bb77fe8
+1f6ba56 5a13bbb
+9594b04 3dcdcfa
+6be2107 b5a62bf
+318f011 c9d6d34
+6ba3c57 753a91e
+40211f7 c3bb1bc
+11fe101 03e65a9
+31cb580 5341b86
+357b923 0a20d17
+d2e6645 0e4d030
+71415d4 04aeaa0
+6715984 2967c84
+a6f0bb8 bf8e30d
+a2b842e ec2a1d7
+730318b 82b503d
+12cf2e7 4c656e8
+6aee71e 87df83c
+06a0561 ede61a9
+d97c9e5 9c09847
+358109c a7e61a4
+97452b0 8047379
+5bdb653 106b964
+bebb8c7 f6514b3
+b298c72 d4d804d
+901665f 8b9f201
+f133f37 8afb4cc
+e5fc9b1 3b151e9
+0125a54 893b7e3
+2094b54 e14bcc6
+a91615e 317ca1d
+2cdc250 585cf5b
+48cd634 690dd07
+2865c6b fd34404
+a999efd aa58035
+72baf51 0ad1640
+9cc557d adfae81
+bb84bc5 a6036f0
+6b1f541 7183503
+cee9ee6 0cd31f0
+8bed27a 4104003
+0390b57 6daec85
+21d6174 62a398c
+5c25720 a2d282d
+09f40fd f9bcfcc
+edd406d 5499a01
+97f0251 2d20ba9
+63b95d5 79fb75a
+b27ecd9 af4ded5
+4b109e5 b560202
+6986155 977a471
+deaacbc ca6783d
+9cf47a1 55b5cd1
+5bb6377 7813fa4
+d76ad36 7dd1ee5
+a785857 e967143
+b388441 7cb5d4a
+5fb0183 05e11e5
+914f171 6da0f8d
+e768e25 04eb9a4
+86cee14 916c308
+dfdbd42 8e880bf
+2fdfda6 3bb0f03
+296ea98 e6d4f90
+78b0634 1e2e5c5
+d521f36 382af97
+4976a67 33da2f8
+1603ffa 4fdb221
+bae159f 6491940
+3a692d6 07e035b
+dca44ab a157f1f
+e98c0c9 e132f52
+7dfdf90 c03c78f
+1bae7dc 0f203c2
+c088d71 a18a823
+2340cd1 832713e
+963ddf6 7bdb124
+a3e9752 6ba98fb
+5b5f197 9439435
+7ab9ae6 c99d111
+aa4ac33 51b157d
+de4f863 802d22b
+0ccc4f6 1beb182
+4b3cfe1 f7c8809
+7f4f76d bb64b5e
+f937b70 970229b
+7ab164f 4bbf310
+0d401dd 7525b12
+e1b8a6a d7801b7
+57352b7 4de5e8d
+355443a ea4490e
+5f8cef0 3c5aab4
+21bda54 56b930b
+fe0853e bac7a3d
+7f0c13e 10d7f70
+e1069e7 7d29c55
+d918452 a4c39d6
+5d85de8 a833108
+d4050ce 20a4371
+17d74d4 27e9da5
+92ff29e 8661188
+b7c93cd 9573cae
+0a7ff35 160699c
+685eee5 5533919
+639b781 b48f6a4
+9b34815 46d3574
+e186930 ffca19d
+17c177e ff42195
+93e2bba 72d02d9
+f0e5270 eda3074
+bed1570 f2b9e9d
+bd27069 cf0a884
+6b407eb 03b464c
+39ccac0 74e47f8
+9ca5762 61ec8ff
+f16197d 48bd28a
+3262acc 774bf0e
+63f353b 18a2430
+b6ff790 3c093a7
+e01d83d 7ba6cd2
+1eb5a99 472bbf8
+b2464f8 be1ffe1
+0b6151d c9f9c73
+a2bae14 61832a1
+cd1391d 0838313
+e3bc05b 48e09fb
+3bc746d f9c8cfa
+7dbc0b2 26b9e1a
+3ecb40e 345c854
+b481513 07ac7aa
+64d6201 e1d22b4
+c8e426f b6092ec
+8ed83a2 8f78f98
+957eb96 c430623
+22e2af1 363ce20
+451be3e ee3e585
+fe6cc2c 9eb0b6c
+aa77b69 040e141
+dd0b34c 5a4a9ac
+2e6eb0a 398e0f5
+```
+
+</details>
+
