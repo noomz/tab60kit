@@ -96,6 +96,7 @@ Every command in `core/protocol.ts` names where it is known from and how far it 
 | [docs/updater-package.md](docs/updater-package.md) | How the firmware is stored in the official updater, and how it is extracted |
 | [docs/webhid.md](docs/webhid.md) | Browser and platform facts, and the Linux udev rule |
 | [docs/design.md](docs/design.md) | How the code is shaped, and where each safety rule lives |
+| [docs/ui.md](docs/ui.md) | The page's colors, fonts, and screen states |
 | [docs/units.md](docs/units.md) | The units of work (U0 to U15), their checks, and their status |
 | [docs/development.md](docs/development.md) | Build, tests, lab pages, and hardware checks |
 

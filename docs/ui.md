@@ -1,0 +1,47 @@
+# UI
+
+The shipped page draws every screen from one `PageView` (`web/view.ts`). `web/app.ts` turns it into DOM with class names, and `web/app.css` styles those classes. No element carries an inline style attribute. The CSP (`default-src 'self'`) allows the stylesheet and the fonts because the build copies both next to `index.html`.
+
+## Tokens
+
+The tokens are custom properties on `:root` in `web/app.css`.
+
+| Token | Value | Use |
+|---|---|---|
+| `--ink`, `--ink-2`, `--ink-3` | `#14181B`, `#424B50`, `#5A6368` | Text: titles, body, labels and notes |
+| `--ground` | `#EEF1F2` | Page background |
+| `--panel` | `#FFFFFF` | Panels, buttons, chips |
+| `--line`, `--line-2` | `#D5DBDE`, `#E4E8EA` | Panel borders, row dividers |
+| `--well`, `--code-bg` | `#F8FAFA`, `#F5F7F7` | File drop zone, udev rule |
+| `--cobalt`, `--cobalt-dk`, `--cobalt-tint`, `--cobalt-line` | `#2448B8`, `#1B378F`, `#E9EEFB`, `#C6D2F3` | Actions and confirmed results |
+| `--orange`, `--orange-dk`, `--orange-tint`, `--orange-line` | `#A64B0A`, `#8A3D07`, `#FBEEE4`, `#EDC9AF` | Attention and failure |
+| `--muted`, `--muted-line` | `#DCE1E3`, `#9AA5AB` | Disabled controls, not checked |
+| `--sans`, `--mono` | IBM Plex Sans, IBM Plex Mono | Body text; addresses, the brand, and code |
+
+Every text color on its background measures at least 4.5:1.
+
+## Rules
+
+- **Color has a meaning.** Cobalt marks actions and confirmed matches. Orange marks attention and failure. Grey marks "not checked" and "locked". The page uses no red or green. `Tone` in `web/view.ts` carries the meaning: `confirmed`, `attention`, `muted`, or `plain`.
+- **Dashed cobalt means live on the keyboard, not saved on it.** The header chip after Apply, the Apply bar, and each key with an override use it.
+- **One main button per screen.** `PageView.primary` names it: a parked Pick first, then Make official, then the first action. Stop and Skip are never the main button.
+- **A parked pick is the largest control on the page,** and it takes focus.
+
+## Fonts
+
+The build copies IBM Plex Sans (400, 500, 600) and IBM Plex Mono (400, 600), Latin subset, from the `@fontsource` packages into `dist/fonts/`, with each family's SIL Open Font License 1.1 text. The page loads no font from another origin.
+
+## Screens
+
+| Screen | Panel tone | Header chip |
+|---|---|---|
+| Browser gate | attention | Not connected |
+| Connect, with a board outline | plain | Not connected |
+| Pick the keyboard | plain, with the hold-still banner unless the pick is the first Connect | Pick in the chooser, or Waiting for your pick |
+| Your board | plain | Where the board was last seen: normal mode or update mode |
+| Working, with a progress bar for a counted step | plain | Same; USB link dropped while the kit reconnects |
+| Result | confirmed after a flash, plain after a check or Apply | Same; after Apply, also the dashed keymap chip |
+| Stopped | attention, except a plain Stop | Same |
+| Linux permission | attention | Not connected |
+
+The Board, result, and Stopped screens show the flash map in a second column, and the keymap editor below both. At phone width the columns stack, and the editor's keyboard scrolls sideways inside its frame.
