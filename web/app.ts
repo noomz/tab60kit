@@ -5,7 +5,7 @@
  */
 import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, type StoreReading, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
 import { actionHandlers } from "./actions";
-import { LAYER_NAME, factoryNote, keyFace, layerNote, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, factoryNote, keyFace, layerNote, noOverrideLabel, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, screenFor } from "./screens";
 import { TARGETS } from "./usages";
@@ -232,7 +232,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			const current = doc.overrides.get(layer)?.get(cap.id);
 			const pick = element("div", "settings");
 			pick.append(
-				select(`${cap.legend} on ${LAYER_NAME[layer]} sends`, [["", `${cap.legend} (no override)`], ...TARGETS.map((t): [string, string] => [String(t.usage), t.name])], current === undefined ? "" : String(current), (value) =>
+				select(`${cap.legend} on ${LAYER_NAME[layer]} sends`, [["", noOverrideLabel(cap, layer)], ...TARGETS.map((t): [string, string] => [String(t.usage), t.name])], current === undefined ? "" : String(current), (value) =>
 					edit(withOverride(doc, layer, cap.id, value === "" ? null : usage(Number(value)))),
 				),
 			);

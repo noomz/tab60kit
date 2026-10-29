@@ -726,6 +726,13 @@ select {
 	font-weight: 600;
 }
 
+/* Unknown: the factory Fn table is not found, so the cap would be a guess. */
+.key.face-unknown {
+	border-style: dotted;
+	background: var(--well);
+	color: var(--ink-3);
+}
+
 .key.face-factory {
 	background: var(--well);
 	color: var(--ink-2);

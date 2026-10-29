@@ -1,5 +1,5 @@
 /** The keymap editor's document edits and the words it lists, DOM-free so they are testable. app.ts draws them. */
-import { type KeyCap, type KeyId, type KeymapDoc, LAYER_KEY_MARKERS, type Layer, type OverrideEntry, type StoreReading, TAB60_KEYS, type Usage, factoryFunction, usage } from "@tab60kit/core";
+import { type KeyCap, type KeyId, type KeymapDoc, LAYER_KEY_MARKERS, type Layer, type OverrideEntry, type StoreReading, TAB60_KEYS, type Usage, factoryFunction, factoryLayerKnown, usage } from "@tab60kit/core";
 import { usageName } from "./usages";
 
 /**
@@ -91,10 +91,11 @@ export function entryName(entry: Extract<OverrideEntry, { kind: "override" }>): 
 /**
  * A key's face in the editor, on one layer. `pending`: this page's document changes it (Apply sends it). `board`: the
  * board's store holds an override that is not the factory one. `factory`: the store reset's layer 2 function, which
- * the board was read to hold, or which the page assumes before a read. `base`: what the cap says.
+ * the board was read to hold, or which the page assumes before a read. `unknown`: a layer whose factory table nobody
+ * has found, so the key's cap would be a guess. `base`: what the cap says.
  */
 export interface KeyFace {
-	readonly kind: "pending" | "board" | "factory" | "base";
+	readonly kind: "pending" | "board" | "factory" | "unknown" | "base";
 	readonly main: string;
 	readonly sub: string | null;
 }
@@ -106,13 +107,22 @@ export function keyFace(cap: KeyCap, layer: Layer, doc: KeymapDoc, store: StoreR
 	const entry = store?.get(layer)?.get(cap.id);
 	if (entry?.kind === "override" && (factory === null || ((entry.flags << 8) | entry.code) !== factory)) return { kind: "board", main: entryName(entry), sub: `was ${cap.legend}` };
 	if (factory !== null && (store === null || entry?.kind === "override")) return { kind: "factory", main: functionName(factory), sub: cap.legend };
+	if (!factoryLayerKnown(layer)) return { kind: "unknown", main: "?", sub: cap.legend };
 	return { kind: "base", main: cap.legend, sub: null };
+}
+
+/** The key select's "no override" choice: what the key sends without one, as far as this tool knows. */
+export function noOverrideLabel(cap: KeyCap, layer: Layer): string {
+	const factory = factoryFunction(layer, cap.id);
+	if (factory !== null) return `${cap.legend} key on ${LAYER_NAME[layer]}: factory ${functionName(factory)}, no override`;
+	if (!factoryLayerKnown(layer)) return `${cap.legend} key on ${LAYER_NAME[layer]}: factory function (unknown), no override`;
+	return `${cap.legend} (no override)`;
 }
 
 /** What the editor says about the layer it shows: where its faces come from, and what it cannot know. */
 export function layerNote(layer: Layer, store: StoreReading | null): string | null {
 	const read = store === null ? "Read keymap to see what the board holds now. " : "";
-	if (layer === 1) return `${read}Factory Fn functions are unknown: this layer shows only overrides.`;
+	if (!factoryLayerKnown(layer)) return `${read}Factory Fn functions are unknown, so keys with no override show "?".`;
 	if (layer === 2) return `${read}${store === null ? "Pn keys show the factory functions a reset writes; the board may differ." : "Pn keys show what the board holds."}`;
 	return read === "" ? null : read.trim();
 }

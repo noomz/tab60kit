@@ -50,6 +50,7 @@ export {
 	type Usage,
 	canRemap,
 	factoryFunction,
+	factoryLayerKnown,
 	keyId,
 	parseKeymapDoc,
 	serializeKeymapDoc,

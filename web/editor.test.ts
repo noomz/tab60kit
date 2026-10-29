@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { type KeyId, type Layer, type OverrideEntry, TAB60_KEYS, keyId, usage } from "@tab60kit/core";
-import { LAYER_NAME, entryName, factoryNote, keyFace, layerNote, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, entryName, factoryNote, keyFace, layerNote, noOverrideLabel, overrideRows, withOverride } from "./editor";
 import { EMPTY_KEYMAP } from "./keymap-store";
 import { TARGETS, usageName } from "./usages";
 
@@ -65,7 +65,17 @@ test("store entries and layers are named in words, and the Fn layer says its fac
 	expect(entryName({ kind: "override", code: 0x35, flags: 1 })).toBe("USB");
 	expect(entryName({ kind: "override", code: 0x70, flags: 1 })).toBe("Function 0x170");
 	expect(entryName({ kind: "override", code: 0x52, flags: 0 })).toBe("Up");
-	expect(layerNote(1, null)).toBe("Read keymap to see what the board holds now. Factory Fn functions are unknown: this layer shows only overrides.");
-	expect(layerNote(1, storeOf([]))).toBe("Factory Fn functions are unknown: this layer shows only overrides.");
+	expect(layerNote(1, null)).toBe('Read keymap to see what the board holds now. Factory Fn functions are unknown, so keys with no override show "?".');
+	expect(layerNote(1, storeOf([]))).toBe('Factory Fn functions are unknown, so keys with no override show "?".');
 	expect(layerNote(0, storeOf([]))).toBeNull();
+});
+
+test("on the Fn layer a key with no override shows unknown, never its cap, in the key and in its select", () => {
+	const equal = capOf("=");
+	expect(keyFace(equal, 1, EMPTY_KEYMAP, null)).toEqual({ kind: "unknown", main: "?", sub: "=" });
+	expect(keyFace(equal, 1, EMPTY_KEYMAP, storeOf([[1, "=", { kind: "default" }]]))).toEqual({ kind: "unknown", main: "?", sub: "=" });
+	expect(keyFace(equal, 0, EMPTY_KEYMAP, null)).toEqual({ kind: "base", main: "=", sub: null });
+	expect(noOverrideLabel(equal, 1)).toBe("= key on Layer 1 (hold Fn): factory function (unknown), no override");
+	expect(noOverrideLabel(capOf("Q"), 2)).toBe("Q key on Layer 2 (hold Pn): factory Windows mode, no override");
+	expect(noOverrideLabel(equal, 0)).toBe("= (no override)");
 });

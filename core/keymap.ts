@@ -226,11 +226,26 @@ const FACTORY_FLAGS = 1;
  * leaves, not a read.
  */
 export function factoryFunction(layer: Layer, key: KeyId): number | null {
-	if (layer !== 2) return null;
+	const table = FACTORY_TABLES[layer];
+	if (table === null) return null;
 	const atReset = reverseMap(activeKeymap("windows"));
-	const pair = FACTORY_LAYER2.find(({ usage: k }) => atReset.get(k) === key);
+	const pair = table.find(({ usage: k }) => atReset.get(k) === key);
 	return pair === undefined ? null : (FACTORY_FLAGS << 8) | pair.code;
 }
+
+/**
+ * The factory function pairs per layer, by the usage they sit on. Layer 0 has none: its keys send their cap. Layer 1
+ * (Fn) is null because no one has found its table in the firmware; when a verified one lands, put it here and the
+ * editor names its keys. Layer 2 (Pn) is the table the store reset writes.
+ */
+const FACTORY_TABLES: Readonly<Record<Layer, readonly { readonly usage: Usage; readonly code: number }[] | null>> = {
+	0: [],
+	1: null,
+	2: FACTORY_LAYER2,
+};
+
+/** Whether this tool knows what a key with no override sends on `layer`. */
+export const factoryLayerKnown = (layer: Layer): boolean => FACTORY_TABLES[layer] !== null;
 
 /** sub_91EC: usage to the cell that holds it, scanning down from cell 79 so the lowest cell wins a duplicate. */
 function reverseMap(cells: readonly number[]): ReadonlyMap<number, number> {
