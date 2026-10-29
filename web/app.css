@@ -450,6 +450,21 @@ select {
 	cursor: pointer;
 }
 
+.dropzone.loaded {
+	flex-direction: row;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	padding: 14px 16px;
+	border-style: solid;
+	border-width: 1px;
+	text-align: left;
+}
+
+.dropzone.loaded .dropzone-title {
+	font-size: 15px;
+	overflow-wrap: anywhere;
+}
+
 .dropzone:focus-within {
 	outline: 2px solid var(--cobalt);
 	outline-offset: 2px;
@@ -604,6 +619,18 @@ select {
 	color: var(--cobalt);
 	font-weight: 500;
 	cursor: pointer;
+}
+
+.panel > .detail {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 14px;
+}
+
+.panel > .detail .line {
+	margin-top: 6px;
+	font-size: 14px;
 }
 
 .detail .mono {

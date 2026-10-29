@@ -27,6 +27,8 @@ Every text color on its background measures at least 4.5:1.
 - **One main button per screen.** `PageView.primary` names it: a parked Pick first, then Install official firmware, then the first action. Stop and Skip are never the main button.
 - **A parked pick is the largest control on the page,** and it takes focus.
 - **Plain words first.** A flash-map row says what it means for the user and why a grey row is normal. The exact technical reason sits in a Details disclosure under the row. A legend under the map says what each dot color means.
+- **Offer an install only when it would do something.** A board that update mode verified to run the dropped version gets "Nothing to install" and no button. A board whose version page alone names it keeps the install as a secondary button. Two short lines say what the install does; the rest sits behind "About the install".
+- **The chip says where the board is now.** A deep check or install that ends by sending the board home keeps its update-mode reading for the flash map, so the chip reads normal mode from the boot target, not from that reading.
 - **Layers are named by the key that holds them.** The layer select names the cap in the cell where the firmware puts each layer marker (Fn for layer 1, Pn for layer 2).
 
 ## Fonts

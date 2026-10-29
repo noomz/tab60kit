@@ -6,9 +6,9 @@
 import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
 import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
-import { type Screen, screenFor } from "./screens";
+import { type Screen, admittedImage, screenFor } from "./screens";
 import { TARGETS, usageName } from "./usages";
-import { type Action, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, admittedImage, statusChips, viewFor } from "./view";
+import { type Action, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, loadedText, statusChips, viewFor } from "./view";
 import type { Chooser } from "./webhid-port";
 
 const EDITS_ON: readonly Screen["name"][] = ["board", "result", "stopped"];
@@ -156,6 +156,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	let layer: Layer = 0;
 	let selected: KeyId | null = null;
 	let reading: UpdaterReading | null = null;
+	let readingName = "";
 	const edit = (next: KeymapDoc, nextMode: OsKeyMode | null = mode) => {
 		doc = next;
 		mode = nextMode;
@@ -274,11 +275,14 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 				.then((buffer) => readUpdater(new Uint8Array(buffer)))
 				.then((read) => {
 					reading = read;
+					readingName = file.name;
 				})
 				.finally(render);
 		});
-		const label = element("label", "dropzone");
-		label.append(element("span", "dropzone-title", "Vendor updater"), element("span", "note", "Tab60firmwareV1.01.13.exe from vortexgear.tw. The page reads it here and uploads nothing."), element("span", "btn btn-secondary", "Choose file"), input);
+		const label = element("label", reading === null ? "dropzone" : "dropzone loaded");
+		if (reading === null) label.append(element("span", "dropzone-title", "Vendor updater"), element("span", "note", "Tab60firmwareV1.01.13.exe from vortexgear.tw. The page reads it here and uploads nothing."), element("span", "btn btn-secondary", "Choose file"));
+		else label.append(element("span", "dropzone-title", loadedText(readingName, reading)), element("span", "btn btn-secondary", "Change file"));
+		label.append(input);
 		return label;
 	}
 
@@ -290,6 +294,11 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		if (screen.name === "connect") card.append(outline());
 		card.append(element("h1", "title", view.title));
 		for (const line of view.lines) card.append(element("p", "line", line));
+		if (view.details !== null) {
+			const more = element("details", "detail");
+			more.append(element("summary", undefined, view.details.summary), ...view.details.lines.map((line) => element("p", "line", line)));
+			card.append(more);
+		}
 		if (view.progress !== null) {
 			const bar = element("progress", "progress");
 			bar.max = view.progress.total;
