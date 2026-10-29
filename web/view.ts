@@ -18,11 +18,11 @@ import {
 	type StopReason,
 	TAB60_KEYS,
 	type UpdaterReading,
-	bootTarget,
 } from "@tab60kit/core";
 import { type FlashOffer, type Screen, admittedImage } from "./screens";
 
-export type Action = "connect" | "deep-check" | "install" | "apply" | "pick" | "cancel" | "skip";
+/** "recheck" is Connect once a board was read: the same quick check, named for what it does then. */
+export type Action = "connect" | "recheck" | "deep-check" | "install" | "apply" | "pick" | "cancel" | "skip";
 
 /** The page's semantic colors: cobalt confirms, orange asks for attention, grey is not checked. No red or green. */
 export type Tone = "plain" | "confirmed" | "attention" | "muted";
@@ -221,14 +221,17 @@ function keymapText(problem: KeymapProblem): string {
 	}
 }
 
-function stopText(reason: StopReason): string {
+/** The quick check's button text, which the stop lines name. */
+export const BUTTON: Readonly<Record<"connect" | "recheck", string>> = { connect: "Connect", recheck: "Check again" };
+
+function stopText(reason: StopReason, read: string): string {
 	switch (reason.kind) {
 		case "cancelled":
 			if (reason.during?.kind === "applying-keymap") {
 				return `Stopped during Apply: some keys may hold the new keymap and others not, and the config gate may still be open if the board missed the close. Click Apply again to finish. ${UNDO}`;
 			}
 			return reason.during?.kind === "restarting" && reason.during.into === "iap"
-				? "Stopped. The board may be in update mode: click Connect to see where it is."
+				? `Stopped. The board may be in update mode: click ${read} to see where it is.`
 				: "Stopped.";
 		case "board-refused":
 			return `This board does not match the TAB 60 this tool knows (${reason.refusal.code}). Nothing was changed.`;
@@ -239,9 +242,9 @@ function stopText(reason: StopReason): string {
 		case "busy":
 			return "Another tab or program is using the keyboard. Close it and try again.";
 		case "attempts-exhausted":
-			return `The board refused the same step three times (${reason.step}). Click Connect to see where it is.`;
+			return `The board refused the same step three times (${reason.step}). Click ${read} to see where it is.`;
 		case "too-many-link-losses":
-			return `The USB link dropped ${reason.losses} times. Try another cable or port, then click Connect.`;
+			return `The USB link dropped ${reason.losses} times. Try another cable or port, then click ${read}.`;
 		case "keymap":
 			return keymapText(reason.problem);
 		case "error":
@@ -286,7 +289,7 @@ function primaryOf(actions: readonly Action[]): Action | null {
 	if (actions.includes("pick")) return "pick";
 	if (actions.includes("install")) return "install";
 	const first = actions[0];
-	return first === undefined || first === "cancel" || first === "skip" ? null : first;
+	return first === undefined || first === "cancel" || first === "skip" || first === "recheck" ? null : first;
 }
 
 /** A view may name its main button; otherwise primaryOf picks it from the actions. */
@@ -317,16 +320,17 @@ export interface StatusChip {
 	readonly label: string;
 }
 
-/**
- * Boot targets after which a finished job has sent an update-mode board home (chip.ts check and the flash job's
- * exit-to-app). Such a job keeps its update-mode observation, which holds the checksum the flash map shows, so the
- * observation's mode is where the board was, not where it is.
- */
-const SENT_HOME: readonly BootTarget[] = ["normal-mode", "boots-unchecked-image"];
+const MODE_CHIP: Readonly<Record<"app" | "iap" | "unconfirmed" | "none", StatusChip>> = {
+	none: { kind: "idle", label: "Not connected" },
+	app: { kind: "normal", label: "TAB 60 · normal mode" },
+	iap: { kind: "update", label: "TAB 60 · update mode" },
+	unconfirmed: { kind: "idle", label: "TAB 60 · mode not confirmed, click Check again" },
+};
 
-function boardMode(state: JobState): "app" | "iap" | null {
+/** Where the board is: a finished or stopped job's session says it; during a job, the latest observation does. */
+function boardMode(state: JobState): "app" | "iap" | "unconfirmed" | null {
 	if (state.board === null) return null;
-	if (state.kind === "finished" && state.board.mode === "iap" && SENT_HOME.includes(bootTarget(state.board))) return "app";
+	if (state.kind === "finished" || state.kind === "stopped") return state.at ?? "unconfirmed";
 	return state.board.mode;
 }
 
@@ -338,8 +342,7 @@ export function statusChips(state: JobState, needsClick: DeviceWant | null): rea
 	else if (state.kind === "working" && state.activity.kind === "link-lost") chips.push({ kind: "lost", label: "USB link dropped" });
 	else {
 		const mode = boardMode(state);
-		if (mode === null) chips.push({ kind: "idle", label: "Not connected" });
-		else chips.push(mode === "app" ? { kind: "normal", label: "TAB 60 · normal mode" } : { kind: "update", label: "TAB 60 · update mode" });
+		chips.push(MODE_CHIP[mode ?? "none"]);
 	}
 	return chips;
 }
@@ -372,9 +375,9 @@ type Offer = Pick<PageView, "lines" | "details" | "actions" | "installLabel"> & 
  * image gets no install, because the install would write nothing. A board whose version page alone names it keeps the
  * install as a secondary button, because the install still checks the firmware and writes if it differs.
  */
-function offer(flash: FlashOffer): Offer {
+function offer(flash: FlashOffer, read: "connect" | "recheck"): Offer {
 	const { reading, blockedBy, installed } = flash;
-	const plain = { details: null, actions: ["connect", "deep-check"], installLabel: null } as const;
+	const plain = { details: null, actions: [read, "deep-check"], installLabel: null } as const;
 	if (reading === null) return { ...plain, lines: ["To install official firmware, drop Tab60firmwareV1.01.13.exe (from vortexgear.tw) on the file picker below. The page reads it here and uploads nothing."] };
 	if (reading.kind === "refused") return { ...plain, lines: [`That file is not a TAB 60 updater this page can read (${reading.refusal.code}).`] };
 	const slots = reading.images.map(({ slot, layoutName, admission }) =>
@@ -385,9 +388,9 @@ function offer(flash: FlashOffer): Offer {
 	if (!canInstall(flash)) return { ...plain, lines: [...slots, `This build cannot install firmware yet: ${blockedBy[0]}.`] };
 	const version = image.entry.version;
 	if (installed === "verified") return { ...plain, lines: [`Your keyboard already runs official ${version}. Nothing to install.`, ...slots] };
-	const install = { actions: ["connect", "deep-check", "install"], installLabel: `Install official firmware ${version}`, details: installDetails(version) } as const;
+	const install = { actions: [read, "deep-check", "install"], installLabel: `Install official firmware ${version}`, details: installDetails(version) } as const;
 	if (installed === "reported") {
-		return { ...install, primary: "connect", lines: [`Your keyboard reports official ${version}, but its firmware is not verified yet. Deep check verifies it.`, ...slots] };
+		return { ...install, primary: null, lines: [`Your keyboard reports official ${version}, but its firmware is not verified yet. Deep check verifies it.`, ...slots] };
 	}
 	return { ...install, lines: [...slots, `Install official firmware ${version} replaces the firmware on the keyboard.`, "It takes about 20 seconds, and the keyboard can't type during it."] };
 }
@@ -400,7 +403,10 @@ export function loadedText(name: string, reading: UpdaterReading): string {
 }
 
 /** After a job, the exe's words show once one was dropped; the Board screen alone prompts for one. */
-const afterJob = (flash: FlashOffer): Offer => (flash.reading === null ? { ...offer(flash), lines: [] } : offer(flash));
+const afterJob = (flash: FlashOffer, read: "connect" | "recheck"): Offer => (flash.reading === null ? { ...offer(flash, read), lines: [] } : offer(flash, read));
+
+/** Once a board was read, the quick check is "Check again"; before that it is "Connect". */
+const readAction = (report: ChipReport | null) => (report === null ? "connect" : "recheck");
 
 /** `needsClick` is the chooser's parked request: a pick then needs this page's click to open the chooser. */
 export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView {
@@ -433,7 +439,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 			});
 		}
 		case "board":
-			return withPrimary({ ...idle, title: "Your board", ...flashMap(screen.report), ...offer(screen.flash) });
+			return withPrimary({ ...idle, title: "Your board", ...flashMap(screen.report), ...offer(screen.flash, "recheck") });
 		case "progress":
 			return withPrimary({
 				...idle,
@@ -445,10 +451,11 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 				progress: progressOf(screen.activity),
 			});
 		case "result":
-			return withPrimary({ ...idle, tone: RESULT_TONE[screen.result.kind], title: resultText(screen.result), ...flashMap(screen.report), ...afterJob(screen.flash) });
+			return withPrimary({ ...idle, tone: RESULT_TONE[screen.result.kind], title: resultText(screen.result), ...flashMap(screen.report), ...afterJob(screen.flash, readAction(screen.report)) });
 		case "stopped": {
-			const after = afterJob(screen.flash);
-			return withPrimary({ ...idle, tone: stopTone(screen.reason), title: "Stopped", ...flashMap(screen.report), ...after, lines: [stopText(screen.reason), ...after.lines] });
+			const read = readAction(screen.report);
+			const after = afterJob(screen.flash, read);
+			return withPrimary({ ...idle, tone: stopTone(screen.reason), title: "Stopped", ...flashMap(screen.report), ...after, lines: [stopText(screen.reason, BUTTON[read]), ...after.lines] });
 		}
 		case "os-permission":
 			return withPrimary({

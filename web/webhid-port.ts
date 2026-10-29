@@ -76,8 +76,8 @@ export interface LabSetup {
 }
 
 /** The page's one way to reach the board. */
-export function startWebHid(hid: HID, locks: LockManager, lab?: LabSetup): { readonly kit: Kit; readonly chooser: Chooser } {
-	const port = new WebHidPort(hid, locks, lab?.wrap ?? ((link) => link), lab?.onEvent ?? (() => undefined));
+export function startWebHid(hid: HID, locks: LockManager, lab?: LabSetup, onEvent: (event: PortEvent) => void = () => undefined): { readonly kit: Kit; readonly chooser: Chooser } {
+	const port = new WebHidPort(hid, locks, lab?.wrap ?? ((link) => link), lab?.onEvent ?? onEvent);
 	return { kit: createKit(port, lab?.clearance), chooser: port.chooser() };
 }
 

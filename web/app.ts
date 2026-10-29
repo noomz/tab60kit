@@ -4,18 +4,20 @@
  * Once a board was read, the Board, result, and Stopped screens carry the keymap editor below the flash map.
  */
 import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
+import { actionHandlers } from "./actions";
 import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, admittedImage, screenFor } from "./screens";
 import { TARGETS, usageName } from "./usages";
-import { type Action, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, loadedText, statusChips, viewFor } from "./view";
+import { type Action, BUTTON, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, loadedText, statusChips, viewFor } from "./view";
 import type { Chooser } from "./webhid-port";
 
 const EDITS_ON: readonly Screen["name"][] = ["board", "result", "stopped"];
 
 /** Pick and Install name their row and version, so PageView carries their text. */
 const LABEL: Readonly<Record<Exclude<Action, "pick" | "install">, string>> = {
-	connect: "Connect",
+	connect: BUTTON.connect,
+	recheck: BUTTON.recheck,
 	"deep-check": "Deep check",
 	apply: "Apply",
 	cancel: "Stop",
@@ -163,27 +165,18 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		storageProblem = saveKeymap(storage, doc, mode);
 		render();
 	};
-	const run = (job: Promise<unknown>) => {
-		// The kit has already set the stopped state an error leads to; the page shows that, not the rejection.
-		job.catch(() => undefined).finally(render);
-	};
-	const act: Readonly<Record<Action, () => void>> = {
-		connect: () => run(kit.check("quick")),
-		"deep-check": () => run(kit.check("deep")),
-		install: () => {
-			const image = admittedImage(reading);
-			if (image !== null) run(kit.makeOfficial(image));
-		},
-		apply: () => {
-			if (mode !== null) run(kit.applyKeymap(doc, mode));
-		},
-		pick: () => {
-			chooser.pick();
-			render();
-		},
-		cancel: () => kit.cancel(),
-		// During the optional confirm pick, the kit's cancel is Skip: the job still finishes.
-		skip: () => kit.cancel(),
+	const handlers = actionHandlers(kit, chooser, () => ({ reading, doc, mode }));
+	/** Why the last button press changed nothing, or null. The kit sets a stopped state for a job's own errors; this is for the rest. */
+	let refused: string | null = null;
+	const act = (action: Action) => () => {
+		refused = null;
+		const before = kit.state;
+		const job = handlers[action]();
+		if (job === null) render();
+		else
+			job.catch((error: unknown) => {
+				if (kit.state === before) refused = `That did not start: ${error instanceof Error ? error.message : String(error)}.`;
+			}).finally(render);
 	};
 
 	function keyButton(cap: KeyCap): HTMLButtonElement {
@@ -258,7 +251,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		);
 		if (mode === null) words.append(element("p", "note", "Choose the OS key mode before Apply: the keys move with it."));
 		if (storageProblem !== null) words.append(element("p", "note tone-attention", storageProblem));
-		bar.append(button(LABEL.apply, act.apply, "primary", mode === null || !caps.canWrite), words);
+		bar.append(button(LABEL.apply, act("apply"), "primary", mode === null || !caps.canWrite), words);
 		section.append(bar);
 		return section;
 	}
@@ -293,6 +286,11 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		const card = panel(view.tone);
 		if (screen.name === "connect") card.append(outline());
 		card.append(element("h1", "title", view.title));
+		if (refused !== null) {
+			const notice = element("p", "note tone-attention", refused);
+			notice.setAttribute("role", "status");
+			card.append(notice);
+		}
 		for (const line of view.lines) card.append(element("p", "line", line));
 		if (view.details !== null) {
 			const more = element("details", "detail");
@@ -313,7 +311,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			const bar = element("div", "actions");
 			for (const action of view.actions) {
 				const text = action === "pick" ? (view.pickLabel ?? "Pick") : action === "install" ? (view.installLabel ?? "Install official firmware") : LABEL[action];
-				const node = button(text, act[action], action === view.primary ? "primary" : "secondary");
+				const node = button(text, act(action), action === view.primary ? "primary" : "secondary");
 				if (action === "pick") {
 					node.classList.add("btn-pick");
 					pick = node;

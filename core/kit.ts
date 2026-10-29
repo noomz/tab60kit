@@ -79,15 +79,16 @@ export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit
 				const end = await job(start, ctx);
 				session = end.session;
 				const board = end.board ?? state.board;
-				set(end.kind === "finished" ? { kind: "finished", job: kind, result: end.result, board } : { kind: "stopped", job: kind, reason: end.reason, board });
+				const at = end.session?.mode ?? null;
+				set(end.kind === "finished" ? { kind: "finished", job: kind, result: end.result, board, at } : { kind: "stopped", job: kind, reason: end.reason, board, at });
 				return state;
 			});
 		} catch (error) {
 			if (!(error instanceof Busy)) {
-				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board });
+				set({ kind: "stopped", job: kind, reason: { kind: "error", message: error instanceof Error ? `${error.name}: ${error.message}` : String(error) }, board: state.board, at: null });
 				throw error;
 			}
-			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board });
+			set({ kind: "stopped", job: kind, reason: { kind: "busy" }, board: state.board, at: session?.mode ?? null });
 			return state;
 		} finally {
 			controller = null;

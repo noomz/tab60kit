@@ -43,13 +43,13 @@ const board = (reading: UpdaterReading | null, blockedBy: readonly string[] = []
 	viewFor({ name: "board", report, flash: { reading, blockedBy, installed }, keymapLockedBy: [], openFirmware: [] }, null);
 
 test("the Board screen offers the install only for an admitted image G1 lets this kit flash, and says the link check comes first", () => {
-	expect(board(null).actions).toEqual(["connect", "deep-check"]);
+	expect(board(null).actions).toEqual(["recheck", "deep-check"]);
 	expect(board(null).lines[0]).toStartWith("To install official firmware, drop Tab60firmwareV1.01.13.exe");
 	expect(board({ kind: "refused", refusal: { code: "not-pe", detail: "x" } }).lines).toEqual(["That file is not a TAB 60 updater this page can read (not-pe)."]);
 	const read = (admission: Admission): UpdaterReading => ({ kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission }] });
 	const admitted = read({ kind: "admitted", image });
 	expect(admittedImage(admitted)).toBe(image);
-	expect(board(admitted).actions).toEqual(["connect", "deep-check", "install"]);
+	expect(board(admitted).actions).toEqual(["recheck", "deep-check", "install"]);
 	expect(board(admitted)).toMatchObject({
 		installLabel: "Install official firmware V1.01.13",
 		primary: "install",
@@ -59,12 +59,12 @@ test("the Board screen offers the install only for an admitted image G1 lets thi
 	expect(board(admitted).details?.lines).toContain("If the keyboard already runs V1.01.13, the install checks it and writes nothing.");
 	expect(board(admitted).details?.lines.join(" ")).toContain("It first checks the USB link for 15 seconds and writes nothing until the link holds");
 	expect(board(admitted, [G1_ERASE])).toMatchObject({
-		actions: ["connect", "deep-check"],
+		actions: ["recheck", "deep-check"],
 		lines: ["Slot 1, US Layout: official V1.01.13.", `This build cannot install firmware yet: ${G1_ERASE}.`],
 	});
 	const refused = read({ kind: "refused", refusal: { code: "no-version-block" } });
 	expect(admittedImage(refused)).toBeNull();
-	expect(board(refused)).toMatchObject({ actions: ["connect", "deep-check"], lines: ["Slot 1, US Layout: not installable (no-version-block)."] });
+	expect(board(refused)).toMatchObject({ actions: ["recheck", "deep-check"], lines: ["Slot 1, US Layout: not installable (no-version-block)."] });
 });
 
 test("a stop names what to do next, and a cancel during the restart says where the board may be", () => {
@@ -98,11 +98,11 @@ test("after a job, the result and Stopped screens keep the dropped exe's lines a
 	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: unread }, null)).toMatchObject({ lines: [], actions: ["connect", "deep-check"] });
 });
 
-test("the main button is the parked pick, then the install, then the first action; Stop and Skip are never main", () => {
+test("the main button is the parked pick, then the install, then the first action; Stop, Skip, and Check again are never main", () => {
 	expect(viewFor({ name: "device-prompt", reason: "enter-update-mode", pickRow: "USB-HID IAP", skippable: false }, { modes: ["iap"], reason: "enter-update-mode" }).primary).toBe("pick");
 	expect(viewFor({ name: "device-prompt", reason: "confirm-normal-mode", pickRow: "USB-HID Keyboard", skippable: true }, null).primary).toBeNull();
 	expect(viewFor({ name: "progress", activity: { kind: "erasing" }, holdStill: true, report: null }, null).primary).toBeNull();
-	expect(board(null).primary).toBe("connect");
+	expect(board(null).primary).toBeNull();
 	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
 	expect(board(reading).primary).toBe("install");
 });
@@ -145,8 +145,8 @@ test("the header chip says where the board was last seen, and the dashed live ch
 	expect(statusChips({ kind: "working", job: "make-official", activity: { kind: "link-lost", losses: 1 }, board: iap }, null)).toEqual([{ kind: "lost", label: "USB link dropped" }]);
 	const want = { modes: ["iap"], reason: "enter-update-mode" } as const;
 	expect(statusChips({ kind: "awaiting-device", job: "deep-check", want, board: app }, want)).toEqual([{ kind: "wait", label: "Waiting for your pick" }]);
-	expect(statusChips({ kind: "finished", job: "apply-keymap", result: { kind: "keymap-applied", writes: 2 }, board: app }, null).map((chip) => chip.kind)).toEqual(["live", "normal"]);
-	expect(statusChips({ kind: "finished", job: "quick-check", result: { kind: "checked", depth: "quick" }, board: app }, null).map((chip) => chip.kind)).toEqual(["normal"]);
+	expect(statusChips({ kind: "finished", job: "apply-keymap", result: { kind: "keymap-applied", writes: 2 }, board: app, at: "app" }, null).map((chip) => chip.kind)).toEqual(["live", "normal"]);
+	expect(statusChips({ kind: "finished", job: "quick-check", result: { kind: "checked", depth: "quick" }, board: app, at: "app" }, null).map((chip) => chip.kind)).toEqual(["normal"]);
 });
 
 test("a board read that finds no key with a layer marker says so in plain words", () => {
@@ -158,10 +158,10 @@ const admittedReading = (): UpdaterReading => ({ kind: "read", exe: { sha256: im
 
 test("a board verified to run the dropped version gets no install; one whose version page alone says so keeps it as a secondary button", () => {
 	const verified = board(admittedReading(), [], "verified");
-	expect(verified).toMatchObject({ actions: ["connect", "deep-check"], installLabel: null, details: null, primary: "connect" });
+	expect(verified).toMatchObject({ actions: ["recheck", "deep-check"], installLabel: null, details: null, primary: null });
 	expect(verified.lines[0]).toBe("Your keyboard already runs official V1.01.13. Nothing to install.");
 	const reported = board(admittedReading(), [], "reported");
-	expect(reported).toMatchObject({ actions: ["connect", "deep-check", "install"], primary: "connect" });
+	expect(reported).toMatchObject({ actions: ["recheck", "deep-check", "install"], primary: null });
 	expect(reported.lines[0]).toBe("Your keyboard reports official V1.01.13, but its firmware is not verified yet. Deep check verifies it.");
 });
 
@@ -170,12 +170,11 @@ test("the drop zone names the loaded file and its version, or why it holds none"
 	expect(loadedText("x.exe", { kind: "refused", refusal: { code: "not-pe", detail: "x" } })).toBe("Loaded: x.exe (not a TAB 60 updater)");
 });
 
-test("after a deep check sends an update-mode board home, the chip says normal mode; a board left in update mode says update mode", () => {
-	const page = { kind: "official", entry: CATALOG[0]! } as const;
-	const iapHome = { mode: "iap", page, image: { kind: "official", entry: CATALOG[0]!, by: "sum" } } as unknown as ChipState;
-	const iapStays = { mode: "iap", page: { kind: "erased" }, image: { kind: "unrecognized", sum: 0, crc: null } } as unknown as ChipState;
-	const done = (board: ChipState) => statusChips({ kind: "finished", job: "deep-check", result: { kind: "checked", depth: "deep" }, board }, null);
-	expect(done(iapHome)).toEqual([{ kind: "normal", label: "TAB 60 · normal mode" }]);
-	expect(done(iapStays)).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
-	expect(statusChips({ kind: "working", job: "deep-check", activity: { kind: "reading" }, board: iapHome }, null)).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
+test("after a job the chip says the mode of the session the job ended with, not the reading it kept; no session means not confirmed", () => {
+	const iap = { mode: "iap" } as unknown as ChipState;
+	const done = (at: "app" | "iap" | null) => statusChips({ kind: "finished", job: "deep-check", result: { kind: "checked", depth: "deep" }, board: iap, at }, null);
+	expect(done("app")).toEqual([{ kind: "normal", label: "TAB 60 · normal mode" }]);
+	expect(done("iap")).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
+	expect(done(null)).toEqual([{ kind: "idle", label: "TAB 60 · mode not confirmed, click Check again" }]);
+	expect(statusChips({ kind: "working", job: "deep-check", activity: { kind: "reading" }, board: iap }, null)).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
 });

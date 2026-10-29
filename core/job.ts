@@ -48,6 +48,9 @@ export type JobResult =
 
 /**
  * The one state the UI renders. `board` is the latest observation of the chip, or null before the first one.
+ * A finished or stopped job also says `at`: the mode of the session it handed back, or null when it handed none, so
+ * nothing confirms where the board is. `board` can be older than that: a deep check keeps its update-mode reading,
+ * which holds the checksum, after it sends the board home.
  * Derived facts (the flash map, whether the board still boots) come from `report(board)` and `bootTarget(board)`
  * in chip.ts, never from a second stored copy.
  */
@@ -60,8 +63,8 @@ export type JobState =
 			readonly board: ChipState | null;
 	  }
 	| { readonly kind: "working"; readonly job: JobKind; readonly activity: Activity; readonly board: ChipState | null }
-	| { readonly kind: "finished"; readonly job: JobKind; readonly result: JobResult; readonly board: ChipState | null }
-	| { readonly kind: "stopped"; readonly job: JobKind; readonly reason: StopReason; readonly board: ChipState | null };
+	| { readonly kind: "finished"; readonly job: JobKind; readonly result: JobResult; readonly board: ChipState | null; readonly at: Mode | null }
+	| { readonly kind: "stopped"; readonly job: JobKind; readonly reason: StopReason; readonly board: ChipState | null; readonly at: Mode | null };
 
 /**
  * What a running job may use besides its session: the kit's port (wrapped so that a pending `open` shows as
