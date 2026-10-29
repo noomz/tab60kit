@@ -352,9 +352,9 @@ The keys Fn (marker 0xD8, layer 1) sends are not in the override store. They are
 |---|---|---|
 | Esc | ` | |
 | 1, 2 | F1, F2 | F14, F15 (macOS brightness, INFERRED) |
-| 3 | F3 | 0xCA: sends nothing, sets 0x200000B4 (reader not traced) |
+| 3 | F3 | 0xCA: sends nothing, sets 0x200000B4 (reader not traced). The page shows "—" |
 | 4 | F4 | |
-| 5, 6 | F5, F6 | usages 0xCC, 0xCD |
+| 5, 6 | F5, F6 | keyboard usages 0xCC, 0xCD, sent as they are; no host function is known, so the page shows "?" and keeps the code in Details |
 | 7, 8, 9 | F7, F8, F9 | previous track, Play/Pause, next track |
 | 0, -, = | F10, F11, F12 | Mute, Vol-, Vol+ |
 | P, [, ], ; | PrintScreen, ScrollLock, Pause, Insert | |
@@ -372,7 +372,7 @@ What each factory layer 2 code (flags 1, code 0x100 + n, run by sub_5674 on pres
 
 | Cap | Code | Function |
 |---|---|---|
-| N, M, comma, period | 0x110..0x113 | Profile 0..3 |
+| N, M, comma, period | 0x110..0x113 | Firmware profiles 0..3. The page calls them Profile 1 to 4, as it numbers the Bluetooth slots from 1 |
 | L_Alt | 0x130 | Nothing: sub_5674 has no case for it. Pn + L_Alt held 3 s is a combo instead |
 | J, K, L, ; | 0x131..0x134 | Bluetooth slot 1..4 |
 | Tab, \ | 0x135, 0x136 | USB, Bluetooth |

@@ -5,7 +5,7 @@
  */
 import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, type StoreReading, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
 import { actionHandlers } from "./actions";
-import { LAYER_NAME, factoryNote, keyFace, layerNote, noOverrideLabel, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, factoryDetail, factoryNote, keyFace, layerNote, noOverrideLabel, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, screenFor } from "./screens";
 import { TARGETS } from "./usages";
@@ -185,7 +185,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	function keyButton(cap: KeyCap): HTMLButtonElement {
 		const face = keyFace(cap, layer, doc, store, mode);
 		const node = button(
-			face.main,
+			"",
 			() => {
 				selected = cap.id;
 				render();
@@ -194,6 +194,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			!canRemap(cap.id),
 		);
 		node.className = `key face-${face.kind}`;
+		node.title = face.title;
+		node.append(element("span", "key-main", face.main));
 		if (face.sub !== null) node.append(element("span", "key-to", ` ${face.sub}`));
 		node.style.setProperty("--w", String(cap.width));
 		node.setAttribute("aria-pressed", String(selected === cap.id));
@@ -239,6 +241,12 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			section.append(pick);
 			const warning = factoryNote(layer, cap.id, mode);
 			if (warning !== null) section.append(element("p", "note tone-attention", warning));
+			const detail = factoryDetail(layer, cap.id, mode);
+			if (detail !== null) {
+				const more = element("details", "detail");
+				more.append(element("summary", undefined, "Details"), element("p", "mono", detail));
+				section.append(more);
+			}
 		}
 		const list = element("ul", "overrides");
 		for (const row of overrideRows(doc)) {

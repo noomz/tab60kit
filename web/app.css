@@ -732,8 +732,22 @@ select {
 	font-size: 10.5px;
 }
 
+/* A cap's label never spills out: two lines at most, then an ellipsis; the button's title holds the full words. */
+.key-main,
+.key-to {
+	display: -webkit-box;
+	max-width: 100%;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+}
+
 .key-to {
 	font-size: 10.5px;
+	-webkit-line-clamp: 1;
+	line-clamp: 1;
 }
 
 .keyboard.outline {

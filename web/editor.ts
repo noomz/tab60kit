@@ -20,14 +20,12 @@ export const LAYER_NAME: Readonly<Record<Layer, string>> = {
 	2: layerName(2),
 };
 
-const hex3 = (n: number) => `0x${n.toString(16).padStart(3, "0")}`;
-
-/** The warning for an override over a factory function, or null when the key has none on `layer`. */
+/** The warning for an override over a factory key, or null when the key has none on `layer`. */
 export function factoryNote(layer: Layer, key: KeyId, mode: OsKeyMode | null): string | null {
 	const factory = factoryKey(layer, key);
 	if (factory === null) return null;
-	if (factory.kind === "fn") return `On ${LAYER_NAME[layer]} this key sends ${factoryName(factory, mode)} from the firmware's Fn table. An override replaces it, and removing the override brings it back.`;
-	return `This key holds factory function ${hex3(factory.code)} (${functionName(factory.code)}) on ${LAYER_NAME[layer]}. An override replaces it, and removing the override later leaves the key with no override, so the function stays gone until the board loses power.`;
+	if (factory.kind === "fn") return `On ${LAYER_NAME[layer]} this key sends ${fnSentence(factory, mode)}, from the firmware's Fn table. Changing it replaces that; removing the change brings it back.`;
+	return `Changing this key replaces its factory function (${functionWords(factory.code).full}) until the board loses power.`;
 }
 
 /** `to` null removes the override. A layer left with no override is dropped, so the stored document stays minimal. */
@@ -57,85 +55,125 @@ export function overrideRows(doc: KeymapDoc): readonly OverrideRow[] {
 			.sort(([a], [b]) => (place.get(a) ?? a) - (place.get(b) ?? b))
 			.map(([key, to]) => {
 				const factory = factoryKey(layer, key);
-				return { layer, key, text: `${LAYER_NAME[layer]}: ${legendOf(key)} sends ${usageName(to)}${factory?.kind === "function" ? `, replacing factory function ${hex3(factory.code)}` : ""}` };
+				return { layer, key, text: `${LAYER_NAME[layer]}: ${legendOf(key)} sends ${usageName(to)}${factory?.kind === "function" ? `, replacing ${functionWords(factory.code).full}` : ""}` };
 			}),
 	);
 }
 
 /**
- * Names for the factory Pn function codes (flags 1, run by sub_5674 on press), from docs/app-firmware.md "Pn
- * functions". The TAB 60 has no backlight, only indicator LEDs, so every lighting code gets one plain name. 0x15F's
- * "remap recording" and the speed codes being lighting speed are INFERRED there.
+ * How a code reads: `cap` fits on a keycap (CAP_MAX characters at most, never a raw code), `full` is for selects and
+ * notes, and `detail` holds the raw code where the code's meaning is unknown, for a disclosure only.
  */
-const LIGHTING = "Lighting (no backlight)";
-const FUNCTION_NAME: ReadonlyMap<number, string> = new Map([
-	...[0, 1, 2, 3].map((n): [number, string] => [0x110 + n, `Profile ${n}`]),
-	[0x130, "Nothing"],
-	...[1, 2, 3, 4].map((n): [number, string] => [0x130 + n, `Bluetooth slot ${n}`]),
-	[0x135, "USB"],
-	[0x136, "Bluetooth"],
-	[0x13d, "Windows mode"],
-	[0x13e, "Mac mode"],
-	[0x13f, "Caps/Ctrl swap mode"],
-	[0x15f, "Key remap recording"],
-	[0x160, "Win lock"],
-	[0x168, "Layout cycle"],
-	...[0x170, 0x180, 0x181, 0x182, 0x183, 0x190, 0x191, 0x192, 0x193, 0x1a0, 0x1a1, 0x1a2, 0x1a8, 0x1a9, 0x1ac, 0x1ad].map((code): [number, string] => [code, LIGHTING]),
-]);
-
-export const functionName = (code: number): string => FUNCTION_NAME.get(code) ?? `Function ${hex3(code)}`;
-
-/** The Fn table's consumer codes (0xEC + bit of the consumer report) and its one code that sends nothing. */
-const FN_CODE_NAME: ReadonlyMap<number, string> = new Map([
-	[0xca, "Nothing"],
-	[0xf0, "Play/Pause"],
-	[0xf2, "Prev track"],
-	[0xf3, "Next track"],
-	[0xf4, "Mute"],
-	[0xf5, "Vol-"],
-	[0xf6, "Vol+"],
-]);
-
-const fnCodeName = (code: number): string => FN_CODE_NAME.get(code) ?? usageName(usage(code));
-
-/**
- * A factory key in words. An Fn key whose Mac code differs names both while the OS key mode is unknown, and the Mac
- * one in Mac mode (Shift gives back the other, fnCode).
- */
-export function factoryName(factory: FactoryKey, mode: OsKeyMode | null): string {
-	if (factory.kind === "function") return functionName(factory.code);
-	if (mode === null && factory.mac !== null) return `${fnCodeName(factory.code)} / ${fnCodeName(factory.mac)}`;
-	return fnCodeName(fnCode(factory, mode ?? "windows", false));
+export interface CodeWords {
+	readonly cap: string;
+	readonly full: string;
+	readonly detail: string | null;
 }
 
-/** What a store entry makes the key send, in words. */
-export function entryName(entry: Extract<OverrideEntry, { kind: "override" }>): string {
-	if (entry.flags === 0) return usageName(usage(entry.code));
-	if (entry.flags === 1) return functionName(0x100 | entry.code);
-	return `Entry 0x${((entry.flags << 8) | entry.code).toString(16).padStart(4, "0")}`;
+export const CAP_MAX = 6;
+const words = (cap: string, full = cap, detail: string | null = null): CodeWords => ({ cap, full, detail });
+const NOTHING = words("—", "nothing");
+
+/**
+ * The factory Pn function codes (flags 1, run by sub_5674 on press), from docs/app-firmware.md "Pn functions". The
+ * page numbers the profile keys 1 to 4 (codes 0x110..0x113, firmware profiles 0..3), as it does the Bluetooth slots.
+ * The TAB 60 has no backlight, only indicator LEDs, so every lighting code gets one plain name. 0x15F's "remap
+ * recording" and the speed codes being lighting are INFERRED there.
+ */
+const LIGHTING = words("Light", "Lighting (no backlight on TAB 60)");
+const FUNCTION_WORDS: ReadonlyMap<number, CodeWords> = new Map([
+	...[1, 2, 3, 4].map((n): [number, CodeWords] => [0x10f + n, words(`Prof ${n}`, `Profile ${n}`)]),
+	[0x130, words("—", "does nothing")],
+	...[1, 2, 3, 4].map((n): [number, CodeWords] => [0x130 + n, words(`BT ${n}`, `Bluetooth slot ${n}`)]),
+	[0x135, words("USB")],
+	[0x136, words("BT", "Bluetooth")],
+	[0x13d, words("Win", "Windows mode")],
+	[0x13e, words("Mac", "Mac mode")],
+	[0x13f, words("Ctrl", "Caps/Ctrl swap mode")],
+	[0x15f, words("Rec", "Key remap recording")],
+	[0x160, words("WinLk", "Win lock")],
+	[0x168, words("Layout", "Layout cycle")],
+	...[0x170, 0x180, 0x181, 0x182, 0x183, 0x190, 0x191, 0x192, 0x193, 0x1a0, 0x1a1, 0x1a2, 0x1a8, 0x1a9, 0x1ac, 0x1ad].map((code): [number, CodeWords] => [code, LIGHTING]),
+]);
+
+const unknown = (what: string) => words("?", "unknown function", what);
+
+export const functionWords = (code: number): CodeWords => FUNCTION_WORDS.get(code) ?? unknown(`Pn function code 0x${code.toString(16)}, not traced.`);
+
+/**
+ * The Fn table's codes: consumer-report bits (0xEC + n), 0xCA, which sends nothing, and 0xCC/0xCD, which go out as
+ * keyboard usages no host function is known for. Others are keyboard usages, with short caps for the long names.
+ */
+const FN_WORDS: ReadonlyMap<number, CodeWords> = new Map([
+	[0xca, NOTHING],
+	[0xcc, unknown("Sends keyboard usage 0xCC; no function is known for it.")],
+	[0xcd, unknown("Sends keyboard usage 0xCD; no function is known for it.")],
+	[0xf0, words("Play", "Play/Pause")],
+	[0xf2, words("Prev", "Previous track")],
+	[0xf3, words("Next", "Next track")],
+	[0xf4, words("Mute")],
+	[0xf5, words("Vol-")],
+	[0xf6, words("Vol+")],
+	[0x46, words("PrtSc", "Print Screen")],
+	[0x47, words("ScrLk", "Scroll Lock")],
+	[0x4b, words("PgUp", "Page Up")],
+	[0x4e, words("PgDn", "Page Down")],
+	[0x49, words("Ins", "Insert")],
+	[0x4c, words("Del", "Delete")],
+	[0x50, words("Left")],
+	[0x4f, words("Right")],
+]);
+
+export const fnWords = (code: number): CodeWords => FN_WORDS.get(code) ?? words(usageName(usage(code)));
+
+/** An Fn key in words for `mode`: both codes while the mode is unknown and the Mac code differs. */
+function fnPair(factory: Extract<FactoryKey, { kind: "fn" }>, mode: OsKeyMode | null): { readonly cap: string; readonly full: string } {
+	if (mode === null && factory.mac !== null) {
+		const [plain, mac] = [fnWords(factory.code), fnWords(factory.mac)];
+		return { cap: `${plain.cap} / ${mac.cap}`, full: `${plain.full}, or ${mac.full} in Mac mode without Shift` };
+	}
+	const sent = fnWords(fnCode(factory, mode ?? "windows", false));
+	return { cap: sent.cap, full: mode === "mac" && factory.mac !== null ? `${sent.full} (${fnWords(factory.code).full} with Shift)` : sent.full };
+}
+
+const fnSentence = (factory: Extract<FactoryKey, { kind: "fn" }>, mode: OsKeyMode | null) => fnPair(factory, mode).full;
+
+/** A store entry in words. */
+export function entryWords(entry: Extract<OverrideEntry, { kind: "override" }>): CodeWords {
+	if (entry.flags === 0) return words(usageName(usage(entry.code)));
+	if (entry.flags === 1) return functionWords(0x100 | entry.code);
+	return unknown(`Store entry 0x${((entry.flags << 8) | entry.code).toString(16).padStart(4, "0")}.`);
 }
 
 /**
  * A key's face in the editor, on one layer. `pending`: this page's document changes it (Apply sends it). `board`: the
  * board's store holds an override that is not the factory one. `factory`: the Fn table's key, or the store reset's
  * Pn function, which the board was read to hold or which the page assumes before a read. `base`: what the cap says.
+ * `main` is what fits on the cap; `title` says it in full.
  */
 export interface KeyFace {
 	readonly kind: "pending" | "board" | "factory" | "base";
 	readonly main: string;
 	readonly sub: string | null;
+	readonly title: string;
 }
 
 export function keyFace(cap: KeyCap, layer: Layer, doc: KeymapDoc, store: StoreReading | null, mode: OsKeyMode | null): KeyFace {
 	const pending = doc.overrides.get(layer)?.get(cap.id);
-	if (pending !== undefined) return { kind: "pending", main: cap.legend, sub: `→ ${usageName(pending)}` };
+	if (pending !== undefined) return { kind: "pending", main: cap.legend, sub: `→ ${usageName(pending)}`, title: `${cap.legend}: changed to ${usageName(pending)}, not applied yet` };
 	const factory = factoryKey(layer, cap.id);
 	const entry = store?.get(layer)?.get(cap.id);
 	const isFactoryEntry = entry?.kind === "override" && factory?.kind === "function" && ((entry.flags << 8) | entry.code) === factory.code;
-	if (entry?.kind === "override" && !isFactoryEntry) return { kind: "board", main: entryName(entry), sub: `was ${cap.legend}` };
+	if (entry?.kind === "override" && !isFactoryEntry) {
+		const held = entryWords(entry);
+		return { kind: "board", main: held.cap, sub: `was ${cap.legend}`, title: `${cap.legend}: the board sends ${held.full}` };
+	}
 	// The Fn table is ROM, not the store, so a read cannot remove it; a Pn function is gone once a read finds no entry.
-	if (factory !== null && (factory.kind === "fn" || store === null || isFactoryEntry)) return { kind: "factory", main: factoryName(factory, mode), sub: cap.legend };
-	return { kind: "base", main: cap.legend, sub: null };
+	if (factory !== null && (factory.kind === "fn" || store === null || isFactoryEntry)) {
+		const said = factory.kind === "fn" ? fnPair(factory, mode) : functionWords(factory.code);
+		return { kind: "factory", main: said.cap, sub: cap.legend, title: `${cap.legend}: ${said.full}` };
+	}
+	return { kind: "base", main: cap.legend, sub: null, title: cap.legend };
 }
 
 /** The key select's "no override" choice: what the key sends without one. */
@@ -143,20 +181,26 @@ export function noOverrideLabel(cap: KeyCap, layer: Layer, mode: OsKeyMode | nul
 	const factory = factoryKey(layer, cap.id);
 	if (factory === null) return `${cap.legend} (no override)`;
 	const on = `${cap.legend} key on ${LAYER_NAME[layer]}`;
-	if (factory.kind === "function") return `${on}: factory ${functionName(factory.code)}, no override`;
-	if (factory.mac === null) return `${on}: ${fnCodeName(factory.code)}, no override`;
-	if (mode === "mac") return `${on}: ${fnCodeName(factory.mac)} (${fnCodeName(factory.code)} with Shift), no override`;
-	if (mode === null) return `${on}: ${fnCodeName(factory.code)}, or ${fnCodeName(factory.mac)} in Mac mode without Shift, no override`;
-	return `${on}: ${fnCodeName(factory.code)}, no override`;
+	if (factory.kind === "function") return `${on}: factory ${functionWords(factory.code).full}, no override`;
+	return `${on}: ${fnSentence(factory, mode)}, no override`;
+}
+
+/** The raw code behind a key whose meaning is unknown, for a Details disclosure, or null. */
+export function factoryDetail(layer: Layer, key: KeyId, mode: OsKeyMode | null): string | null {
+	const factory = factoryKey(layer, key);
+	if (factory === null) return null;
+	if (factory.kind === "function") return functionWords(factory.code).detail;
+	const codes = mode === null ? [factory.code, factory.mac] : [fnCode(factory, mode, false)];
+	return codes.flatMap((code) => (code === null ? [] : [fnWords(code).detail ?? []].flat())).join(" ") || null;
 }
 
 /** What the editor says about the layer it shows: where its faces come from. */
 export function layerNote(layer: Layer, store: StoreReading | null, mode: OsKeyMode | null): string | null {
 	const read = store === null ? "Read keymap to see what the board holds now. " : "";
 	if (layer === 1) {
-		const mac = mode === null ? " Where two names show, the second is what Mac mode sends; choose the OS key mode to see one." : mode === "mac" ? " In Mac mode the number row sends media keys; with Shift it sends F-keys." : "";
-		return `${read}Fn keys show the firmware's Fn table.${mac}`;
+		const mac = mode === null ? " Where a key shows two names, the second is what Mac mode sends; choose the OS key mode to see one." : mode === "mac" ? " In Mac mode the number row sends media keys; with Shift it sends F-keys." : "";
+		return `${read}Fn keys show the firmware's Fn table. "—" sends nothing, and "?" is a function nobody has identified.${mac}`;
 	}
-	if (layer === 2) return `${read}${store === null ? "Pn keys show the factory functions a reset writes; the board may differ." : "Pn keys show what the board holds."}`;
+	if (layer === 2) return `${read}${store === null ? "Pn keys show the factory functions a reset writes; the board may differ." : "Pn keys show what the board holds."} "Light" is lighting, which the TAB 60 has no backlight to show. "—" does nothing.`;
 	return read === "" ? null : read.trim();
 }
