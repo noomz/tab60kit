@@ -8,15 +8,15 @@ import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
 import { type Screen, screenFor } from "./screens";
 import { TARGETS, usageName } from "./usages";
-import { type Action, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, admittedImage, statusChips, viewFor } from "./view";
+import { type Action, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, admittedImage, statusChips, viewFor } from "./view";
 import type { Chooser } from "./webhid-port";
 
 const EDITS_ON: readonly Screen["name"][] = ["board", "result", "stopped"];
 
-const LABEL: Readonly<Record<Exclude<Action, "pick">, string>> = {
+/** Pick and Install name their row and version, so PageView carries their text. */
+const LABEL: Readonly<Record<Exclude<Action, "pick" | "install">, string>> = {
 	connect: "Connect",
 	"deep-check": "Deep check",
-	"make-official": "Make official",
 	apply: "Apply",
 	cancel: "Stop",
 	skip: "Skip",
@@ -50,8 +50,19 @@ function flashTable(rows: NonNullable<PageView["flashMap"]>): HTMLTableElement {
 		const finding = line.insertCell();
 		finding.className = `finding tone-${row.tone}`;
 		finding.textContent = row.finding;
+		if (row.detail !== null) {
+			const more = element("details", "detail");
+			more.append(element("summary", undefined, "Details"), element("p", "mono", row.detail));
+			finding.append(more);
+		}
 	}
 	return table;
+}
+
+function legend(): HTMLUListElement {
+	const list = element("ul", "legend");
+	for (const item of FLASH_LEGEND) list.append(element("li", `finding tone-${item.tone}`, item.text));
+	return list;
 }
 
 function select(label: string, options: readonly (readonly [string, string])[], value: string, onChange: (value: string) => void): HTMLLabelElement {
@@ -63,8 +74,10 @@ function select(label: string, options: readonly (readonly [string, string])[], 
 	}
 	box.value = value;
 	box.addEventListener("change", () => onChange(box.value));
+	const chevron = element("span", "select");
+	chevron.append(box);
 	const wrapper = element("label", "field");
-	wrapper.append(element("span", "field-label", label), box);
+	wrapper.append(element("span", "field-label", label), chevron);
 	return wrapper;
 }
 
@@ -156,7 +169,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	const act: Readonly<Record<Action, () => void>> = {
 		connect: () => run(kit.check("quick")),
 		"deep-check": () => run(kit.check("deep")),
-		"make-official": () => {
+		install: () => {
 			const image = admittedImage(reading);
 			if (image !== null) run(kit.makeOfficial(image));
 		},
@@ -290,7 +303,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		if (view.actions.length > 0) {
 			const bar = element("div", "actions");
 			for (const action of view.actions) {
-				const node = button(action === "pick" ? (view.pickLabel ?? "Pick") : LABEL[action], act[action], action === view.primary ? "primary" : "secondary");
+				const text = action === "pick" ? (view.pickLabel ?? "Pick") : action === "install" ? (view.installLabel ?? "Install official firmware") : LABEL[action];
+				const node = button(text, act[action], action === view.primary ? "primary" : "secondary");
 				if (action === "pick") {
 					node.classList.add("btn-pick");
 					pick = node;
@@ -305,7 +319,7 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			main.push(card);
 		} else {
 			const aside = panel("plain", element("h2", "heading", "On the chip"));
-			if (view.flashMap !== null) aside.append(flashTable(view.flashMap));
+			if (view.flashMap !== null) aside.append(flashTable(view.flashMap), legend());
 			if (view.boot !== null) aside.append(element("p", `boot tone-${view.boot.tone}`, view.boot.text));
 			const split = element("div", "split");
 			split.append(card, aside);

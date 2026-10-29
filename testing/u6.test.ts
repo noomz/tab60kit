@@ -29,7 +29,7 @@ async function session(): Promise<{ readonly transcript: Transcript; readonly fl
 	const view = viewFor(screenFor({ kind: "kit", state: kit.state, reading: null, keymap: { overrides: new Map(), osMode: null }, caps: kit.capabilities() }), null);
 	return {
 		transcript: { format: "tab60kit-transcript/1", recordedAt: "test", environment: { tool: "test", fake: "plain" }, entries },
-		flashMap: view.flashMap?.map((row) => `${row.region} ${row.range}: ${row.finding}`) ?? [],
+		flashMap: view.flashMap?.map((row) => `${row.region} ${row.range}: ${row.detail ?? row.finding}`) ?? [],
 		boot: view.boot?.text ?? null,
 	};
 }
@@ -59,7 +59,7 @@ test("the page's flash map after a deep check: bootloader not checkable with its
 	expect(flashMap[2]).toBe("Firmware 0x03200–0x0b7dc: Official V1.01.13, by its sum.");
 	expect(flashMap[3]).toStartWith("Firmware 0x0b7dc–0x1fe00: Not checked:");
 	expect(flashMap[4]).toStartWith("Option bytes 0x1fe00–0x20000: Not checkable over USB");
-	expect(boot).toBe("On its next restart the board starts firmware this tool has not checked.");
+	expect(boot).toBe("When the keyboard restarts, it runs its current firmware, which this tool hasn't verified.");
 });
 
 test("a transcript that differs anywhere but in timing fails the identity check, and names the entry", async () => {

@@ -24,8 +24,10 @@ Every text color on its background measures at least 4.5:1.
 
 - **Color has a meaning.** Cobalt marks actions and confirmed matches. Orange marks attention and failure. Grey marks "not checked" and "locked". The page uses no red or green. `Tone` in `web/view.ts` carries the meaning: `confirmed`, `attention`, `muted`, or `plain`.
 - **Dashed cobalt means live on the keyboard, not saved on it.** The header chip after Apply, the Apply bar, and each key with an override use it.
-- **One main button per screen.** `PageView.primary` names it: a parked Pick first, then Make official, then the first action. Stop and Skip are never the main button.
+- **One main button per screen.** `PageView.primary` names it: a parked Pick first, then Install official firmware, then the first action. Stop and Skip are never the main button.
 - **A parked pick is the largest control on the page,** and it takes focus.
+- **Plain words first.** A flash-map row says what it means for the user and why a grey row is normal. The exact technical reason sits in a Details disclosure under the row. A legend under the map says what each dot color means.
+- **Layers are named by the key that holds them.** The layer select names the cap in the cell where the firmware puts each layer marker (Fn for layer 1, Pn for layer 2).
 
 ## Fonts
 

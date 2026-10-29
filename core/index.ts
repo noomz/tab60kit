@@ -41,6 +41,7 @@ export {
 	type KeyId,
 	type KeymapDoc,
 	type KeymapProblem,
+	LAYER_KEY_MARKERS,
 	type Layer,
 	type OsKeyMode,
 	type OsMode,

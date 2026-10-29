@@ -40,17 +40,21 @@ const unread = { reading: null, blockedBy: [] };
 const G1_ERASE = "Erase pages: reviewed, needs a capture on this board (gate G1)";
 const board = (reading: UpdaterReading | null, blockedBy: readonly string[] = []) => viewFor({ name: "board", report, flash: { reading, blockedBy }, keymapLockedBy: [], openFirmware: [] }, null);
 
-test("the Board screen offers Make official only for an admitted image G1 lets this kit flash, and says the link check comes first", () => {
+test("the Board screen offers the install only for an admitted image G1 lets this kit flash, and says the link check comes first", () => {
 	expect(board(null).actions).toEqual(["connect", "deep-check"]);
 	expect(board(null).lines[0]).toStartWith("To flash official firmware, drop Tab60firmwareV1.01.13.exe");
 	expect(board({ kind: "refused", refusal: { code: "not-pe", detail: "x" } }).lines).toEqual(["That file is not a TAB 60 updater this page can read (not-pe)."]);
 	const read = (admission: Admission): UpdaterReading => ({ kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission }] });
 	const admitted = read({ kind: "admitted", image });
 	expect(admittedImage(admitted)).toBe(image);
-	expect(board(admitted).actions).toEqual(["connect", "deep-check", "make-official"]);
+	expect(board(admitted).actions).toEqual(["connect", "deep-check", "install"]);
 	expect(board(admitted).lines[0]).toBe("Slot 1, US Layout: official V1.01.13, ready to flash.");
-	expect(board(admitted).lines[1]).toStartWith("Make official first checks the USB link for 15 seconds and writes nothing until it holds.");
-	expect(board(admitted).lines[1]).toContain("The keyboard cannot type from then until the page says the flash is done.");
+	expect(board(admitted).installLabel).toBe("Install official firmware V1.01.13");
+	expect(board(admitted).lines[1]).toStartWith("Install official firmware V1.01.13 replaces the firmware on the keyboard");
+	expect(board(admitted).lines[1]).toContain("Keys set with Apply are lost when the keyboard restarts");
+	expect(board(admitted).lines[1]).toContain("If the keyboard already runs V1.01.13, it is checked and nothing is written.");
+	expect(board(admitted).lines[2]).toStartWith("It writes nothing until the USB link has held steady for 15 seconds.");
+	expect(board(admitted).lines[2]).toContain("The keyboard cannot type from then until the page says the install is done.");
 	expect(board(admitted, [G1_ERASE])).toMatchObject({
 		actions: ["connect", "deep-check"],
 		lines: ["Slot 1, US Layout: official V1.01.13, ready to flash.", `This build cannot flash yet: ${G1_ERASE}.`],
@@ -80,24 +84,24 @@ test("a Stop during Apply says the writes may be partial and offers Apply again;
 	expect(held.lines[0]).toContain("unplug USB with the batteries out");
 });
 
-test("after a job, the result and Stopped screens keep the dropped exe's lines and Make official", () => {
+test("after a job, the result and Stopped screens keep the dropped exe's lines and the install", () => {
 	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
 	const stopped = viewFor({ name: "stopped", reason: { kind: "busy" }, report: null, flash: { reading, blockedBy: [] } }, null);
-	expect(stopped.actions).toEqual(["connect", "deep-check", "make-official"]);
+	expect(stopped.actions).toEqual(["connect", "deep-check", "install"]);
 	expect(stopped.lines[1]).toBe("Slot 1, US Layout: official V1.01.13, ready to flash.");
 	const gated = viewFor({ name: "stopped", reason: { kind: "gate", blocked: G1_ERASE }, report: null, flash: { reading, blockedBy: [G1_ERASE] } }, null);
 	expect(gated.actions).toEqual(["connect", "deep-check"]);
-	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: { reading, blockedBy: [] } }, null).actions).toContain("make-official");
+	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: { reading, blockedBy: [] } }, null).actions).toContain("install");
 	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: unread }, null)).toMatchObject({ lines: [], actions: ["connect", "deep-check"] });
 });
 
-test("the main button is the parked pick, then Make official, then the first action; Stop and Skip are never main", () => {
+test("the main button is the parked pick, then the install, then the first action; Stop and Skip are never main", () => {
 	expect(viewFor({ name: "device-prompt", reason: "enter-update-mode", pickRow: "USB-HID IAP", skippable: false }, { modes: ["iap"], reason: "enter-update-mode" }).primary).toBe("pick");
 	expect(viewFor({ name: "device-prompt", reason: "confirm-normal-mode", pickRow: "USB-HID Keyboard", skippable: true }, null).primary).toBeNull();
 	expect(viewFor({ name: "progress", activity: { kind: "erasing" }, holdStill: true, report: null }, null).primary).toBeNull();
 	expect(board(null).primary).toBe("connect");
 	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
-	expect(board(reading).primary).toBe("make-official");
+	expect(board(reading).primary).toBe("install");
 });
 
 test("a counted activity carries a progress bar; the others do not", () => {
@@ -124,6 +128,8 @@ test("flash map rows and the boot line carry the tone of what they found", () =>
 	const official = { kind: "official", entry: CATALOG[0]!, by: "sum" } as const;
 	const mapped = viewFor({ name: "board", report: { regions: [{ region: "app", from: 0x3200, to: 0x1fdff, finding: official }, { region: "version-page", from: 0x3000, to: 0x31ff, finding: { kind: "erased" } }, { region: "bootloader", from: 0, to: 0x2fff, finding: { kind: "not-checkable-over-usb", why: "x", fingerprint: null } }], boot: "stays-in-update-mode" } as unknown as ChipReport, flash: unread, keymapLockedBy: [], openFirmware: [] }, null);
 	expect(mapped.flashMap?.map((row) => row.tone)).toEqual(["confirmed", "attention", "muted"]);
+	expect(mapped.flashMap?.[2]).toMatchObject({ finding: "Can't be read over USB, which is normal. This tool never writes the bootloader.", detail: "Not checkable over USB: x." });
+	expect(mapped.flashMap?.[0]?.detail).toBeNull();
 	expect(mapped.boot?.tone).toBe("attention");
 });
 
@@ -138,4 +144,9 @@ test("the header chip says where the board was last seen, and the dashed live ch
 	expect(statusChips({ kind: "awaiting-device", job: "deep-check", want, board: app }, want)).toEqual([{ kind: "wait", label: "Waiting for your pick" }]);
 	expect(statusChips({ kind: "finished", job: "apply-keymap", result: { kind: "keymap-applied", writes: 2 }, board: app }, null).map((chip) => chip.kind)).toEqual(["live", "normal"]);
 	expect(statusChips({ kind: "finished", job: "quick-check", result: { kind: "checked", depth: "quick" }, board: app }, null).map((chip) => chip.kind)).toEqual(["normal"]);
+});
+
+test("a board read that finds no key with a layer marker says so in plain words", () => {
+	const lost = viewFor({ name: "stopped", reason: { kind: "keymap", problem: { kind: "mode-disagrees", mode: "windows", missing: [0xd8], unexpected: [] } }, report: null, flash: unread }, null);
+	expect(lost.lines[0]).toStartWith("No key on the board works as Fn now, so its layer cannot be reached. The board's keys do not match");
 });

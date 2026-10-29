@@ -1,15 +1,23 @@
 /** The keymap editor's document edits and the words it lists, DOM-free so they are testable. app.ts draws them. */
-import { type KeyId, type KeymapDoc, type Layer, TAB60_KEYS, type Usage, factoryFunction } from "@tab60kit/core";
+import { type KeyId, type KeymapDoc, LAYER_KEY_MARKERS, type Layer, TAB60_KEYS, type Usage, factoryFunction } from "@tab60kit/core";
 import { usageName } from "./usages";
 
 /**
- * Named by the marker that selects each layer, not by a key: which physical key carries 0xD8 and which 0xD9 is still
- * OPEN (docs/app-firmware.md "Open questions").
+ * Layers 1 and 2 are held with the keys whose active usage is the marker 0xD8 or 0xD9. The firmware writes each marker
+ * into a cell LAYER_KEY_MARKERS names, so each layer is named after the cap in that cell.
  */
+const MARKER: Readonly<Record<1 | 2, number>> = { 1: 0xd8, 2: 0xd9 };
+
+function layerName(layer: 1 | 2): string {
+	const marker = LAYER_KEY_MARKERS.find((m) => m.usage === MARKER[layer]);
+	const cap = TAB60_KEYS.find((c) => c.id === marker?.cell);
+	return cap === undefined ? `Layer ${layer} (no key on this board selects it)` : `Layer ${layer} (hold ${cap.legend})`;
+}
+
 export const LAYER_NAME: Readonly<Record<Layer, string>> = {
 	0: "Layer 0 (base)",
-	1: "Layer 1 (hold the 0xD8 layer key)",
-	2: "Layer 2 (hold the 0xD9 layer key)",
+	1: layerName(1),
+	2: layerName(2),
 };
 
 const hex3 = (n: number) => `0x${n.toString(16).padStart(3, "0")}`;

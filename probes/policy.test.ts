@@ -127,7 +127,7 @@ check("udev rule: the documented rule byte for byte", () =>
 	),
 );
 
-// G1 today, shipped: the confirmed reads, gate, key write, and flash rows unlock reading, writing, and Make official; the unreviewed 0x51/0x00 says what it lacks.
+// G1 today, shipped: the confirmed reads, gate, key write, and flash rows unlock reading, writing, and Install official firmware; the unreviewed 0x51/0x00 says what it lacks.
 const caps = capabilities(SHIPPED);
 check("shipped caps: reading and writing, not the OS mode", () => assert.deepEqual([caps.canRead, caps.canWrite, caps.canSetOsMode], [true, true, false]));
 check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lacks", () =>
@@ -136,7 +136,7 @@ check("shipped caps: only the unreviewed 0x51/0x00 is blocked, with what it lack
 		["needs review and a capture on this board (gate G1)"],
 	),
 );
-check("shipped caps: no flash row is blocked, so the page offers Make official", () => assert.deepEqual(caps.flashBlockedBy, []));
+check("shipped caps: no flash row is blocked, so the page offers Install official firmware", () => assert.deepEqual(caps.flashBlockedBy, []));
 const u10Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "readMode", "readBlInfo"], "U10"));
 check("U10 lab caps: the two reads unlock reading and nothing else", () => assert.deepEqual([u10Caps.canRead, u10Caps.canWrite, u10Caps.canSetOsMode], [true, false, false]));
 const u11Caps = capabilities(labClearance(["cfgReadKeys", "cfgReadKey", "gateQuery", "gateOpen", "gateClose", "cfgWriteKey"], "U11"));

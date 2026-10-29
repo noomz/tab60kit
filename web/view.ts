@@ -13,6 +13,7 @@ import {
 	type JobResult,
 	type JobState,
 	type KeymapProblem,
+	LAYER_KEY_MARKERS,
 	type OsKeyMode,
 	type StopReason,
 	TAB60_KEYS,
@@ -20,7 +21,7 @@ import {
 } from "@tab60kit/core";
 import type { FlashOffer, Screen } from "./screens";
 
-export type Action = "connect" | "deep-check" | "make-official" | "apply" | "pick" | "cancel" | "skip";
+export type Action = "connect" | "deep-check" | "install" | "apply" | "pick" | "cancel" | "skip";
 
 /** The page's semantic colors: cobalt confirms, orange asks for attention, grey is not checked. No red or green. */
 export type Tone = "plain" | "confirmed" | "attention" | "muted";
@@ -28,9 +29,19 @@ export type Tone = "plain" | "confirmed" | "attention" | "muted";
 export interface FlashRow {
 	readonly region: string;
 	readonly range: string;
+	/** What the row means for the user, in plain words. */
 	readonly finding: string;
+	/** The exact technical reason, for a disclosure under the row, or null when the plain words are the whole story. */
+	readonly detail: string | null;
 	readonly tone: Tone;
 }
+
+/** What each dot color in the flash map means. */
+export const FLASH_LEGEND: readonly { readonly tone: Tone; readonly text: string }[] = [
+	{ tone: "confirmed", text: "Cobalt: matches the official firmware." },
+	{ tone: "attention", text: "Orange: needs your attention." },
+	{ tone: "muted", text: "Grey: can't be verified over USB, or not checked yet. This is expected." },
+];
 
 export interface PageView {
 	readonly title: string;
@@ -47,6 +58,8 @@ export interface PageView {
 	readonly progress: { readonly done: number; readonly total: number } | null;
 	/** The Pick button's text, when `actions` has "pick". */
 	readonly pickLabel: string | null;
+	/** The install button's text, naming the version it writes, when `actions` has "install". */
+	readonly installLabel: string | null;
 	/** The board cannot type right now: the page shows HOLD_STILL_BANNER and blocks unload. */
 	readonly holdStill: boolean;
 	/** A udev rule to show, on Linux setups. */
@@ -67,10 +80,10 @@ const BY: Readonly<Record<Extract<Finding, { kind: "official" }>["by"], string>>
 };
 
 const BOOT: Readonly<Record<BootTarget, { readonly text: string; readonly tone: Tone }>> = {
-	"normal-mode": { text: "On its next restart the board starts the official firmware and types.", tone: "confirmed" },
-	"stays-in-update-mode": { text: "On its next restart the board stays in update mode and cannot type until it is flashed.", tone: "attention" },
-	"boots-unchecked-image": { text: "On its next restart the board starts firmware this tool has not checked.", tone: "muted" },
-	"boots-damaged-image": { text: "On its next restart the board would start firmware that failed its checksum. Flash it before unplugging.", tone: "attention" },
+	"normal-mode": { text: "When the keyboard restarts, it runs the official firmware and types normally.", tone: "confirmed" },
+	"stays-in-update-mode": { text: "When the keyboard restarts, it stays in update mode and can't type until official firmware is installed.", tone: "attention" },
+	"boots-unchecked-image": { text: "When the keyboard restarts, it runs its current firmware, which this tool hasn't verified.", tone: "muted" },
+	"boots-damaged-image": { text: "When the keyboard restarts, it would run firmware that failed its checksum. Install the official firmware before you unplug it.", tone: "attention" },
 };
 
 const FINDING_TONE: Readonly<Record<Finding["kind"], Tone>> = {
@@ -99,7 +112,7 @@ export function activityText(activity: Activity): string {
 
 const hex = (n: number) => `0x${n.toString(16).padStart(5, "0")}`;
 
-function findingText(finding: Finding): string {
+function technicalText(finding: Finding): string {
 	switch (finding.kind) {
 		case "not-checkable-over-usb":
 			return `Not checkable over USB: ${finding.why}.${finding.fingerprint === null ? "" : ` Fingerprint ${finding.fingerprint.slice(0, 16)}.`}`;
@@ -120,10 +133,41 @@ function findingText(finding: Finding): string {
 	}
 }
 
+type Region = ChipReport["regions"][number]["region"];
+
+/** The plain words for a row. Rows that only say "not verified" also say why that is normal; the technical reason goes in `detail`. */
+function plainText(region: Region, finding: Finding): string {
+	switch (finding.kind) {
+		case "not-checkable-over-usb":
+			if (region === "bootloader") return "Can't be read over USB, which is normal. This tool never writes the bootloader.";
+			if (region === "option-bytes") return "No USB command reads these, which is normal. This tool never writes them.";
+			return "Can't be read over USB, which is normal. This tool never writes it.";
+		case "not-checked":
+			return "The space after the firmware, normally empty. Not verified.";
+		case "needs-deep-check":
+			return "Not verified yet. Deep check verifies it.";
+		case "unrecognized":
+			return region === "version-page" ? "Doesn't match an official version this tool knows." : "Doesn't match official firmware this tool knows.";
+		case "official":
+		case "erased":
+			return technicalText(finding);
+		default: {
+			const exhaustive: never = finding;
+			return exhaustive;
+		}
+	}
+}
+
+function flashRow({ region, from, to, finding }: ChipReport["regions"][number]): FlashRow {
+	const plain = plainText(region, finding);
+	const technical = technicalText(finding);
+	return { region: REGION[region], range: `${hex(from)}–${hex(to)}`, finding: plain, detail: plain === technical ? null : technical, tone: FINDING_TONE[finding.kind] };
+}
+
 function flashMap(report: ChipReport | null): Pick<PageView, "flashMap" | "boot"> {
 	if (report === null) return { flashMap: null, boot: null };
 	return {
-		flashMap: report.regions.map((row) => ({ region: REGION[row.region], range: `${hex(row.from)}–${hex(row.to)}`, finding: findingText(row.finding), tone: FINDING_TONE[row.finding.kind] })),
+		flashMap: report.regions.map(flashRow),
 		boot: BOOT[report.boot],
 	};
 }
@@ -138,10 +182,16 @@ const UNDO = "Unplugging USB with the batteries out for 10 seconds undoes every 
 const gateByte = (gate: number) => `0x${gate.toString(16).padStart(2, "0")}`;
 const usages = (list: readonly number[]) => list.map(gateByte).join(" ");
 
+/** A plain sentence for each layer key the board's read showed on no key at all, or "" when both are there. */
+const lostLayerKeys = (missing: readonly number[]) =>
+	LAYER_KEY_MARKERS.filter((marker) => missing.includes(marker.usage))
+		.map((marker) => `No key on the board works as ${marker.what} now, so its layer cannot be reached. `)
+		.join("");
+
 function keymapText(problem: KeymapProblem): string {
 	switch (problem.kind) {
 		case "mode-disagrees":
-			return `The board's keys do not match OS key mode ${OS_KEY_MODE_NAME[problem.mode]}${problem.missing.length > 0 ? `: no key has ${usages(problem.missing)}` : ""}${problem.unexpected.length > 0 ? `${problem.missing.length > 0 ? ", and" : ":"} a key has ${usages(problem.unexpected)}` : ""}. Choose the mode the board runs in and apply again. If Fn or Pn was moved, this editor cannot address the keys. Nothing was written.`;
+			return `${lostLayerKeys(problem.missing)}The board's keys do not match OS key mode ${OS_KEY_MODE_NAME[problem.mode]}${problem.missing.length > 0 ? `: no key has ${usages(problem.missing)}` : ""}${problem.unexpected.length > 0 ? `${problem.missing.length > 0 ? ", and" : ":"} a key has ${usages(problem.unexpected)}` : ""}. Choose the mode the board runs in and apply again. If Fn or Pn was moved, this editor cannot address the keys. Nothing was written.`;
 		case "gate":
 			return problem.when === "before"
 				? `Another tool holds the board's config gate (it reads ${gateByte(problem.gate)}). Close that tool, then unplug USB with the batteries out for 10 seconds and plug USB back in, which clears the gate, and apply again. Nothing was written.`
@@ -209,12 +259,12 @@ function resultText(result: JobResult): string {
 /** Only a flash ends confirmed: a check reports what it found in the flash map, and an applied keymap is live, not saved. */
 const RESULT_TONE: Readonly<Record<JobResult["kind"], Tone>> = { checked: "plain", official: "confirmed", "keymap-applied": "plain" };
 
-const idle: Pick<PageView, "tone" | "pickLabel" | "holdStill" | "linuxRule" | "progress"> = { tone: "plain", pickLabel: null, holdStill: false, linuxRule: null, progress: null };
+const idle: Pick<PageView, "tone" | "pickLabel" | "installLabel" | "holdStill" | "linuxRule" | "progress"> = { tone: "plain", pickLabel: null, installLabel: null, holdStill: false, linuxRule: null, progress: null };
 
-/** The main button: the pick a parked chooser waits on, then Make official, then the first action unless it only stops. */
+/** The main button: the pick a parked chooser waits on, then the install, then the first action unless it only stops. */
 function primaryOf(actions: readonly Action[]): Action | null {
 	if (actions.includes("pick")) return "pick";
-	if (actions.includes("make-official")) return "make-official";
+	if (actions.includes("install")) return "install";
 	const first = actions[0];
 	return first === undefined || first === "cancel" || first === "skip" ? null : first;
 }
@@ -259,19 +309,35 @@ export function statusChips(state: JobState, needsClick: DeviceWant | null): rea
 
 export const HOLD_STILL_BANNER = "Hold still: the keyboard cannot type now. Do not unplug it, close this tab, or switch away from it.";
 
-/** The first image the dropped exe holds that `admit` let through, which Make official writes. */
+/** The first image the dropped exe holds that `admit` let through, which the install writes. */
 export function admittedImage(reading: UpdaterReading | null): FlashableImage | null {
 	if (reading?.kind !== "read") return null;
 	for (const { admission } of reading.images) if (admission.kind === "admitted") return admission.image;
 	return null;
 }
 
-const canMakeOfficial = ({ reading, blockedBy }: FlashOffer) => admittedImage(reading) !== null && blockedBy.length === 0;
-const boardActions = (flash: FlashOffer): readonly Action[] => ["connect", "deep-check", ...(canMakeOfficial(flash) ? ["make-official" as const] : [])];
+const canInstall = ({ reading, blockedBy }: FlashOffer) => admittedImage(reading) !== null && blockedBy.length === 0;
+
+/** The Board, result, and Stopped screens' buttons, and the install button's text when there is one. */
+function boardActions(flash: FlashOffer): Pick<PageView, "actions" | "installLabel"> {
+	const image = canInstall(flash) ? admittedImage(flash.reading) : null;
+	return image === null
+		? { actions: ["connect", "deep-check"], installLabel: null }
+		: { actions: ["connect", "deep-check", "install"], installLabel: `Install official firmware ${image.entry.version}` };
+}
+
+/**
+ * What the install does. Saved settings: the flash writes only the MCU's firmware window, and the firmware saves its
+ * profiles to a separate SPI flash (docs/app-firmware.md). Apply's keys live in RAM, which the restart clears. A board
+ * that already holds the image is checked and not written (flash.ts decideInIap, rewrite off). The time is U7's run:
+ * the 15 s link gate, then about 2 s of erase and 663 writes, plus the two picks.
+ */
+const installText = (version: string) =>
+	`Install official firmware ${version} replaces the firmware on the keyboard with the copy in your updater. Settings the keyboard saved, such as its profiles and OS key mode, are kept: they are stored apart from the firmware. Keys set with Apply are lost when the keyboard restarts, so click Apply again afterwards. If the keyboard already runs ${version}, it is checked and nothing is written. It takes about 20 seconds plus two picks in the chooser: a 15-second USB link check, then about 2 seconds of writing.`;
 
 /**
  * What the Board, result, and Stopped screens say about the dropped exe: each image's admission, and either what
- * Make official does first or why this build cannot flash.
+ * the install does or why this build cannot flash.
  */
 function readingLines({ reading, blockedBy }: FlashOffer): readonly string[] {
 	if (reading === null) return ["To flash official firmware, drop Tab60firmwareV1.01.13.exe (from vortexgear.tw) on the file picker below. The page reads it here and uploads nothing."];
@@ -279,11 +345,13 @@ function readingLines({ reading, blockedBy }: FlashOffer): readonly string[] {
 	const lines = reading.images.map(({ slot, layoutName, admission }) =>
 		admission.kind === "admitted" ? `Slot ${slot + 1}, ${layoutName}: official ${admission.image.entry.version}, ready to flash.` : `Slot ${slot + 1}, ${layoutName}: not flashable (${admission.refusal.code}).`,
 	);
-	if (admittedImage(reading) === null) return lines;
+	const image = admittedImage(reading);
+	if (image === null) return lines;
 	if (blockedBy.length > 0) return [...lines, `This build cannot flash yet: ${blockedBy[0]}.`];
 	return [
 		...lines,
-		"Make official first checks the USB link for 15 seconds and writes nothing until it holds. Keep the cable still and this tab in front. The keyboard cannot type from then until the page says the flash is done. If the cable drops, click Reconnect and pick whichever row appears.",
+		installText(image.entry.version),
+		"It writes nothing until the USB link has held steady for 15 seconds. Keep the cable still and this tab in front. The keyboard cannot type from then until the page says the install is done. If the cable drops, click the Pick button and choose whichever row appears.",
 	];
 }
 
@@ -321,7 +389,7 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 			});
 		}
 		case "board":
-			return withPrimary({ ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) });
+			return withPrimary({ ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), ...boardActions(screen.flash) });
 		case "progress":
 			return withPrimary({
 				...idle,
@@ -333,9 +401,9 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 				progress: progressOf(screen.activity),
 			});
 		case "result":
-			return withPrimary({ ...idle, tone: RESULT_TONE[screen.result.kind], title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) });
+			return withPrimary({ ...idle, tone: RESULT_TONE[screen.result.kind], title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), ...boardActions(screen.flash) });
 		case "stopped":
-			return withPrimary({ ...idle, tone: stopTone(screen.reason), title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), actions: boardActions(screen.flash) });
+			return withPrimary({ ...idle, tone: stopTone(screen.reason), title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), ...boardActions(screen.flash) });
 		case "os-permission":
 			return withPrimary({
 				...idle,

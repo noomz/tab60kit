@@ -393,10 +393,35 @@ input {
 	color: var(--ink-3);
 }
 
+/* The native arrow ignores padding, so the select draws its own chevron with room on the right. */
+.select {
+	position: relative;
+	display: inline-block;
+	max-width: 100%;
+}
+
+.select::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: 16px;
+	width: 7px;
+	height: 7px;
+	border-right: 2px solid var(--ink-2);
+	border-bottom: 2px solid var(--ink-2);
+	transform: translateY(-70%) rotate(45deg);
+	pointer-events: none;
+}
+
+.select select {
+	width: 100%;
+}
+
 select {
+	appearance: none;
 	min-height: 44px;
 	max-width: 100%;
-	padding: 8px 12px;
+	padding: 8px 40px 8px 12px;
 	border: 1px solid var(--control);
 	border-radius: 6px;
 	background: var(--panel);
@@ -564,6 +589,42 @@ select {
 .boot {
 	padding-left: 17px;
 	font-size: 14px;
+	color: var(--ink-2);
+}
+
+.detail {
+	margin-top: 2px;
+	color: var(--ink-3);
+	font-size: 13px;
+}
+
+.detail summary {
+	width: max-content;
+	min-height: 24px;
+	color: var(--cobalt);
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.detail .mono {
+	margin-top: 4px;
+	font-size: 12px;
+	color: var(--ink-2);
+}
+
+.legend {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 0 0;
+	border-top: 1px solid var(--line-2);
+	list-style: none;
+	font-size: 13px;
+	color: var(--ink-2);
+}
+
+.legend .finding {
+	padding-left: 17px;
 	color: var(--ink-2);
 }
 

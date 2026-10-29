@@ -31,7 +31,7 @@ export type AppView =
 	  };
 
 /**
- * What Make official needs on the Board, result, and Stopped screens: the dropped exe's reading, kept across jobs, and
+ * What the install button needs on the Board, result, and Stopped screens: the dropped exe's reading, kept across jobs, and
  * one line per flash row G1 does not clear for this kit. The action shows only when that list is empty.
  */
 export interface FlashOffer {

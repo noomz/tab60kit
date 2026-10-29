@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { keyId, usage } from "@tab60kit/core";
-import { factoryNote, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
 import { EMPTY_KEYMAP } from "./keymap-store";
 import { TARGETS, usageName } from "./usages";
 
@@ -19,7 +19,7 @@ test("the list names each override by layer, cap, and target, in the board's ord
 	expect(overrideRows(doc).map((row) => row.text)).toEqual([
 		"Layer 0 (base): Esc sends Grave",
 		"Layer 0 (base): Ctrl sends Right",
-		"Layer 2 (hold the 0xD9 layer key): Esc sends Grave, replacing factory function 0x170",
+		"Layer 2 (hold Pn): Esc sends Grave, replacing factory function 0x170",
 	]);
 });
 
@@ -38,4 +38,8 @@ test("a layer 2 key with a factory function warns that an override removes it un
 	expect(factoryNote(2, keyId(3))).toContain("stays gone until the board loses power");
 	expect(factoryNote(0, keyId(3))).toBeNull();
 	expect(factoryNote(2, keyId(46))).toBeNull();
+});
+
+test("each layer is named after the cap the firmware puts its layer marker on", () => {
+	expect(LAYER_NAME).toEqual({ 0: "Layer 0 (base)", 1: "Layer 1 (hold Fn)", 2: "Layer 2 (hold Pn)" });
 });
