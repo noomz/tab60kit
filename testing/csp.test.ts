@@ -110,6 +110,12 @@ test("the shipped page links its stylesheet, whose fonts ship with their SIL OFL
 	for (const license of ["IBM-Plex-Sans-OFL.txt", "IBM-Plex-Mono-OFL.txt"]) expect(readFileSync(join(out, "dist", "fonts", license), "utf8")).toContain("SIL OPEN FONT LICENSE Version 1.1");
 });
 
+test("the shipped page carries the commit it was built from, for its footer", () => {
+	const bundle = readFileSync(join(out, "dist", "main.js"), "utf8");
+	expect(bundle).not.toContain("TAB60KIT_COMMIT");
+	expect(bundle).toContain(JSON.stringify(toolCommit()));
+});
+
 test("the lab page carries the commit it was built from", () => {
 	const bundle = readFileSync(join(out, "dist-lab", "u1.js"), "utf8");
 	expect(bundle).not.toContain("TAB60KIT_COMMIT");

@@ -1,6 +1,8 @@
 # tab60kit
 
-tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page. It talks to the keyboard over WebHID in Chrome or Edge. You build it and run it on your own computer. Nothing is installed, and nothing leaves your computer.
+tab60kit is an open tool for the Vortex TAB 60 keyboard. It is a static web page. It talks to the keyboard over WebHID in Chrome or Edge. Use the hosted page below, or build it and run it on your own computer. Nothing is installed, and nothing leaves your computer.
+
+**Use it at https://noomz.github.io/tab60kit/** in Chrome or Edge on a desktop computer. Other browsers and phones have no WebHID, which the page needs to talk to the keyboard.
 
 **tab60kit is not affiliated with, endorsed by, or supported by Vortex or Vortexgear.** "Vortex" and "TAB 60" are their names. They are used here only to say which keyboard this tool is for. Do not ask Vortex for help with this tool.
 
