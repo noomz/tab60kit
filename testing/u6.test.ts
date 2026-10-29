@@ -30,7 +30,7 @@ async function session(): Promise<{ readonly transcript: Transcript; readonly fl
 	return {
 		transcript: { format: "tab60kit-transcript/1", recordedAt: "test", environment: { tool: "test", fake: "plain" }, entries },
 		flashMap: view.flashMap?.map((row) => `${row.region} ${row.range}: ${row.finding}`) ?? [],
-		boot: view.boot,
+		boot: view.boot?.text ?? null,
 	};
 }
 

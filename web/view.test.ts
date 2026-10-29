@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { type Admission, CATALOG, type ChipReport, type FlashableImage, type UpdaterReading } from "@tab60kit/core";
-import { admittedImage, viewFor } from "./view";
+import { type Admission, CATALOG, type ChipReport, type ChipState, type FlashableImage, type UpdaterReading } from "@tab60kit/core";
+import { admittedImage, statusChips, viewFor } from "./view";
 
 test("a parked pick says the page waits for the user and shows a Pick button that names the row; an open chooser only says which row to pick", () => {
 	const prompt = { name: "device-prompt", reason: "enter-update-mode", pickRow: "USB-HID IAP", skippable: false } as const;
@@ -89,4 +89,53 @@ test("after a job, the result and Stopped screens keep the dropped exe's lines a
 	expect(gated.actions).toEqual(["connect", "deep-check"]);
 	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: { reading, blockedBy: [] } }, null).actions).toContain("make-official");
 	expect(viewFor({ name: "result", result: { kind: "checked", depth: "quick" }, report: null, flash: unread }, null)).toMatchObject({ lines: [], actions: ["connect", "deep-check"] });
+});
+
+test("the main button is the parked pick, then Make official, then the first action; Stop and Skip are never main", () => {
+	expect(viewFor({ name: "device-prompt", reason: "enter-update-mode", pickRow: "USB-HID IAP", skippable: false }, { modes: ["iap"], reason: "enter-update-mode" }).primary).toBe("pick");
+	expect(viewFor({ name: "device-prompt", reason: "confirm-normal-mode", pickRow: "USB-HID Keyboard", skippable: true }, null).primary).toBeNull();
+	expect(viewFor({ name: "progress", activity: { kind: "erasing" }, holdStill: true, report: null }, null).primary).toBeNull();
+	expect(board(null).primary).toBe("connect");
+	const reading: UpdaterReading = { kind: "read", exe: { sha256: image.entry.source.exeSha256, bytes: 0 }, title: "t", version: "v", images: [{ slot: 0, layoutName: "US Layout", plainSha256: image.entry.image.sha256, bytes: 34_268, admission: { kind: "admitted", image } }] };
+	expect(board(reading).primary).toBe("make-official");
+});
+
+test("a counted activity carries a progress bar; the others do not", () => {
+	const progress = (activity: Parameters<typeof viewFor>[0] & { name: "progress" }) => viewFor(activity, null).progress;
+	expect(progress({ name: "progress", activity: { kind: "writing-image", chunk: 412, chunks: 663 }, holdStill: true, report: null })).toEqual({ done: 412, total: 663 });
+	expect(progress({ name: "progress", activity: { kind: "applying-keymap", done: 2, total: 5 }, holdStill: false, report: null })).toEqual({ done: 2, total: 5 });
+	expect(progress({ name: "progress", activity: { kind: "holding-link", quietMs: 16_000, needMs: 15_000 }, holdStill: true, report: null })).toEqual({ done: 15_000, total: 15_000 });
+	expect(progress({ name: "progress", activity: { kind: "erasing" }, holdStill: true, report: null })).toBeNull();
+});
+
+test("tone: a flash ends confirmed, a check does not, a failure asks for attention, and a plain Stop stays plain", () => {
+	const result = (r: Parameters<typeof viewFor>[0] & { name: "result" }) => viewFor(r, null).tone;
+	expect(result({ name: "result", result: { kind: "official", entry: CATALOG[0]!, confirmedInNormalMode: true }, report: null, flash: unread })).toBe("confirmed");
+	expect(result({ name: "result", result: { kind: "checked", depth: "deep" }, report: null, flash: unread })).toBe("plain");
+	expect(result({ name: "result", result: { kind: "keymap-applied", writes: 3 }, report: null, flash: unread })).toBe("plain");
+	const stop = (reason: Parameters<typeof viewFor>[0] & { name: "stopped" }) => viewFor(reason, null).tone;
+	expect(stop({ name: "stopped", reason: { kind: "cancelled", during: null }, report: null, flash: unread })).toBe("plain");
+	expect(stop({ name: "stopped", reason: { kind: "cancelled", during: { kind: "restarting", into: "iap" } }, report: null, flash: unread })).toBe("attention");
+	expect(stop({ name: "stopped", reason: { kind: "too-many-link-losses", losses: 3 }, report: null, flash: unread })).toBe("attention");
+	expect(viewFor({ name: "browser-gate", why: "no-webhid" }, null).tone).toBe("attention");
+});
+
+test("flash map rows and the boot line carry the tone of what they found", () => {
+	const official = { kind: "official", entry: CATALOG[0]!, by: "sum" } as const;
+	const mapped = viewFor({ name: "board", report: { regions: [{ region: "app", from: 0x3200, to: 0x1fdff, finding: official }, { region: "version-page", from: 0x3000, to: 0x31ff, finding: { kind: "erased" } }, { region: "bootloader", from: 0, to: 0x2fff, finding: { kind: "not-checkable-over-usb", why: "x", fingerprint: null } }], boot: "stays-in-update-mode" } as unknown as ChipReport, flash: unread, keymapLockedBy: [], openFirmware: [] }, null);
+	expect(mapped.flashMap?.map((row) => row.tone)).toEqual(["confirmed", "attention", "muted"]);
+	expect(mapped.boot?.tone).toBe("attention");
+});
+
+test("the header chip says where the board was last seen, and the dashed live chip shows only after Apply", () => {
+	const app = { mode: "app" } as unknown as ChipState;
+	const iap = { mode: "iap" } as unknown as ChipState;
+	expect(statusChips({ kind: "idle", board: null }, null)).toEqual([{ kind: "idle", label: "Not connected" }]);
+	expect(statusChips({ kind: "idle", board: app }, null)).toEqual([{ kind: "normal", label: "TAB 60 · normal mode" }]);
+	expect(statusChips({ kind: "working", job: "deep-check", activity: { kind: "reading" }, board: iap }, null)).toEqual([{ kind: "update", label: "TAB 60 · update mode" }]);
+	expect(statusChips({ kind: "working", job: "make-official", activity: { kind: "link-lost", losses: 1 }, board: iap }, null)).toEqual([{ kind: "lost", label: "USB link dropped" }]);
+	const want = { modes: ["iap"], reason: "enter-update-mode" } as const;
+	expect(statusChips({ kind: "awaiting-device", job: "deep-check", want, board: app }, want)).toEqual([{ kind: "wait", label: "Waiting for your pick" }]);
+	expect(statusChips({ kind: "finished", job: "apply-keymap", result: { kind: "keymap-applied", writes: 2 }, board: app }, null).map((chip) => chip.kind)).toEqual(["live", "normal"]);
+	expect(statusChips({ kind: "finished", job: "quick-check", result: { kind: "checked", depth: "quick" }, board: app }, null).map((chip) => chip.kind)).toEqual(["normal"]);
 });

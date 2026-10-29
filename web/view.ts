@@ -11,6 +11,7 @@ import {
 	type Finding,
 	type FlashableImage,
 	type JobResult,
+	type JobState,
 	type KeymapProblem,
 	type OsKeyMode,
 	type StopReason,
@@ -21,19 +22,29 @@ import type { FlashOffer, Screen } from "./screens";
 
 export type Action = "connect" | "deep-check" | "make-official" | "apply" | "pick" | "cancel" | "skip";
 
+/** The page's semantic colors: cobalt confirms, orange asks for attention, grey is not checked. No red or green. */
+export type Tone = "plain" | "confirmed" | "attention" | "muted";
+
 export interface FlashRow {
 	readonly region: string;
 	readonly range: string;
 	readonly finding: string;
+	readonly tone: Tone;
 }
 
 export interface PageView {
 	readonly title: string;
+	/** The color of the panel that holds the title and lines. */
+	readonly tone: Tone;
 	readonly lines: readonly string[];
 	readonly flashMap: readonly FlashRow[] | null;
-	readonly boot: string | null;
+	readonly boot: { readonly text: string; readonly tone: Tone } | null;
 	/** Buttons in display order. */
 	readonly actions: readonly Action[];
+	/** The one action drawn as the main button, or null when every button is secondary. */
+	readonly primary: Action | null;
+	/** A counted activity, drawn as a progress bar under its line. */
+	readonly progress: { readonly done: number; readonly total: number } | null;
 	/** The Pick button's text, when `actions` has "pick". */
 	readonly pickLabel: string | null;
 	/** The board cannot type right now: the page shows HOLD_STILL_BANNER and blocks unload. */
@@ -55,11 +66,20 @@ const BY: Readonly<Record<Extract<Finding, { kind: "official" }>["by"], string>>
 	"sum-and-crc": "by its sum and CRC-32",
 };
 
-const BOOT: Readonly<Record<BootTarget, string>> = {
-	"normal-mode": "On its next restart the board starts the official firmware and types.",
-	"stays-in-update-mode": "On its next restart the board stays in update mode and cannot type until it is flashed.",
-	"boots-unchecked-image": "On its next restart the board starts firmware this tool has not checked.",
-	"boots-damaged-image": "On its next restart the board would start firmware that failed its checksum. Flash it before unplugging.",
+const BOOT: Readonly<Record<BootTarget, { readonly text: string; readonly tone: Tone }>> = {
+	"normal-mode": { text: "On its next restart the board starts the official firmware and types.", tone: "confirmed" },
+	"stays-in-update-mode": { text: "On its next restart the board stays in update mode and cannot type until it is flashed.", tone: "attention" },
+	"boots-unchecked-image": { text: "On its next restart the board starts firmware this tool has not checked.", tone: "muted" },
+	"boots-damaged-image": { text: "On its next restart the board would start firmware that failed its checksum. Flash it before unplugging.", tone: "attention" },
+};
+
+const FINDING_TONE: Readonly<Record<Finding["kind"], Tone>> = {
+	official: "confirmed",
+	"not-checkable-over-usb": "muted",
+	"not-checked": "muted",
+	"needs-deep-check": "muted",
+	erased: "attention",
+	unrecognized: "attention",
 };
 
 const ACTIVITY: { readonly [K in Activity["kind"]]: (activity: Extract<Activity, { kind: K }>) => string } = {
@@ -103,7 +123,7 @@ function findingText(finding: Finding): string {
 function flashMap(report: ChipReport | null): Pick<PageView, "flashMap" | "boot"> {
 	if (report === null) return { flashMap: null, boot: null };
 	return {
-		flashMap: report.regions.map((row) => ({ region: REGION[row.region], range: `${hex(row.from)}–${hex(row.to)}`, finding: findingText(row.finding) })),
+		flashMap: report.regions.map((row) => ({ region: REGION[row.region], range: `${hex(row.from)}–${hex(row.to)}`, finding: findingText(row.finding), tone: FINDING_TONE[row.finding.kind] })),
 		boot: BOOT[report.boot],
 	};
 }
@@ -186,7 +206,56 @@ function resultText(result: JobResult): string {
 	}
 }
 
-const idle: Pick<PageView, "pickLabel" | "holdStill" | "linuxRule"> = { pickLabel: null, holdStill: false, linuxRule: null };
+/** Only a flash ends confirmed: a check reports what it found in the flash map, and an applied keymap is live, not saved. */
+const RESULT_TONE: Readonly<Record<JobResult["kind"], Tone>> = { checked: "plain", official: "confirmed", "keymap-applied": "plain" };
+
+const idle: Pick<PageView, "tone" | "pickLabel" | "holdStill" | "linuxRule" | "progress"> = { tone: "plain", pickLabel: null, holdStill: false, linuxRule: null, progress: null };
+
+/** The main button: the pick a parked chooser waits on, then Make official, then the first action unless it only stops. */
+function primaryOf(actions: readonly Action[]): Action | null {
+	if (actions.includes("pick")) return "pick";
+	if (actions.includes("make-official")) return "make-official";
+	const first = actions[0];
+	return first === undefined || first === "cancel" || first === "skip" ? null : first;
+}
+
+const withPrimary = (view: Omit<PageView, "primary">): PageView => ({ ...view, primary: primaryOf(view.actions) });
+
+function progressOf(activity: Activity): PageView["progress"] {
+	switch (activity.kind) {
+		case "writing-image":
+			return { done: activity.chunk, total: activity.chunks };
+		case "applying-keymap":
+			return { done: activity.done, total: activity.total };
+		case "holding-link":
+			return { done: Math.min(activity.quietMs, activity.needMs), total: activity.needMs };
+		default:
+			return null;
+	}
+}
+
+/** A plain Stop leaves nothing to fix; a Stop that may have left the board mid-change asks for attention, as every other stop does. */
+function stopTone(reason: StopReason): Tone {
+	if (reason.kind !== "cancelled") return "attention";
+	return reason.during?.kind === "applying-keymap" || (reason.during?.kind === "restarting" && reason.during.into === "iap") ? "attention" : "plain";
+}
+
+export interface StatusChip {
+	/** `live` is the dashed cobalt mark: a keymap on the board's memory and not saved on the board. */
+	readonly kind: "idle" | "normal" | "update" | "wait" | "lost" | "live";
+	readonly label: string;
+}
+
+/** The header's chips: where the board was last seen, and whether a keymap this page applied is live on it. */
+export function statusChips(state: JobState, needsClick: DeviceWant | null): readonly StatusChip[] {
+	const chips: StatusChip[] = [];
+	if (state.kind === "finished" && state.result.kind === "keymap-applied") chips.push({ kind: "live", label: "Keymap live, not saved on the keyboard" });
+	if (state.kind === "awaiting-device") chips.push({ kind: "wait", label: needsClick === null ? "Pick in the chooser" : "Waiting for your pick" });
+	else if (state.kind === "working" && state.activity.kind === "link-lost") chips.push({ kind: "lost", label: "USB link dropped" });
+	else if (state.board === null) chips.push({ kind: "idle", label: "Not connected" });
+	else chips.push(state.board.mode === "app" ? { kind: "normal", label: "TAB 60 · normal mode" } : { kind: "update", label: "TAB 60 · update mode" });
+	return chips;
+}
 
 export const HOLD_STILL_BANNER = "Hold still: the keyboard cannot type now. Do not unplug it, close this tab, or switch away from it.";
 
@@ -225,21 +294,22 @@ const droppedLines = (flash: FlashOffer) => (flash.reading === null ? [] : readi
 export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView {
 	switch (screen.name) {
 		case "browser-gate":
-			return {
+			return withPrimary({
 				...idle,
+				tone: "attention",
 				title: "Use Chrome or Edge",
 				lines: [screen.why === "no-webhid" ? "This browser cannot talk to USB keyboards (no WebHID)." : "Open this page over HTTPS or from localhost."],
 				flashMap: null,
 				boot: null,
 				actions: [],
-			};
+			});
 		case "connect":
-			return { ...idle, title: "Connect your TAB 60", lines: ["Plug the keyboard in by USB, then click Connect and pick it in the chooser."], flashMap: null, boot: null, actions: ["connect"] };
+			return withPrimary({ ...idle, title: "Connect your TAB 60", lines: ["Plug the keyboard in by USB, then click Connect and pick it in the chooser."], flashMap: null, boot: null, actions: ["connect"] });
 		case "device-prompt": {
 			const lines = [needsClick === null ? `In the chooser, pick ${screen.pickRow}.` : `Waiting for you: click Pick ${screen.pickRow}, then choose ${screen.pickRow}.`];
 			if (screen.reason === "enter-update-mode") lines.push("The board is restarting into update mode. It shows up as a new device.");
 			if (screen.skippable) lines.push("Skip if you do not need the confirmation; the board is already home.");
-			return {
+			return withPrimary({
 				...idle,
 				title: "Pick the keyboard",
 				lines,
@@ -248,33 +318,35 @@ export function viewFor(screen: Screen, needsClick: DeviceWant | null): PageView
 				actions: [...(needsClick === null ? [] : ["pick" as const]), screen.skippable ? "skip" : "cancel"],
 				pickLabel: needsClick === null ? null : `Pick ${screen.pickRow}`,
 				holdStill: screen.reason !== "connect",
-			};
+			});
 		}
 		case "board":
-			return { ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
+			return withPrimary({ ...idle, title: "Your board", lines: readingLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) });
 		case "progress":
-			return {
+			return withPrimary({
 				...idle,
 				title: "Working",
 				lines: [activityText(screen.activity)],
 				...flashMap(screen.report),
 				actions: ["cancel"],
 				holdStill: screen.holdStill,
-			};
+				progress: progressOf(screen.activity),
+			});
 		case "result":
-			return { ...idle, title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) };
+			return withPrimary({ ...idle, tone: RESULT_TONE[screen.result.kind], title: resultText(screen.result), lines: droppedLines(screen.flash), ...flashMap(screen.report), actions: boardActions(screen.flash) });
 		case "stopped":
-			return { ...idle, title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), actions: boardActions(screen.flash) };
+			return withPrimary({ ...idle, tone: stopTone(screen.reason), title: "Stopped", lines: [stopText(screen.reason), ...droppedLines(screen.flash)], ...flashMap(screen.report), actions: boardActions(screen.flash) });
 		case "os-permission":
-			return {
+			return withPrimary({
 				...idle,
+				tone: "attention",
 				title: "Allow access to the keyboard",
 				lines: ["Linux needs a udev rule before a browser may open the keyboard. Add this rule, replug the keyboard, then click Connect."],
 				flashMap: null,
 				boot: null,
 				actions: ["connect"],
 				linuxRule: screen.linuxRule,
-			};
+			});
 		default: {
 			const exhaustive: never = screen;
 			return exhaustive;
