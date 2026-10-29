@@ -89,3 +89,35 @@ jobs:
           cat slices/probe-slices.txt
           awk 'BEGIN { s = 0 } { s += $2; if (NR > 1 && $3 != t) bad = 1; t = $3 } END { exit (NR == 3 && !bad && s == t) ? 0 : 1 }' slices/probe-slices.txt
           grep -L '^failures: 0$' slices/probes-*/probes.txt | (! grep .)
+
+  # Deploys the main app's dist/ to GitHub Pages, only for a push to main and only after every check above passed.
+  # The lab pages are not deployed.
+  pages:
+    needs: [check, probes, drop-sweep, coverage]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      # A clean checkout, so the build stamp names this commit without "-dirty".
+      - run: bun run build
+      - run: grep -q "$(git rev-parse --short HEAD)" dist/main.js && ! grep -q -- "-dirty" dist/main.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deploy
+        uses: actions/deploy-pages@v4

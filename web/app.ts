@@ -134,7 +134,7 @@ function frame(root: HTMLElement, chips: readonly StatusChip[], holdStill: boole
 	}
 	const body = element("main", "main");
 	body.append(...main);
-	nodes.push(body);
+	nodes.push(body, element("footer", "build", `Build ${TAB60KIT_COMMIT}`));
 	root.replaceChildren(...nodes);
 }
 
@@ -144,6 +144,19 @@ export function mountUnsupported(root: HTMLElement, why: "no-webhid" | "insecure
 	const card = panel(view.tone, element("h1", "title", view.title), ...view.lines.map((line) => element("p", "line", line)));
 	card.classList.add("narrow");
 	frame(root, [{ kind: "idle", label: "Not connected" }], false, [card]);
+}
+
+/** The page inside another page's frame: one line and a link to open it in its own tab, and nothing that reaches WebHID. */
+export function mountFramed(root: HTMLElement, href: string): void {
+	const open = element("a", undefined, "Open tab60kit in its own tab");
+	open.href = href;
+	open.target = "_blank";
+	open.rel = "noopener";
+	const line = element("p", "line", "tab60kit only runs in its own tab. ");
+	line.append(open);
+	const card = panel("attention", element("h1", "title", "Open in its own tab"), line);
+	card.classList.add("narrow");
+	root.replaceChildren(card);
 }
 
 const MODES = Object.keys(OS_KEY_MODE_NAME) as OsKeyMode[];

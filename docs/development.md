@@ -155,6 +155,12 @@ The drop mode counts frames from page load, so click Connect once before the Dee
 
 Code in `web/` reaches the core only through these two names, and `probes/boundaries.ts` enforces it. Code in `lab/`, `testing/`, `tools/`, and `probes/` is maintainer code and imports core files by relative path.
 
+## Hosting
+
+CI deploys the shipped page to GitHub Pages (https://noomz.github.io/tab60kit/). The `pages` job in `.github/workflows/ci.yml` runs only on a push to `main`, and only after every check job (`check`, `probes`, `drop-sweep`, `coverage`) has passed. It builds from a clean checkout, checks that `dist/main.js` carries the commit without `-dirty` (the page shows it in its footer), and uploads `dist/` alone, so no lab page is published. Every URL in the page and its stylesheet is relative, so it works under the `/tab60kit/` path.
+
+**Framing.** GitHub Pages cannot send response headers, and a `<meta>` CSP cannot carry `frame-ancestors`. Without it another site could put the page in a frame and lead a click into the WebHID chooser. So `web/main.ts` checks `window.top !== window.self` before it wires any UI (`web/start.ts`): a framed page starts no WebHID job, renders no control, and shows one line with a link that opens the page in its own tab. A host that can send headers should also send `Content-Security-Policy: frame-ancestors 'none'`.
+
 ## History rewrite (2026-10-29)
 
 Before publication, the history was rewritten with git-filter-repo: citations to notes kept outside the repository were removed from every commit, and the author email was unified. The tree did not change, but every commit ID did. Old IDs in `fixtures/`, `testing/fixtures/`, the tests that compare those files byte for byte, and older text refer to the pre-publication history. The fixtures stay as recorded, because each one is the capture of a board run and its build ID is part of what was recorded.
