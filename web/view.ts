@@ -22,7 +22,7 @@ import {
 import { type FlashOffer, type Screen, admittedImage } from "./screens";
 
 /** "recheck" is Connect once a board was read: the same quick check, named for what it does then. */
-export type Action = "connect" | "recheck" | "deep-check" | "install" | "apply" | "pick" | "cancel" | "skip";
+export type Action = "connect" | "recheck" | "deep-check" | "install" | "apply" | "read-keymap" | "pick" | "cancel" | "skip";
 
 /** The page's semantic colors: cobalt confirms, orange asks for attention, grey is not checked. No red or green. */
 export type Tone = "plain" | "confirmed" | "attention" | "muted";
@@ -264,6 +264,8 @@ function resultText(result: JobResult): string {
 			return `The board runs official ${result.entry.version}.${result.confirmedInNormalMode ? "" : " Restart it to confirm it types."}`;
 		case "keymap-applied":
 			return `Keymap applied (${result.writes} keys).`;
+		case "keymap-read":
+			return "Keymap read. The keys below show what the board holds.";
 		default: {
 			const exhaustive: never = result;
 			return exhaustive;
@@ -272,7 +274,7 @@ function resultText(result: JobResult): string {
 }
 
 /** Only a flash ends confirmed: a check reports what it found in the flash map, and an applied keymap is live, not saved. */
-const RESULT_TONE: Readonly<Record<JobResult["kind"], Tone>> = { checked: "plain", official: "confirmed", "keymap-applied": "plain" };
+const RESULT_TONE: Readonly<Record<JobResult["kind"], Tone>> = { checked: "plain", official: "confirmed", "keymap-applied": "plain", "keymap-read": "plain" };
 
 const idle: Pick<PageView, "tone" | "details" | "pickLabel" | "installLabel" | "holdStill" | "linuxRule" | "progress"> = {
 	tone: "plain",

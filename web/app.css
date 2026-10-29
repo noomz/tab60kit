@@ -710,11 +710,26 @@ select {
 	outline-offset: 2px;
 }
 
-.key.live {
+/* Dashed: this page's change, which Apply sends and the board does not save. */
+.key.face-pending {
 	border: 1.6px dashed var(--cobalt);
 	background: var(--cobalt-tint);
 	color: var(--cobalt-dk);
 	font-weight: 600;
+}
+
+/* Solid: an override the board's store holds now. */
+.key.face-board {
+	border: 1.6px solid var(--cobalt);
+	background: var(--cobalt-tint);
+	color: var(--cobalt-dk);
+	font-weight: 600;
+}
+
+.key.face-factory {
+	background: var(--well);
+	color: var(--ink-2);
+	font-size: 10.5px;
 }
 
 .key-to {

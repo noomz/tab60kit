@@ -3,12 +3,12 @@
  * state change, after a pick (the two moments the chooser's parked request can change), and after each editor edit.
  * Once a board was read, the Board, result, and Stopped screens carry the keymap editor below the flash map.
  */
-import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
+import { type KeyCap, type KeyId, type KeymapDoc, type Kit, type Layer, type OsKeyMode, type StoreReading, TAB60_KEYS, type UpdaterReading, canRemap, readUpdater, usage } from "@tab60kit/core";
 import { actionHandlers } from "./actions";
-import { LAYER_NAME, factoryNote, overrideRows, withOverride } from "./editor";
+import { LAYER_NAME, factoryNote, keyFace, layerNote, overrideRows, withOverride } from "./editor";
 import { type KeyValueStore, loadKeymap, saveKeymap } from "./keymap-store";
-import { type Screen, admittedImage, screenFor } from "./screens";
-import { TARGETS, usageName } from "./usages";
+import { type Screen, screenFor } from "./screens";
+import { TARGETS } from "./usages";
 import { type Action, BUTTON, FLASH_LEGEND, HOLD_STILL_BANNER, OS_KEY_MODE_NAME, type PageView, type StatusChip, type Tone, loadedText, statusChips, viewFor } from "./view";
 import type { Chooser } from "./webhid-port";
 
@@ -20,6 +20,7 @@ const LABEL: Readonly<Record<Exclude<Action, "pick" | "install">, string>> = {
 	recheck: BUTTON.recheck,
 	"deep-check": "Deep check",
 	apply: "Apply",
+	"read-keymap": "Read keymap",
 	cancel: "Stop",
 	skip: "Skip",
 };
@@ -158,6 +159,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	let layer: Layer = 0;
 	let selected: KeyId | null = null;
 	let reading: UpdaterReading | null = null;
+	/** The last store Read keymap found. An Apply changes the store, so its start drops this. */
+	let store: StoreReading | null = null;
 	let readingName = "";
 	const edit = (next: KeymapDoc, nextMode: OsKeyMode | null = mode) => {
 		doc = next;
@@ -180,9 +183,9 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 	};
 
 	function keyButton(cap: KeyCap): HTMLButtonElement {
-		const to = doc.overrides.get(layer)?.get(cap.id);
+		const face = keyFace(cap, layer, doc, store);
 		const node = button(
-			cap.legend,
+			face.main,
 			() => {
 				selected = cap.id;
 				render();
@@ -190,8 +193,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 			"secondary",
 			!canRemap(cap.id),
 		);
-		node.className = to === undefined ? "key" : "key live";
-		if (to !== undefined) node.append(element("span", "key-to", ` → ${usageName(to)}`));
+		node.className = `key face-${face.kind}`;
+		if (face.sub !== null) node.append(element("span", "key-to", ` ${face.sub}`));
 		node.style.setProperty("--w", String(cap.width));
 		node.setAttribute("aria-pressed", String(selected === cap.id));
 		return node;
@@ -210,7 +213,11 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 				render();
 			}),
 		);
-		section.append(settings);
+		const read = element("div", "settings");
+		read.append(button(LABEL["read-keymap"], act("read-keymap"), "secondary", mode === null || !caps.canRead));
+		const note = layerNote(layer, store);
+		if (note !== null) read.append(element("p", "note", note));
+		section.append(settings, read);
 		const board = element("div", "keyboard");
 		for (const row of [0, 1, 2, 3, 4] as const) {
 			const line = element("div", "krow");
@@ -230,8 +237,8 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 				),
 			);
 			section.append(pick);
-			const note = factoryNote(layer, cap.id);
-			if (note !== null) section.append(element("p", "note tone-attention", note));
+			const warning = factoryNote(layer, cap.id);
+			if (warning !== null) section.append(element("p", "note tone-attention", warning));
 		}
 		const list = element("ul", "overrides");
 		for (const row of overrideRows(doc)) {
@@ -341,7 +348,11 @@ export function mountApp(root: HTMLElement, kit: Kit, chooser: Chooser, storage:
 		if (view?.holdStill) event.preventDefault();
 	};
 	addEventListener("beforeunload", holdStill);
-	const unsubscribe = kit.subscribe(render);
+	const unsubscribe = kit.subscribe((state) => {
+		if (state.kind === "finished" && state.result.kind === "keymap-read") store = state.result.store;
+		if (state.kind === "working" && state.job === "apply-keymap") store = null;
+		render();
+	});
 	const unsubscribePick = chooser.subscribe(render);
 	render();
 	return () => {

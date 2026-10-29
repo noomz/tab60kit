@@ -73,7 +73,7 @@ The registry refuses every other gate byte (bit 0, bit 6, 0x04), every other 0x5
 
 ## The keymap editor and the U12 lab page
 
-Once a check has read the board, the Board screen (and the result and Stopped screens after it) shows the keymap editor. Choose the OS key mode the board runs in (Pn+Q Windows, Pn+W Mac, Pn+E Caps/Ctrl swap) and a layer, click a key, and choose what it sends. The list under the keys shows every override, each with Remove. Fn and Pn cannot be changed: the store lookup skips their marker usages. Apply stays disabled until the mode is chosen.
+Once a check has read the board, the Board screen (and the result and Stopped screens after it) shows the keymap editor. Choose the OS key mode the board runs in (Pn+Q Windows, Pn+W Mac, Pn+E Caps/Ctrl swap) and a layer, click a key, and choose what it sends. The list under the keys shows every override, each with Remove. Fn and Pn cannot be changed: the store lookup skips their marker usages. Apply stays disabled until the mode is chosen. Read keymap, also enabled once the mode is chosen, reads the store with Apply's reads (layer 0, then layers 1 and 2 per remappable cap) and writes nothing; the keys then show what the board holds.
 
 Every edit saves the document (`serializeKeymapDoc`) under the localStorage key `tab60kit-keymap`, and the mode under `tab60kit-os-key-mode`. A page load reads them back through `parseKeymapDoc`. Storage that is blocked, throws, or holds text the parse refuses leaves an empty document and a line that says why. The page still works, and the keymap lasts until the tab closes.
 

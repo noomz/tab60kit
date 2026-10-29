@@ -8,12 +8,12 @@ import type { ChipState } from "./chip";
 import type { CatalogEntry } from "./firmware";
 import type { AppStep, IapStep } from "./flash";
 import type { LayoutRefusal } from "./flashmap";
-import type { KeymapProblem } from "./keymap";
+import type { KeymapProblem, OsKeyMode, StoreReading } from "./keymap";
 import { type DeviceWant, LinkLost, LinkTimeout, OsPermissionDenied, PickCancelled } from "./port";
 import { type LinkContext, NotCleared, type Session } from "./protocol";
 import type { Mode } from "./units";
 
-export type JobKind = "quick-check" | "deep-check" | "make-official" | "apply-keymap";
+export type JobKind = "quick-check" | "deep-check" | "make-official" | "apply-keymap" | "read-keymap";
 
 export type Activity =
 	| { readonly kind: "reading" }
@@ -44,7 +44,9 @@ export type StopReason =
 export type JobResult =
 	| { readonly kind: "checked"; readonly depth: "quick" | "deep" }
 	| { readonly kind: "official"; readonly entry: CatalogEntry; readonly confirmedInNormalMode: boolean }
-	| { readonly kind: "keymap-applied"; readonly writes: number };
+	| { readonly kind: "keymap-applied"; readonly writes: number }
+	/** What the override store held when read under `mode`. Reads only. */
+	| { readonly kind: "keymap-read"; readonly mode: OsKeyMode; readonly store: StoreReading };
 
 /**
  * The one state the UI renders. `board` is the latest observation of the chip, or null before the first one.

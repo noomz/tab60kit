@@ -12,7 +12,7 @@
  * cannot disagree.
  */
 import { MAX_LINK_LOSSES } from "./flash";
-import { type Activity, type Job, type JobEnd, type StopReason, isLinkFailure, stopReasonFor } from "./job";
+import { type Activity, type Job, type JobEnd, type JobResult, type StopReason, isLinkFailure, stopReasonFor } from "./job";
 import {
 	type AppSession,
 	COMMANDS,
@@ -362,6 +362,43 @@ interface GateHold {
 	open: boolean;
 }
 
+/** The override store as the board holds it, by layer and remappable cap. */
+export type StoreReading = ReadonlyMap<Layer, ReadonlyMap<KeyId, OverrideEntry>>;
+
+/** The active usage each remappable cap is addressed by in `mode`. */
+function usageIn(mode: OsKeyMode): (key: KeyId) => Usage {
+	const active = activeKeymap(mode);
+	return (key) => {
+		if (!canRemap(key)) throw new RangeError(`key ${key} is Fn or Pn, which no override changes`);
+		return usage(active[key]!);
+	};
+}
+
+/**
+ * Reads layer 0 and checks its presence set against `mode`, then reads layers 1 and 2 for each remappable cap. Reads
+ * only: no gate frame, no write. A presence set that disagrees with `mode` stops before the per-key reads.
+ */
+async function readStore(app: AppSession, mode: OsKeyMode, signal: AbortSignal): Promise<{ readonly store: StoreReading } | { readonly problem: KeymapProblem }> {
+	const { config } = app;
+	const layer0 = await config.readLayer0(signal);
+	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
+	const want = new Set(presentUsages(mode));
+	const missing = [...want].filter((k) => !present.has(k));
+	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
+	if (missing.length > 0 || unexpected.length > 0) return { problem: { kind: "mode-disagrees", mode, missing, unexpected } };
+	const usageOf = usageIn(mode);
+	const store = new Map<Layer, ReadonlyMap<KeyId, OverrideEntry>>();
+	for (const layer of LAYERS) {
+		const keys = new Map<KeyId, OverrideEntry>();
+		for (const { id } of TAB60_KEYS) {
+			if (!canRemap(id)) continue;
+			keys.set(id, layer === 0 ? (layer0.get(usageOf(id)) ?? { kind: "absent" }) : await config.readKey(layer, usageOf(id), signal));
+		}
+		store.set(layer, keys);
+	}
+	return { store };
+}
+
 /**
  * One pass on an open normal-mode session: query the gate, read layer 0 and check its presence set against `mode`,
  * read layers 1 and 2 for each remappable cap, write the plan with the gate at 0x80, read every write back, close the
@@ -379,27 +416,10 @@ async function converge(
 	const before = await config.queryGate(signal);
 	if (before.gate !== GATE_CLOSED && before.gate !== GATE_OPEN) return { problem: { kind: "gate", when: "before", gate: before.gate } };
 	hold.open = before.gate === GATE_OPEN;
-	const layer0 = await config.readLayer0(signal);
-	const present = new Set([...layer0].flatMap(([k, entry]) => (entry.kind === "absent" ? [] : [k])));
-	const want = new Set(presentUsages(mode));
-	const missing = [...want].filter((k) => !present.has(k));
-	const unexpected = [...present].filter((k) => !want.has(k)).sort(ascending);
-	let problem: KeymapProblem | null = missing.length > 0 || unexpected.length > 0 ? { kind: "mode-disagrees", mode, missing, unexpected } : null;
-
-	const active = activeKeymap(mode);
-	const usageOf = (key: KeyId) => {
-		if (!canRemap(key)) throw new RangeError(`key ${key} is Fn or Pn, which no override changes`);
-		return usage(active[key]!);
-	};
-	const observed = new Map<Layer, Map<KeyId, OverrideEntry>>();
-	for (const layer of problem === null ? LAYERS : []) {
-		const keys = new Map<KeyId, OverrideEntry>();
-		for (const { id } of TAB60_KEYS) {
-			if (!canRemap(id)) continue;
-			keys.set(id, layer === 0 ? (layer0.get(usageOf(id)) ?? { kind: "absent" }) : await config.readKey(layer, usageOf(id), signal));
-		}
-		observed.set(layer, keys);
-	}
+	const read = await readStore(app, mode, signal);
+	let problem: KeymapProblem | null = "problem" in read ? read.problem : null;
+	const observed = "store" in read ? read.store : new Map<Layer, ReadonlyMap<KeyId, OverrideEntry>>();
+	const usageOf = usageIn(mode);
 	const writes = problem === null ? planKeymap(doc, observed) : [];
 	const mismatch = (write: KeyWrite, got: OverrideEntry): KeymapProblem => ({ kind: "read-back", layer: write.layer, key: write.key, want: describeOverride(write.value), got: describeOverride(got) });
 	if (writes.length > 0) {
@@ -432,19 +452,17 @@ async function converge(
 	return problem === null ? { writes: writes.length } : { problem };
 }
 
+/** What one pass of a config job does on an open normal-mode session. `hold` tracks the gate for the stop path. */
+type ConfigPass = (app: AppSession, signal: AbortSignal, progress: (activity: Activity) => void, hold: GateHold) => Promise<{ readonly result: JobResult } | { readonly problem: KeymapProblem }>;
+
 /**
- * The apply job, a convergence like the flash job but in SRAM. `mode` is the board's OS key mode, which decides the
- * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
- * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
- * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
- * from the reads, which is safe because the writes are idempotent. Any other stop after the gate opened sends a
- * close first, on its own signal so a Stop still reaches the board. A document with an OS mode stops before any frame:
- * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
+ * The loop both config jobs share: open a normal-mode session, run one pass, and on a lost link reconnect and run
+ * the pass again from the reads. Any other stop after the gate opened sends a close first, on its own signal so a
+ * Stop still reaches the board.
  */
-export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
+function configJob(pass: ConfigPass): Job {
 	return async (start, ctx) => {
 		const stopped = (reason: StopReason, end: Session | null): JobEnd => ({ kind: "stopped", reason, session: end, board: null });
-		if (doc.osMode !== null) return stopped({ kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, start);
 		let session: Session | null = start;
 		let losses = 0;
 		let during: Activity | null = null;
@@ -466,9 +484,9 @@ export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 					}
 					session = opened;
 				}
-				const outcome = await converge(session, doc, mode, ctx.signal, progress, hold);
+				const outcome = await pass(session, ctx.signal, progress, hold);
 				if ("problem" in outcome) return stopped({ kind: "keymap", problem: outcome.problem }, session);
-				return { kind: "finished", result: { kind: "keymap-applied", writes: outcome.writes }, session, board: null };
+				return { kind: "finished", result: outcome.result, session, board: null };
 			} catch (error) {
 				if (hold.open && !isLinkFailure(error) && session?.mode === "app") {
 					await session.config.closeGate(new AbortController().signal).catch(() => undefined);
@@ -488,6 +506,34 @@ export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
 			}
 		}
 	};
+}
+
+/**
+ * The apply job, a convergence like the flash job but in SRAM. `mode` is the board's OS key mode, which decides the
+ * active usage each cap is addressed by; no command reads it, so the user names it and the presence check refuses a
+ * wrong Windows or Mac choice (Windows and the Caps/Ctrl swap have the same presence set). The writes are never saved:
+ * the page keeps the document, and Apply sends it again after a power loss. A lost link reconnects and starts over
+ * from the reads, which is safe because the writes are idempotent. A document with an OS mode stops before any frame:
+ * 0x51/0x00 is a profile switch that writes flash, and G1 never clears it.
+ */
+export function applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Job {
+	const apply = configJob(async (app, signal, progress, hold) => {
+		const outcome = await converge(app, doc, mode, signal, progress, hold);
+		return "problem" in outcome ? outcome : { result: { kind: "keymap-applied", writes: outcome.writes } };
+	});
+	return async (start, ctx) =>
+		doc.osMode !== null ? { kind: "stopped", reason: { kind: "gate", blocked: gateMessage("cfgSetOsMode", ctx.clearance) }, session: start, board: null } : apply(start, ctx);
+}
+
+/**
+ * The read job: what the override store holds now, for the editor to show. It sends only the reads Apply sends before
+ * it writes (layer 0, then layers 1 and 2 per remappable cap), so it needs no gate and changes nothing.
+ */
+export function readKeymap(mode: OsKeyMode): Job {
+	return configJob(async (app, signal) => {
+		const read = await readStore(app, mode, signal);
+		return "problem" in read ? read : { result: { kind: "keymap-read", mode, store: read.store } };
+	});
 }
 
 const FORMAT = "tab60kit-keymap";

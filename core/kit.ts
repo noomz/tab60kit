@@ -6,7 +6,7 @@ import { deepCheck, quickCheck } from "./chip";
 import type { FlashableImage } from "./firmware";
 import { type FlashOptions, makeOfficial } from "./flash";
 import type { Activity, Job, JobContext, JobKind, JobState } from "./job";
-import { type ConfigCapabilities, type KeymapDoc, type OsKeyMode, applyKeymap, capabilities } from "./keymap";
+import { type ConfigCapabilities, type KeymapDoc, type OsKeyMode, applyKeymap, capabilities, readKeymap } from "./keymap";
 import { Busy, type DevicePort } from "./port";
 import { type Clearance, SHIPPED, type Session } from "./protocol";
 
@@ -19,6 +19,8 @@ export interface Kit {
 	makeOfficial(image: FlashableImage, options?: FlashOptions): Promise<JobState>;
 	/** Writes `doc` to the board's RAM. `mode` is the OS key mode the board runs in (Pn+Q, Pn+W, or Pn+E), which no command reads. */
 	applyKeymap(doc: KeymapDoc, mode: OsKeyMode): Promise<JobState>;
+	/** Reads the override store under `mode`, the same reads Apply starts with. Writes nothing. */
+	readKeymap(mode: OsKeyMode): Promise<JobState>;
 	/** What G1 lets this kit's keymap editor do, derived from COMMANDS and the kit's clearance. */
 	capabilities(): ConfigCapabilities;
 	/**
@@ -106,6 +108,7 @@ export function createKit(port: DevicePort, clearance: Clearance = SHIPPED): Kit
 		check: (depth) => run(depth === "quick" ? "quick-check" : "deep-check", depth === "quick" ? quickCheck : deepCheck),
 		makeOfficial: (image, options) => run("make-official", makeOfficial(image, options)),
 		applyKeymap: (doc, mode) => run("apply-keymap", applyKeymap(doc, mode)),
+		readKeymap: (mode) => run("read-keymap", readKeymap(mode)),
 		capabilities: () => capabilities(clearance),
 		cancel: () => controller?.abort(),
 	};

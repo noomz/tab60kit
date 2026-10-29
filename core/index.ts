@@ -45,6 +45,7 @@ export {
 	type Layer,
 	type OsKeyMode,
 	type OsMode,
+	type StoreReading,
 	TAB60_KEYS,
 	type Usage,
 	canRemap,
@@ -55,3 +56,4 @@ export {
 	usage,
 } from "./keymap";
 export type { DeviceWant, WantReason } from "./port";
+export type { OverrideEntry } from "./protocol";

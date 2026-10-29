@@ -27,6 +27,10 @@ export function actionHandlers(kit: Kit, chooser: Chooser, facts: () => PageFact
 			const { doc, mode } = facts();
 			return mode === null ? null : kit.applyKeymap(doc, mode);
 		},
+		"read-keymap": () => {
+			const { mode } = facts();
+			return mode === null ? null : kit.readKeymap(mode);
+		},
 		pick: () => {
 			chooser.pick();
 			return null;
